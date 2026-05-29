@@ -282,4 +282,49 @@ describe('libs/archivesspace', () => {
             await expect(client.destroy_session_token('tok')).resolves.toBeUndefined();
         });
     });
+
+    describe('ping (Services Health probe)', () => {
+        it('returns true when login returns 200 + a session', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 200, data: { session: 'tok-123' } });
+            const client = aspace_module.create_client(http);
+            await expect(client.ping()).resolves.toBe(true);
+            // Hit the login endpoint…
+            expect(http.calls.post[0].url).toMatch(/\/users\/svc\/login$/);
+            // …with an EXPIRING session (no expiring:false) so the probe
+            // doesn't accumulate permanent sessions.
+            expect(http.calls.post[0].opts.params).toEqual({ password: 's3cret' });
+        });
+
+        it('returns false on a 401 (auth rejected)', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 401, data: {} });
+            const client = aspace_module.create_client(http);
+            await expect(client.ping()).resolves.toBe(false);
+        });
+
+        it('returns false on 200 without a session token', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 200, data: {} });
+            const client = aspace_module.create_client(http);
+            await expect(client.ping()).resolves.toBe(false);
+        });
+
+        it('returns false (never throws) on a transport error', async () => {
+            const http = make_fake_http();
+            http.set_response({ throw: new Error('ECONNREFUSED') });
+            const client = aspace_module.create_client(http);
+            await expect(client.ping()).resolves.toBe(false);
+        });
+
+        it('returns false when ASpace is not configured', async () => {
+            delete process.env.ARCHIVESPACE_HOST;
+            app_config._reset();
+            const http = make_fake_http();
+            const client = aspace_module.create_client(http);
+            await expect(client.ping()).resolves.toBe(false);
+            // No HTTP attempted when unconfigured.
+            expect(http.calls.post).toHaveLength(0);
+        });
+    });
 });

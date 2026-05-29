@@ -115,6 +115,47 @@ function create_client(http = http_default) {
             }
         },
 
+        // Diagnostic liveness probe for the Services Health admin card.
+        // Unlike ping_api() (boolean), this returns the actual HTTP
+        // status AND any transport error so the dashboard can show WHY
+        // a probe failed instead of a useless "no HTTP 200":
+        //   - HTTP 401/403  → username/api_key wrong (check ARCHIVEMATICA_*)
+        //   - HTTP 404      → ARCHIVEMATICA_API base URL wrong (missing
+        //                     trailing slash / wrong /api path)
+        //   - error string like "self-signed certificate" / "unable to
+        //     verify the first certificate" → TLS trust. v1 disabled TLS
+        //     verification globally (NODE_TLS_REJECT_UNAUTHORIZED=0); v2
+        //     does NOT — point NODE_EXTRA_CA_CERTS at the AM host's CA.
+        //
+        // Endpoint choice: transfer/unapproved/ — the SAME endpoint the
+        // transfer stage polls during approval. It's guaranteed present
+        // on every AM install and returns 200 with valid query auth.
+        // The previous probe used administration/dips/atom/levels/,
+        // which depends on AtoM DIP-upload being configured and can
+        // return non-200 on instances that don't use AtoM even when the
+        // transfer/ingest API the pipeline needs is perfectly healthy —
+        // i.e. it failed the card while ingest worked fine.
+        //
+        // Returns: { ok, status, error }
+        //   ok=true            → HTTP 200
+        //   ok=false + status  → got an HTTP response, just not 200
+        //   ok=false + error   → transport failure (timeout/DNS/TLS); status=null
+        async health_api() {
+            const cfg = app_config().archivematica;
+            const url = main_url('transfer/unapproved/');
+            try {
+                const res = await http.get(url, {
+                    timeout: cfg.timeout_ms,
+                    headers: { 'Content-Type': 'application/json' },
+                    validateStatus: () => true,
+                });
+                return { ok: res.status === 200, status: res.status, error: null };
+            } catch (err) {
+                log.warn({ event: 'am_health_failed', err: err.message });
+                return { ok: false, status: null, error: err.message };
+            }
+        },
+
         // Kicks off a transfer. AM expects the source as base64(
         //   "<source_uuid>:<remote_path>/<collection_uuid>/<package>")
         // and the body as form-encoded `name=…&type=standard&accession=&

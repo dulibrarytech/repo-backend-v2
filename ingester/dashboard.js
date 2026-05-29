@@ -22,6 +22,9 @@ const model = require('./model');
 const workspace = require('./workspace');
 const jobs = require('./jobs');
 const qa_service = require('./libs/qa_service');
+const archivematica = require('../libs/archivematica');
+const duracloud = require('../libs/duracloud');
+const aspace = require('../libs/archivesspace');
 const worker_registry = require('./worker');
 const api_controller = require('./controller');
 const {
@@ -627,9 +630,10 @@ function _parse_history_filters(query = {}) {
 // --- Services admin (curation-API + Wasabi health) ------------------
 
 // Admin landing page for "external services this app talks to".
-// Today: curation-API liveness + Wasabi reachability. Easy to grow
-// later (Archivematica health, ASpace health). Mounted under
-// /dashboard/admin/services so it sits alongside the indexer +
+// Two panels: a combined upstream-services panel (curation-API,
+// Archivematica, DuraCloud, ArchivesSpace — see services_health_partial)
+// and the deeper Wasabi probe (boto3 head_bucket via the curation host).
+// Mounted under /dashboard/admin/services, alongside the indexer +
 // metadata-refresh admin pages.
 async function services_page(req, res) {
     render_page(req, res, 'dashboard/admin/services', {
@@ -637,6 +641,125 @@ async function services_page(req, res) {
         active: 'admin',
         title: 'Services Health — Repository @ DU',
     });
+}
+
+// The four upstream services the ingest pipeline depends on, each with
+// a single non-throwing reachability/auth probe. Order here is the
+// render order on the page. Each `probe` resolves to a boolean
+// (reachable) or — for curation — we read the HTTP status.
+const SERVICE_PROBES = [
+    { key: 'curation_api', label: 'Curation API', probe: _probe_curation },
+    { key: 'archivematica', label: 'Archivematica', probe: _probe_archivematica },
+    { key: 'duracloud', label: 'DuraCloud', probe: _probe_duracloud },
+    { key: 'archivesspace', label: 'ArchivesSpace', probe: _probe_archivesspace },
+];
+
+// HTMX-polled combined health panel. Probes all four upstream services
+// IN PARALLEL — each probe carries its own client-configured timeout,
+// so the panel's wall-clock is the slowest single probe, not the sum.
+// Every probe is wrapped so one failure can't reject the batch; the
+// worst case for any card is reachable=false with the error in detail.
+// Polled every 30s from services_page (same gentle cadence as Wasabi —
+// upstream state changes on the scale of outages + config edits).
+async function services_health_partial(req, res) {
+    const services = await Promise.all(
+        SERVICE_PROBES.map(({ key, label, probe }) => _run_probe(key, label, probe))
+    );
+    render_partial(req, res, 'dashboard/partials/services_health', {
+        services,
+        checked_at: new Date().toISOString(),
+    });
+}
+
+// Wrap a per-service probe with timing + uniform shape + a hard
+// guarantee it never throws. Returns:
+//   { key, label, configured, reachable, detail, elapsed_ms }
+// `configured:false` renders as a neutral "not configured" badge (dev
+// environments that don't wire a given service shouldn't show red).
+async function _run_probe(key, label, probe) {
+    const started = Date.now();
+    try {
+        const out = await probe();
+        const configured = out.configured !== false;
+        return {
+            key,
+            label,
+            configured,
+            reachable: configured ? !!out.reachable : false,
+            detail: configured ? out.detail || '' : 'not configured',
+            elapsed_ms: Date.now() - started,
+        };
+    } catch (err) {
+        // Defensive: the individual _probe_* helpers are written not to
+        // throw, but a surprise (e.g. a config read blowing up) must
+        // still render a red card rather than 500 the whole panel.
+        log.warn({ event: 'service_probe_threw', service: key, err: err.message });
+        return {
+            key,
+            label,
+            configured: true,
+            reachable: false,
+            detail: err.message,
+            elapsed_ms: Date.now() - started,
+        };
+    }
+}
+
+// Curation API — GET /health (no auth). qa_service.health() throws on a
+// transport failure, which _run_probe catches into reachable=false.
+async function _probe_curation() {
+    if (!qa_service.is_configured()) return { configured: false };
+    const r = await qa_service.health();
+    const ok = r.status === 200;
+    return { configured: true, reachable: ok, detail: `GET /health → ${r.status}` };
+}
+
+// Archivematica — transfer (main) API liveness. health_api() returns
+// { ok, status, error } so the card can name the actual failure (a
+// 401/403 auth problem, a 404 base-URL problem, or a TLS/transport
+// error) instead of a generic "no HTTP 200".
+async function _probe_archivematica() {
+    if (!archivematica.is_configured()) return { configured: false };
+    const r = await archivematica.health_api();
+    let detail;
+    if (r.ok) {
+        detail = 'transfer API reachable (HTTP 200)';
+    } else if (r.error) {
+        // Transport-level failure — surface it verbatim. A TLS message
+        // here ("self-signed certificate", "unable to verify the first
+        // certificate") means the AM cert isn't trusted; set
+        // NODE_EXTRA_CA_CERTS to the AM host's CA (v2 doesn't disable
+        // TLS verification the way v1 did).
+        detail = `transport error: ${r.error}`;
+    } else {
+        // Got an HTTP response, just not 200. 401/403 → check
+        // ARCHIVEMATICA_USERNAME / ARCHIVEMATICA_API_KEY; 404 → check
+        // the ARCHIVEMATICA_API base URL.
+        detail = `transfer API returned HTTP ${r.status}`;
+    }
+    return { configured: true, reachable: r.ok, detail };
+}
+
+// DuraCloud — HEAD on the dip-store space root (reachability + auth).
+async function _probe_duracloud() {
+    if (!duracloud.is_configured()) return { configured: false };
+    const ok = await duracloud.ping();
+    return {
+        configured: true,
+        reachable: ok,
+        detail: ok ? 'dip-store reachable' : 'dip-store unreachable or auth rejected',
+    };
+}
+
+// ArchivesSpace — login round-trip (reachability + auth).
+async function _probe_archivesspace() {
+    if (!aspace.is_configured()) return { configured: false };
+    const ok = await aspace.ping();
+    return {
+        configured: true,
+        reachable: ok,
+        detail: ok ? 'login succeeded' : 'login failed or unreachable',
+    };
 }
 
 // HTMX-polled Wasabi status panel. Single curation-API hit — the
@@ -734,5 +857,6 @@ module.exports = {
     history_list_partial,
     // Services Health (admin)
     services_page,
+    services_health_partial,
     services_wasabi_partial,
 };

@@ -1,0 +1,47 @@
+<%/* Combined upstream-services health grid.
+
+     Locals:
+       services   — array of { key, label, configured, reachable,
+                    detail, elapsed_ms }, one per probed service
+                    (curation-API, Archivematica, DuraCloud, ArchivesSpace).
+       checked_at — ISO timestamp the probes ran (server-side).
+
+     Three terminal states per service:
+       configured && reachable   → green OK
+       configured && !reachable   → red FAILED (detail explains)
+       !configured                → gray "not configured" (dev env that
+                                     hasn't wired this service — not an error)
+
+     Re-rendered every 30s by HTMX so transient outages auto-recover. */%>
+<div class="row g-3 p-3">
+    <% services.forEach(function (s) { %>
+        <div class="col-md-3 col-sm-6">
+            <div class="text-muted small mb-1"><%= s.label %></div>
+            <div style="font-size: 22px; font-weight: 600;">
+                <% if (!s.configured) { %>
+                    <span class="sev-badge text-muted" style="font-size: 13px;">not configured</span>
+                <% } else if (s.reachable) { %>
+                    <span class="sev-badge sev-success">OK</span>
+                <% } else { %>
+                    <span class="sev-badge sev-fatal">FAILED</span>
+                <% } %>
+            </div>
+            <div class="text-muted small" style="margin-top: 4px; word-break: break-word;">
+                <% if (!s.configured) { %>
+                    Not configured in this environment.
+                <% } else { %>
+                    <%= s.detail || '' %>
+                    <% if (Number.isFinite(s.elapsed_ms)) { %>
+                        <span class="text-muted">· <%= s.elapsed_ms.toLocaleString() %> ms</span>
+                    <% } %>
+                <% } %>
+            </div>
+        </div>
+    <% }); %>
+
+    <div class="col-12">
+        <div class="text-muted small" style="margin-top: 4px;">
+            Last checked: <%= checked_at %>
+        </div>
+    </div>
+</div>

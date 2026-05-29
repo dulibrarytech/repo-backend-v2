@@ -133,6 +133,46 @@ function mets_path(sip_uuid, dip_path) {
     return `${dip_path}/METS.${sip_uuid}.xml`;
 }
 
+// Lightweight reachability + auth probe for the Services Health admin
+// page. A HEAD against the dip-store space root confirms the DurAStore
+// host is up AND our Basic-auth credentials are accepted, without
+// pulling a (potentially large) space listing body.
+//
+// Mirrors archivematica.ping_api()'s contract: returns a boolean and
+// NEVER throws. Status interpretation:
+//   - 2xx / 3xx        → up + auth ok                       → true
+//   - 404 / 405        → server up + auth ok (no such item, → true
+//                        or HEAD not allowed on the space)
+//   - 401 / 403        → reachable but auth REJECTED         → false
+//   - 5xx              → server error                        → false
+//   - network throw    → unreachable                         → false
+// 401/403 are deliberately false: a credential failure is an unhealthy
+// state staff need to see, not a green card.
+async function ping() {
+    if (!is_configured()) return false;
+    const cfg = app_config().duracloud;
+    let endpoint;
+    try {
+        // Empty tail → the dip-store space root (https://<api>/dip-store/).
+        endpoint = build_endpoint('');
+    } catch {
+        return false;
+    }
+    try {
+        const res = await http_client.head(endpoint, {
+            timeout: cfg.timeout_ms,
+            headers: { Authorization: build_auth_header() },
+            validateStatus: () => true,
+        });
+        if (res.status === 401 || res.status === 403) return false;
+        if (res.status >= 500) return false;
+        return true;
+    } catch (err) {
+        log.warn({ event: 'duracloud_ping_failed', err: err.message });
+        return false;
+    }
+}
+
 module.exports = {
     is_configured,
     build_endpoint,
@@ -140,4 +180,5 @@ module.exports = {
     get_thumbnail_stream,
     fetch_text,
     mets_path,
+    ping,
 };

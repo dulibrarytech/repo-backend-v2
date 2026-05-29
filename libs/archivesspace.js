@@ -195,6 +195,45 @@ function create_client(http = http_default) {
                 log.warn({ event: 'aspace_logout_failed', err: err.message });
             }
         },
+
+        // Lightweight reachability + auth probe for the Services Health
+        // admin page. A login round-trip is the cheapest call that
+        // proves BOTH that ASpace is reachable AND that our credentials
+        // work — a 200 with a session is the only "healthy" outcome.
+        //
+        // Mirrors archivematica.ping_api()'s contract: returns a boolean
+        // and NEVER throws (a down/misconfigured ASpace must render as a
+        // red card, not a 500). We request an expiring session (no
+        // `expiring:false`) and best-effort log it out immediately so
+        // the 30s poll doesn't accumulate sessions on the ASpace side.
+        async ping() {
+            if (!is_configured()) return false;
+            const cfg = app_config().archivespace;
+            const login_url = `${base_url()}/users/${encodeURIComponent(cfg.user)}/login`;
+            try {
+                const res = await http.post(login_url, null, {
+                    params: { password: cfg.password },
+                    timeout: cfg.timeout_ms,
+                    validateStatus: () => true,
+                });
+                const token = res.data && res.data.session;
+                if (res.status === 200 && token) {
+                    // Fire-and-forget logout so the probe leaves no
+                    // lingering session. Don't await — the probe's
+                    // result doesn't depend on the logout landing.
+                    http.post(`${base_url()}/logout`, null, {
+                        timeout: cfg.timeout_ms,
+                        headers: { 'X-ArchivesSpace-Session': token },
+                        validateStatus: () => true,
+                    }).catch(() => {});
+                    return true;
+                }
+                return false;
+            } catch (err) {
+                log.warn({ event: 'aspace_ping_failed', err: err.message });
+                return false;
+            }
+        },
     };
 }
 

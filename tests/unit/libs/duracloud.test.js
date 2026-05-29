@@ -126,4 +126,17 @@ describe('libs/duracloud', () => {
             expect(() => duracloud.mets_path('x', '')).toThrow();
         });
     });
+
+    describe('ping (Services Health probe)', () => {
+        // Like the stream-fetch path, ping's HTTP behavior is left to
+        // the e2e tier (axios isn't cleanly stub-able at the module
+        // level here — see file header). What we CAN assert without a
+        // network is the is_configured() short-circuit: an unconfigured
+        // DuraCloud must resolve false, never throw, and never attempt
+        // a request.
+        it('returns false when DuraCloud is not configured', async () => {
+            // env vars cleared in beforeEach.
+            await expect(duracloud.ping()).resolves.toBe(false);
+        });
+    });
 });

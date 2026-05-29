@@ -16,6 +16,28 @@
     upstream check and refreshes on its own cadence.
 </p>
 
+<%/* Combined upstream-services panel. One HTMX poll fans out to four
+     parallel probes server-side (curation-API, Archivematica,
+     DuraCloud, ArchivesSpace) and renders a status grid. Separate from
+     the deeper Wasabi card below, which exercises the boto3 layer. */%>
+<div class="content-card mb-3">
+    <div class="content-card-header">
+        <h2 style="font-size: 18px; margin: 0;">Upstream services</h2>
+        <div class="control-group">
+            <span class="htmx-indicator">
+                <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+            </span>
+        </div>
+    </div>
+
+    <div id="services-health"
+         hx-get="<%= dashboard_base %>/admin/services/health"
+         hx-trigger="load, every 30s"
+         hx-swap="innerHTML">
+        <div class="text-muted small p-3">Probing services…</div>
+    </div>
+</div>
+
 <div class="content-card mb-3">
     <div class="content-card-header">
         <h2 style="font-size: 18px; margin: 0;">Wasabi S3</h2>
@@ -34,6 +56,6 @@
     </div>
 </div>
 
-<%/* Slot for future cards (Archivematica, ASpace, etc).
-     Each new card is a fresh content-card div + its own HTMX
-     poll. No JS changes needed. */%>
+<%/* Additional service-specific cards (deeper probes than the
+     reachability grid above) drop in here as sibling content-card
+     divs, each with its own HTMX poll. */%>

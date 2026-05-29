@@ -106,6 +106,50 @@ describe('libs/archivematica', () => {
         });
     });
 
+    describe('health_api (diagnostic probe for Services Health)', () => {
+        it('probes transfer/unapproved/ with query-string auth and returns ok on 200', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 200, data: { results: [] } });
+            const client = am_module.create_client(http);
+            const r = await client.health_api();
+            expect(r).toEqual({ ok: true, status: 200, error: null });
+            const url = http.calls.get[0].url;
+            // Representative endpoint the pipeline actually uses — NOT
+            // the fragile atom/levels one.
+            expect(url).toContain('transfer/unapproved/');
+            expect(url).not.toContain('atom/levels');
+            expect(url).toContain('username=svc');
+            expect(url).toContain('api_key=main-key');
+        });
+
+        it('reports the HTTP status on a non-200 response (e.g. 401 auth)', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 401, data: '' });
+            const client = am_module.create_client(http);
+            const r = await client.health_api();
+            expect(r).toEqual({ ok: false, status: 401, error: null });
+        });
+
+        it('reports the status on a 404 (wrong base URL)', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 404, data: '' });
+            const client = am_module.create_client(http);
+            const r = await client.health_api();
+            expect(r.ok).toBe(false);
+            expect(r.status).toBe(404);
+        });
+
+        it('surfaces a transport/TLS error string with status=null', async () => {
+            const http = make_fake_http();
+            http.set_response({ throw: new Error('self-signed certificate in certificate chain') });
+            const client = am_module.create_client(http);
+            const r = await client.health_api();
+            expect(r.ok).toBe(false);
+            expect(r.status).toBeNull();
+            expect(r.error).toMatch(/self-signed certificate/);
+        });
+    });
+
     describe('start_transfer', () => {
         it('builds the form-encoded body with base64 source location', async () => {
             const http = make_fake_http();
