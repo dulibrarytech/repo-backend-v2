@@ -59,3 +59,5 @@ public/tn_cache/*
 
 # Ignore files containing '.orig' in the name
 *.orig*
+
+.github/workflows/ci.yml
