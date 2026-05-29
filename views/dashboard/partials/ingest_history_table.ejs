@@ -1,0 +1,131 @@
+<%
+    // Columns mirror the staff-provided screenshot:
+    //   Job ID | Job Type | Status | Collection Folder | Packages | Job Run By | Date
+    function fmt_ts(ts) {
+        if (!ts) return '';
+        var d = new Date(ts);
+        if (isNaN(d.getTime())) return String(ts);
+        return d.toISOString();
+    }
+%>
+<% if (!rows || rows.length === 0) { %>
+    <div class="empty-state">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/>
+            <polyline points="3 3 3 8 8 8"/>
+            <polyline points="12 7 12 12 15 14"/>
+        </svg>
+        <div>No jobs match your filters.</div>
+    </div>
+<% } else { %>
+    <table class="queue-table">
+        <thead>
+            <tr>
+                <th>Job ID</th>
+                <th>Job Type</th>
+                <th>Status</th>
+                <th>Collection Folder</th>
+                <th>Packages</th>
+                <th>Job Run By</th>
+                <th>Date</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% rows.forEach(function (row) {
+                var status_class = row.status === 'SUCCESSFUL' ? 'sev-success' : 'sev-error';
+            %>
+                <tr>
+                    <td>
+                        <code class="font-monospace small"
+                              title="<%= row.job_uuid %>"
+                              style="word-break: break-all;">
+                            <%= row.job_uuid %>
+                        </code>
+                    </td>
+                    <td><code class="font-monospace small"><%= row.job_type %></code></td>
+                    <td>
+                        <span class="sev-badge <%= status_class %>">
+                            <%= row.status %>
+                        </span>
+                        <% if (row.error) { %>
+                            <details style="margin-top: 4px;">
+                                <summary class="text-muted small">error</summary>
+                                <pre style="margin: 4px 0 0; font-size: 11px; max-height: 160px; overflow: auto; background: var(--bs-light, #f6f6f6); padding: 6px; border-radius: 4px; white-space: pre-wrap; word-break: break-word;"><%= row.error %></pre>
+                            </details>
+                        <% } %>
+                    </td>
+                    <td class="package-cell">
+                        <div class="package-name"><%= row.collection_folder %></div>
+                    </td>
+                    <td>
+                        <% if (!row.packages || row.packages.length === 0) { %>
+                            <span class="text-muted small"><em>none</em></span>
+                        <% } else { %>
+                            <ul style="margin: 0; padding-left: 18px; list-style: disc;">
+                                <% row.packages.forEach(function (pkg) { %>
+                                    <li style="font-size: 13px; padding: 1px 0;"><%= pkg %></li>
+                                <% }); %>
+                            </ul>
+                        <% } %>
+                    </td>
+                    <td>
+                        <% if (row.actor_name) { %>
+                            <div><%= row.actor_name %></div>
+                            <% if (row.actor && row.actor !== row.actor_name) { %>
+                                <div class="text-muted small font-monospace"><%= row.actor %></div>
+                            <% } %>
+                        <% } else if (row.actor) { %>
+                            <code class="font-monospace small"><%= row.actor %></code>
+                        <% } else { %>
+                            <span class="text-muted small">—</span>
+                        <% } %>
+                    </td>
+                    <td>
+                        <time datetime="<%= fmt_ts(row.created) %>"
+                              class="font-monospace small">
+                            <%= fmt_ts(row.created) %>
+                        </time>
+                    </td>
+                </tr>
+            <% }); %>
+        </tbody>
+    </table>
+
+    <%
+        var prev_offset = Math.max(0, offset - limit);
+        var next_offset = offset + limit;
+        var has_more = offset + rows.length < total;
+        var qs = function (off) {
+            var u = new URLSearchParams();
+            u.set('limit', String(limit));
+            u.set('offset', String(off));
+            if (filters.q) u.set('q', filters.q);
+            if (filters.job_type) u.set('job_type', filters.job_type);
+            if (filters.status) u.set('status', filters.status);
+            return u.toString();
+        };
+    %>
+    <div class="app-pagination">
+        <div class="results-count">
+            Showing <strong><%= offset + 1 %></strong>–<strong><%= offset + rows.length %></strong>
+            of <strong><%= total.toLocaleString() %></strong>
+        </div>
+        <nav class="page-controls" aria-label="Pagination">
+            <button type="button"
+                    <%= offset === 0 ? 'disabled' : '' %>
+                    hx-get="<%= dashboard_base %>/ingest/history/list?<%= qs(prev_offset) %>"
+                    hx-target="#history-content"
+                    hx-swap="innerHTML">
+                ← Previous
+            </button>
+            <button type="button"
+                    <%= !has_more ? 'disabled' : '' %>
+                    hx-get="<%= dashboard_base %>/ingest/history/list?<%= qs(next_offset) %>"
+                    hx-target="#history-content"
+                    hx-swap="innerHTML">
+                Next →
+            </button>
+        </nav>
+    </div>
+<% } %>

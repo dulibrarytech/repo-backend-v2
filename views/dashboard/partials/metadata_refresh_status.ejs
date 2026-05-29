@@ -1,0 +1,363 @@
+<%/* System-wide metadata refresh — status panel.
+
+     Sections (when a batch is active):
+       1. Header — uuid + lifecycle badge (with spinner when working)
+       2. Progress — counter cards + percent bar + rate/ETA/elapsed
+       3. Currently fetching — the URIs the worker has in flight RIGHT NOW
+       4. Recent activity — last N completed rows (newest first)
+       5. Cancel action
+
+     When idle:
+       - Worker health warning (if disabled or ASpace not configured)
+       - "No active system refresh" + Start button + queue snapshot
+
+     Below that, in both states:
+       - Recent batches history table
+
+     Polled every 2s by the admin page so the in-flight URIs and
+     recent-activity feed update in near-real-time. Returned (with
+     HX-Trigger: toast) after start/cancel.
+
+     Locals:
+       active            — batch row or undefined
+       history           — Array of past batches (most recent first)
+       activity          — { in_flight, recently_completed }
+       progress          — { elapsed_seconds, rate_per_min, eta_seconds, percent }
+       worker_health     — { enabled, aspace_configured, concurrency, poll_ms, max_attempts }
+       current_flag      — '1' | '0'
+       current_version   — string
+       pending_in_queue  — total PENDING rows across all batches */%>
+
+<%
+    // Helpers, defined inline so the partial stays self-contained.
+    function fmt_duration(seconds) {
+        if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return '—';
+        const s = Math.max(0, Math.floor(seconds));
+        if (s < 60) return s + 's';
+        const m = Math.floor(s / 60);
+        if (m < 60) return m + 'm ' + (s % 60) + 's';
+        const h = Math.floor(m / 60);
+        return h + 'h ' + (m % 60) + 'm';
+    }
+    function fmt_ago(ts) {
+        if (!ts) return '—';
+        const ms = Date.now() - new Date(ts).getTime();
+        if (ms < 0) return 'just now';
+        if (ms < 60_000) return Math.floor(ms / 1000) + 's ago';
+        if (ms < 3_600_000) return Math.floor(ms / 60_000) + 'm ago';
+        return Math.floor(ms / 3_600_000) + 'h ago';
+    }
+    function row_outcome_icon(row) {
+        if (row.status === 'DEAD_LETTERED') return { sym: '☒', cls: 'text-danger', label: 'dead-lettered' };
+        if (row.error) return { sym: '⚠', cls: 'text-warning', label: 'error' };
+        return { sym: '✓', cls: 'text-success', label: 'completed' };
+    }
+%>
+
+<div class="p-3">
+
+    <%/* ---- Worker-health pre-flight ---- */%>
+    <% if (!worker_health.enabled) { %>
+        <div class="content-card sev-warn mb-3">
+            <div class="p-3 text-body">
+                <strong>Metadata worker is disabled</strong> (<code>METADATA_WORKER_ENABLED=false</code>).
+                The queue will not drain until it's re-enabled. Restart with the env var unset to resume.
+            </div>
+        </div>
+    <% } else if (!worker_health.aspace_configured) { %>
+        <div class="content-card sev-warn mb-3">
+            <div class="p-3 text-body">
+                <strong>ArchivesSpace is not configured.</strong>
+                Set <code>ARCHIVESPACE_HOST</code> / <code>USER</code> / <code>PASSWORD</code>
+                or the worker can't fetch records.
+            </div>
+        </div>
+    <% } %>
+
+    <% if (active) { %>
+
+        <%/* ---- Active batch panel ---- */%>
+        <div class="content-card sev-info mb-3">
+            <div class="content-card-header">
+                <h3 style="font-size: 16px; margin: 0;">
+                    Active batch
+                    <code class="text-muted small"><%= active.batch_uuid.slice(0, 8) %>…</code>
+                </h3>
+                <span class="control-group">
+                    <%/* Animated pulse when work is actually moving —
+                         gives an unambiguous "yes it's alive" signal
+                         even when the counters are between transitions. */%>
+                    <% if (!active.cancel_requested) { %>
+                        <span class="spinner-border spinner-border-sm text-primary"
+                              role="status"
+                              aria-label="working"
+                              style="width: 14px; height: 14px;"></span>
+                    <% } %>
+                    <span class="sev-badge sev-<%=
+                        active.cancel_requested ? 'warn' :
+                        active.enqueue_complete ? 'info' : 'success'
+                    %>">
+                        <%= active.cancel_requested ? 'cancelling' :
+                            active.enqueue_complete ? 'draining' : 'enqueuing' %>
+                    </span>
+                </span>
+            </div>
+
+            <%/* Counter cards */%>
+            <div class="row g-3 p-3 text-body">
+                <div class="col-md-3">
+                    <div class="text-muted small">Enqueued</div>
+                    <div style="font-size: 22px; font-weight: 600;">
+                        <%= Number(active.total).toLocaleString() %>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">Succeeded</div>
+                    <div style="font-size: 22px; font-weight: 600; color: var(--success);">
+                        <%= Number(active.succeeded).toLocaleString() %>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">Failed (retrying)</div>
+                    <div style="font-size: 22px; font-weight: 600;">
+                        <%= Number(active.failed).toLocaleString() %>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">Dead-lettered</div>
+                    <div style="font-size: 22px; font-weight: 600; color: var(--danger);">
+                        <%= Number(active.dead_lettered).toLocaleString() %>
+                    </div>
+                </div>
+            </div>
+
+            <%/* Progress bar — only shown once we've passed the
+                 enqueue phase (otherwise the bar would jump back as
+                 more rows arrive). Before that, we show "enqueuing X
+                 rows so far". */%>
+            <div class="p-3 pt-0 text-body">
+                <% if (active.enqueue_complete) { %>
+                    <div class="progress" style="height: 8px;">
+                        <div class="progress-bar"
+                             role="progressbar"
+                             style="width: <%= progress.percent %>%;"
+                             aria-valuenow="<%= progress.percent %>"
+                             aria-valuemin="0"
+                             aria-valuemax="100"></div>
+                    </div>
+                    <div class="text-muted small mt-1">
+                        <%= progress.percent %>% complete
+                        · ~<%= Math.round(progress.rate_per_min) %> rows/min
+                        · <%= progress.eta_seconds === null ? '—' : fmt_duration(progress.eta_seconds) %> remaining
+                        · elapsed <%= fmt_duration(progress.elapsed_seconds) %>
+                    </div>
+                <% } else { %>
+                    <div class="text-muted small">
+                        Producer is still enqueuing rows.
+                        <strong><%= Number(active.total).toLocaleString() %></strong>
+                        queued so far · elapsed <%= fmt_duration(progress.elapsed_seconds) %>
+                        <% if (progress.rate_per_min > 0) { %>
+                            · ~<%= Math.round(progress.rate_per_min) %> rows/min completing
+                        <% } %>
+                    </div>
+                <% } %>
+            </div>
+
+            <%/* Metadata strip */%>
+            <div class="px-3 pb-2 text-muted small">
+                Started <%= fmt_ago(active.started_at) %>
+                by <strong><%= active.actor_name || active.actor || 'unknown' %></strong>
+                · transformer at start = <code>use_transformer=<%= active.transformer_flag %></code>
+                (version <%= active.transformer_version || '—' %>)
+                <% if (active.transformer_flag !== current_flag) { %>
+                    <span class="sev-badge sev-warn ms-1">flag has changed since start</span>
+                <% } %>
+            </div>
+
+            <%/* ---- Currently fetching ---- */%>
+            <div class="px-3 pt-2 text-body">
+                <div class="text-muted small mb-1">
+                    Currently fetching
+                    <span class="text-muted">
+                        (<%= activity.in_flight.length %> of <%= worker_health.concurrency %> worker slots in use)
+                    </span>
+                </div>
+                <% if (activity.in_flight.length === 0) { %>
+                    <div class="text-muted small">
+                        <em>Worker has not claimed a row this tick.
+                        Next claim in &le; <%= Math.round(worker_health.poll_ms / 1000) %>s.</em>
+                    </div>
+                <% } else { %>
+                    <ul class="list-unstyled mb-0" style="font-family: var(--font-mono, monospace); font-size: 12px;">
+                        <% activity.in_flight.forEach(function(r) { %>
+                            <li class="text-body">
+                                <span class="text-primary">⏵</span>
+                                <%= r.uri %>
+                                <% if (r.attempts > 0) { %>
+                                    <span class="text-muted">(retry <%= r.attempts %>/<%= worker_health.max_attempts %>)</span>
+                                <% } %>
+                                <span class="text-muted">— claimed <%= fmt_ago(r.date_updated) %></span>
+                            </li>
+                        <% }); %>
+                    </ul>
+                <% } %>
+            </div>
+
+            <%/* ---- Recent activity ---- */%>
+            <% if (activity.recently_completed.length > 0) { %>
+                <div class="px-3 pt-3 text-body">
+                    <div class="text-muted small mb-1">Recent activity</div>
+                    <ul class="list-unstyled mb-0" style="font-family: var(--font-mono, monospace); font-size: 12px; max-height: 240px; overflow-y: auto;">
+                        <% activity.recently_completed.forEach(function(r) {
+                            var icon = row_outcome_icon(r); %>
+                            <li class="text-body">
+                                <span class="<%= icon.cls %>"><%= icon.sym %></span>
+                                <%= r.uri %>
+                                <% if (r.status === 'DEAD_LETTERED') { %>
+                                    <span class="text-muted">— <%= icon.label %> after <%= r.attempts %> attempts</span>
+                                <% } %>
+                                <span class="text-muted">— <%= fmt_ago(r.date_updated) %></span>
+                                <% if (r.last_error && r.status === 'DEAD_LETTERED') { %>
+                                    <div class="text-danger small ms-3" style="font-family: var(--font-mono, monospace);">
+                                        <%= r.last_error.slice(0, 200) %>
+                                    </div>
+                                <% } %>
+                            </li>
+                        <% }); %>
+                    </ul>
+                </div>
+            <% } %>
+
+            <%/* ---- Cancel action ---- */%>
+            <div class="p-3 pt-3">
+                <form class="d-inline"
+                      hx-post="<%= dashboard_base %>/admin/metadata-refresh/<%= active.batch_uuid %>/cancel"
+                      hx-target="#metadata-refresh-status"
+                      hx-swap="innerHTML">
+                    <button type="submit"
+                            class="btn btn-sm btn-outline-danger"
+                            data-confirm="Cancel the running batch? In-flight rows will finish; pending rows will be deleted."
+                            data-confirm-title="Cancel refresh?"
+                            data-confirm-label="Cancel batch">
+                        Cancel batch
+                    </button>
+                </form>
+            </div>
+        </div>
+
+    <% } else { %>
+
+        <%/* ---- Idle state ---- */%>
+        <div class="content-card sev-info mb-3">
+            <div class="p-3">
+                <strong>No active system refresh.</strong>
+                <span class="text-muted">
+                    Current transformer flag: <code>use_transformer=<%= current_flag %></code>
+                    (version <%= current_version || '—' %>).
+                </span>
+                <% if (pending_in_queue > 0) { %>
+                    <div class="text-muted small mt-2">
+                        <%= pending_in_queue.toLocaleString() %> row<%= pending_in_queue === 1 ? '' : 's' %>
+                        pending in the queue from on-demand refreshes.
+                    </div>
+                <% } %>
+            </div>
+            <div class="p-3 pt-0">
+                <form class="d-inline"
+                      hx-post="<%= dashboard_base %>/admin/metadata-refresh/start"
+                      hx-target="#metadata-refresh-status"
+                      hx-swap="innerHTML">
+                    <%/* Resume opt-in. When checked, the new batch
+                         inherits the cursor_id from the most recent
+                         cancelled batch — picks up enqueue where the
+                         prior cancellation stopped instead of
+                         restarting from tbl_objects.id=0. Useful
+                         when the prior run was cancelled because
+                         the worker stalled rather than because the
+                         operator wanted a full rerun.
+
+                         hx-preserve on the <input> is load-bearing:
+                         this whole partial polls every 5s, and
+                         without preservation the new HTML would
+                         replace the checkbox with a fresh unchecked
+                         one mid-interaction. With hx-preserve, htmx
+                         keeps the user-entered state across swaps
+                         (matched by id). */%>
+                    <label class="form-check d-block mb-2 small text-muted"
+                           style="cursor: pointer;">
+                        <input type="checkbox"
+                               id="metadata-refresh-resume"
+                               name="resume"
+                               value="1"
+                               class="form-check-input me-1"
+                               hx-preserve="true">
+                        Resume from last cancelled batch
+                        <span class="text-muted"
+                              title="If checked, the new batch picks up where the most recent cancelled batch stopped enqueuing — skipping records already touched by that run. Leave unchecked for a full rerun from scratch.">
+                            (?)
+                        </span>
+                    </label>
+                    <button type="submit"
+                            class="btn btn-sm btn-primary"
+                            data-confirm="Refresh metadata for every active object and collection? This takes hours and runs in the background."
+                            data-confirm-title="Start system refresh?"
+                            data-confirm-label="Start refresh">
+                        Refresh all system metadata
+                    </button>
+                </form>
+            </div>
+        </div>
+
+    <% } %>
+
+    <%/* ---- History table ---- */%>
+    <% if (history && history.length > 0) { %>
+        <h3 style="font-size: 16px; margin: 16px 0 8px;">Recent batches</h3>
+        <table class="table table-sm">
+            <thead>
+                <tr>
+                    <th>Batch</th>
+                    <th>Status</th>
+                    <th class="text-end">Enq.</th>
+                    <th class="text-end">OK</th>
+                    <th class="text-end">DL</th>
+                    <th>Flag</th>
+                    <th>Started</th>
+                    <th>Finished</th>
+                    <th>By</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% history.forEach(function(b) { %>
+                    <tr>
+                        <td><code><%= b.batch_uuid.slice(0, 8) %>…</code></td>
+                        <td>
+                            <span class="sev-badge sev-<%=
+                                b.status === 'completed' ? 'success' :
+                                b.status === 'cancelled' ? 'warn' :
+                                b.status === 'failed' ? 'error' : 'info'
+                            %>">
+                                <%= b.status %>
+                            </span>
+                        </td>
+                        <td class="text-end"><%= Number(b.total).toLocaleString() %></td>
+                        <td class="text-end"><%= Number(b.succeeded).toLocaleString() %></td>
+                        <td class="text-end">
+                            <% if (b.dead_lettered > 0) { %>
+                                <strong class="text-danger"><%= Number(b.dead_lettered).toLocaleString() %></strong>
+                            <% } else { %>
+                                <%= Number(b.dead_lettered).toLocaleString() %>
+                            <% } %>
+                        </td>
+                        <td><code>use_transformer=<%= b.transformer_flag %></code></td>
+                        <td class="text-muted small"><%= new Date(b.started_at).toLocaleString() %></td>
+                        <td class="text-muted small">
+                            <%= b.finished_at ? new Date(b.finished_at).toLocaleString() : '—' %>
+                        </td>
+                        <td><%= b.actor_name || b.actor || '—' %></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    <% } %>
+</div>

@@ -1,0 +1,43 @@
+<h1 class="page-title">Collections</h1>
+<p class="page-subtitle">Browse repository collections. Click a title — or use the actions menu (<strong>⋮</strong>) — to drill into a collection's objects.</p>
+
+<div class="content-card">
+    <div class="content-card-header">
+        <div class="control-group" style="flex: 1;">
+            <input type="search" name="q" class="form-control"
+                   placeholder="Search collection titles…"
+                   value="<%= filters.q || '' %>"
+                   autocomplete="off"
+                   style="max-width: 360px;"
+                   hx-get="<%= dashboard_base %>/collections/list"
+                   hx-target="#collections-table"
+                   hx-trigger="keyup changed delay:300ms, search"
+                   hx-include="[name=sort]">
+        </div>
+        <div class="control-group">
+            <label for="sort" class="text-muted">Sort by</label>
+            <select id="sort" name="sort" class="form-select"
+                    hx-get="<%= dashboard_base %>/collections/list"
+                    hx-target="#collections-table"
+                    hx-trigger="change"
+                    hx-include="[name=q]">
+                <option value="count" <%= filters.sort === 'count' ? 'selected' : '' %>>Object count</option>
+                <option value="title" <%= filters.sort === 'title' ? 'selected' : '' %>>Title (A–Z)</option>
+                <option value="recent" <%= filters.sort === 'recent' ? 'selected' : '' %>>Most recent</option>
+            </select>
+            <span class="htmx-indicator">
+                <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+            </span>
+        </div>
+    </div>
+
+    <div id="collections-table"
+         hx-get="<%= dashboard_base %>/collections/list"
+         hx-trigger="load, collections:refresh from:body"
+         hx-swap="innerHTML">
+        <div class="empty-state">
+            <span class="spinner-border spinner-border-sm text-muted me-2"></span>
+            Loading…
+        </div>
+    </div>
+</div>

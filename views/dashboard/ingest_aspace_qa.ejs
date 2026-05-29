@@ -1,0 +1,113 @@
+<nav class="small text-muted mb-2" aria-label="Breadcrumb">
+    <a href="<%= dashboard_base %>/collections" style="color: inherit;">← Collection Management</a>
+</nav>
+
+<h1 class="page-title">Digital Preservation Jobs — ASpace Description QA</h1>
+<p class="page-subtitle">
+    Folders where Make Digital Objects has completed
+    (<code>uri.txt</code> present).
+</p>
+
+<%/* Per-action result zone: populated by Check Metadata via HTMX. */%>
+<div id="qa-action-result" aria-live="polite"></div>
+
+<div id="qa-action-spinner" class="action-spinner content-card"
+     style="margin-bottom: 16px;">
+    <div style="display: flex; align-items: center; gap: 12px;">
+        <div class="spinner-border spinner-border-sm" role="status" aria-label="Loading"></div>
+        <div>
+            <strong>Checking ArchivesSpace records…</strong>
+            <div class="text-muted small">
+                Validates each package's AS record using the same rules
+                the ingest pipeline applies at submit time.
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="content-card" style="margin-bottom: 16px;">
+    <div style="display: flex; align-items: flex-start; gap: 12px; padding: 12px 16px;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="1.75"
+             stroke-linecap="round" stroke-linejoin="round"
+             aria-hidden="true" style="flex-shrink: 0; margin-top: 2px;">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="16" x2="12" y2="12"/>
+            <line x1="12" y1="8" x2="12.01" y2="8"/>
+        </svg>
+        <div class="text-muted small">
+            Make Digital Objects has completed for these folders
+            (<code>uri.txt</code> files exist). Use this view to review the
+            ArchivesSpace records before submitting for ingest.
+        </div>
+    </div>
+</div>
+
+<div class="content-card">
+    <div class="content-card-header">
+        <div class="control-group">
+            Folders ready for ASpace Description QA review
+        </div>
+        <div class="control-group">
+            <%/* "Show QA-passed" toggle. Default is hidden (only
+                 unchecked folders show). Tick to surface every
+                 folder in /processed including ones already QA'd —
+                 useful for re-checking a folder or auditing what's
+                 been passed.
+
+                 We use hx-include to pull the OTHER control's value
+                 along on every fetch. That way:
+                   - typing in search reloads the list with the
+                     current toggle state respected,
+                   - flipping the toggle reloads the list with the
+                     current search filter respected,
+                   - and the 30s + workspace:refresh polls send both.
+
+                 No hx-vals='js:...' — that path uses new Function()
+                 which our CSP correctly forbids. The form-style
+                 hx-include is fully static markup. */%>
+            <div class="form-check form-switch m-0">
+                <input class="form-check-input"
+                       type="checkbox"
+                       id="qa-show-passed-input"
+                       name="show_passed"
+                       value="1"
+                       <%= typeof show_passed !== 'undefined' && show_passed ? 'checked' : '' %>
+                       hx-get="<%= dashboard_base %>/ingest/aspace-qa/list"
+                       hx-include="#qa-search-input"
+                       hx-target="#qa-content"
+                       hx-trigger="change"
+                       hx-swap="innerHTML">
+                <label class="form-check-label" for="qa-show-passed-input">
+                    Show QA-passed
+                </label>
+            </div>
+            <label for="qa-search-input" class="form-label mb-0">Search:</label>
+            <input type="text"
+                   id="qa-search-input"
+                   name="q"
+                   class="form-control form-control-sm"
+                   placeholder="folder or package"
+                   hx-get="<%= dashboard_base %>/ingest/aspace-qa/list"
+                   hx-include="#qa-show-passed-input"
+                   hx-target="#qa-content"
+                   hx-trigger="keyup changed delay:300ms"
+                   hx-swap="innerHTML">
+        </div>
+    </div>
+
+    <%/* aria-live="polite" so SR users hear when the QA list refreshes
+         (search results, 30s poll, or the QA-passed toggle). */%>
+    <div id="qa-content"
+         hx-get="<%= dashboard_base %>/ingest/aspace-qa/list"
+         hx-include="#qa-search-input, #qa-show-passed-input"
+         hx-trigger="load, every 30s, workspace:refresh from:body"
+         hx-swap="innerHTML"
+         aria-live="polite"
+         aria-atomic="false">
+        <div class="empty-state">
+            <span class="spinner-border spinner-border-sm text-muted me-2"></span>
+            Loading…
+        </div>
+    </div>
+</div>

@@ -1,0 +1,91 @@
+<%/* Bulk-delete confirmation modal. Lists what's about to be deleted
+     so staff have a chance to back out before the soft-delete fires.
+
+     Inserted into #modal-content via HTMX; dashboard.js auto-opens
+     the modal. On submit, posts the same pid list to /bulk/delete
+     and the server returns 204 + HX-Trigger to refresh the table. */%>
+<div class="modal-header">
+    <div>
+        <h5 class="modal-title" id="modal-content-title" style="margin: 0;">
+            Delete <%= items.length %> object<%= items.length === 1 ? '' : 's' %>?
+        </h5>
+        <div class="text-muted small" style="margin-top: 4px;">
+            This soft-deletes the selected rows. They'll no longer appear in any list.
+        </div>
+    </div>
+    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+</div>
+<div class="modal-body">
+    <%/* Detect any published rows in the selection. The model
+         refuses the whole batch if ANY row is published (409); we
+         catch it here so staff see what to suppress first instead
+         of a generic toast. */%>
+    <% var published = items.filter(function (it) { return it.is_published; }); %>
+    <% if (published.length > 0) { %>
+        <div class="alert alert-warning small mb-3">
+            <strong><%= published.length %></strong> of the selected
+            object<%= items.length === 1 ? '' : 's' %>
+            <%= published.length === 1 ? 'is' : 'are' %> still
+            <strong>published</strong>. Suppress
+            <%= published.length === 1 ? 'it' : 'them' %> first, then retry.
+            <ul class="mb-0 mt-2 font-monospace small">
+                <% published.slice(0, 5).forEach(function (it) { %>
+                    <li><%= it.pid %></li>
+                <% }); %>
+                <% if (published.length > 5) { %>
+                    <li>…and <%= published.length - 5 %> more.</li>
+                <% } %>
+            </ul>
+        </div>
+    <% } %>
+
+    <%/* Cap the rendered list at 25 to keep the modal sane; the
+         backend still deletes everything in `pids` regardless of
+         what we show here. */%>
+    <% var visible = items.slice(0, 25); %>
+    <ul class="list-unstyled mb-3" style="max-height: 240px; overflow-y: auto;">
+        <% visible.forEach(function (it) { %>
+            <li class="mb-1" style="border-bottom: 1px solid var(--hairline-soft); padding-bottom: 6px;">
+                <strong><%= it.title || '(untitled)' %></strong>
+                <% if (it.is_published) { %>
+                    <span class="badge bg-warning text-dark ms-1">published</span>
+                <% } %>
+                <div class="font-monospace text-muted small"><%= it.pid %></div>
+            </li>
+        <% }); %>
+    </ul>
+    <% if (items.length > 25) { %>
+        <div class="text-muted small mb-3">
+            …and <%= items.length - 25 %> more.
+        </div>
+    <% } %>
+
+    <% if (published.length === 0) { %>
+        <%/* hx-swap=none — the response is 204 + HX-Trigger fires the
+             `modal:close` event (handled in dashboard.js) AND the
+             `objects:refresh` event that re-fetches the table. */%>
+        <form id="bulk-delete-form"
+              hx-post="<%= dashboard_base %>/objects/bulk/delete"
+              hx-swap="none">
+            <input type="hidden" name="pids" value="<%= pids.join(',') %>">
+            <label for="bulk_delete_reason" class="form-label small mb-1">
+                Reason for deletion <span class="text-danger">*</span>
+            </label>
+            <textarea id="bulk_delete_reason"
+                      name="delete_reason"
+                      class="form-control form-control-sm"
+                      rows="3"
+                      maxlength="1000"
+                      required
+                      placeholder="Applied to every object in this batch. Sent to Archivematica as the deletion-request event reason."></textarea>
+        </form>
+    <% } %>
+</div>
+<div class="modal-footer">
+    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+    <% if (published.length === 0) { %>
+        <button type="submit" form="bulk-delete-form" class="btn btn-danger">
+            Delete <%= items.length %> object<%= items.length === 1 ? '' : 's' %>
+        </button>
+    <% } %>
+</div>

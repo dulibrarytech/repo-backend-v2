@@ -1,0 +1,61 @@
+<nav class="small text-muted mb-2" aria-label="Breadcrumb">
+    <a href="<%= dashboard_base %>/collections" style="color: inherit;">← Collection Management</a>
+</nav>
+
+<h1 class="page-title">Digital Preservation Jobs — Packaging and Ingesting</h1>
+<p class="page-subtitle">
+    Folders ready to submit to the ingest pipeline. Submit queues one
+    row per archival package and starts the worker through stages
+    upload → Archivematica → DuraCloud → repository.
+</p>
+
+<%/* Action result zone — populated by HTMX swap from submit-ingest. */%>
+<div id="workspace-action-result" aria-live="polite"></div>
+
+<div id="workspace-action-spinner" class="action-spinner content-card"
+     style="margin-bottom: 16px;">
+    <div style="display: flex; align-items: center; gap: 12px;">
+        <div class="spinner-border spinner-border-sm" role="status" aria-label="Loading"></div>
+        <div>
+            <strong>Submitting to ingest…</strong>
+            <div class="text-muted small">
+                Queuing packages and starting Archivematica processing.
+                Do not navigate away from this page.
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="content-card">
+    <div class="content-card-header">
+        <div class="control-group">
+            Folders ready to submit to the ingest pipeline
+        </div>
+        <div class="control-group">
+            <label for="packaging-search-input" class="form-label mb-0">Search:</label>
+            <input type="text"
+                   id="packaging-search-input"
+                   name="q"
+                   class="form-control form-control-sm"
+                   placeholder="folder or package"
+                   hx-get="<%= dashboard_base %>/ingest/packaging/list"
+                   hx-target="#packaging-content"
+                   hx-trigger="keyup changed delay:300ms"
+                   hx-swap="innerHTML">
+        </div>
+    </div>
+
+    <%/* aria-live="polite" so screen-reader users hear when the
+         packaging list updates (after a search or a 30s poll). */%>
+    <div id="packaging-content"
+         hx-get="<%= dashboard_base %>/ingest/packaging/list"
+         hx-trigger="load, every 30s, workspace:refresh from:body"
+         hx-swap="innerHTML"
+         aria-live="polite"
+         aria-atomic="false">
+        <div class="empty-state">
+            <span class="spinner-border spinner-border-sm text-muted me-2"></span>
+            Loading…
+        </div>
+    </div>
+</div>

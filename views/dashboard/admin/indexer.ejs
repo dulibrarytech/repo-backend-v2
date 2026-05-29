@@ -1,0 +1,81 @@
+<%/* Admin: Elasticsearch indexer status + reindex controls.
+
+     Status panel polls every 5s. "Reindex all" lives here; per-
+     collection reindex lives on the collection-detail page where
+     the PID is already in scope (avoiding a free-form text input
+     that would invite typos and ambiguity). */%>
+<h1 class="page-title">Indexer</h1>
+<p class="page-subtitle">
+    Public Elasticsearch index. Staff dashboard searches don't read from here.
+    Only <strong>published</strong> records are indexed. Every action that
+    affects a record's public presence — publish, suppress, soft-delete,
+    thumbnail change, metadata refresh — automatically queues the row for
+    the indexer. The controls below are for explicit bulk reconciliation.
+</p>
+
+<div class="content-card mb-3">
+    <div class="content-card-header">
+        <h2 style="font-size: 18px; margin: 0;">Status</h2>
+        <div class="control-group">
+            <span class="htmx-indicator">
+                <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+            </span>
+        </div>
+    </div>
+
+    <div id="indexer-status"
+         hx-get="<%= dashboard_base %>/admin/indexer/status"
+         hx-trigger="load, every 5s"
+         hx-swap="innerHTML">
+        <div class="text-muted small p-3">Loading…</div>
+    </div>
+</div>
+
+<div class="content-card">
+    <div class="content-card-header">
+        <h2 style="font-size: 18px; margin: 0;">Reindex</h2>
+    </div>
+    <div class="p-3">
+        <p class="text-muted small mb-3">
+            "Dirties" every <strong>published</strong> active row so the
+            worker re-pushes each one to the public index on its next
+            cycle. Unpublished or soft-deleted rows are unaffected by
+            this action — their suppress/delete already removed them
+            from the index.
+        </p>
+
+        <form class="d-inline"
+              hx-post="<%= dashboard_base %>/admin/indexer/reindex-all"
+              hx-target="#indexer-status"
+              hx-swap="innerHTML">
+            <button type="submit"
+                    class="btn btn-sm btn-outline-primary"
+                    data-confirm="Re-queue every active row for indexing? Large repositories can take a while to drain."
+                    data-confirm-title="Reindex all?"
+                    data-confirm-label="Reindex all">
+                Reindex all active rows
+            </button>
+        </form>
+
+        <form class="d-inline ms-2"
+              hx-post="<%= dashboard_base %>/admin/indexer/rebuild-index"
+              hx-target="#indexer-status"
+              hx-swap="innerHTML">
+            <button type="submit"
+                    class="btn btn-sm btn-outline-danger"
+                    data-confirm="DROP the public Elasticsearch index and recreate it from current mappings? Every published row will be re-pushed by the worker. Public search will return 0 results until the queue drains. Use this only when a mapping change requires a fresh index — a normal reindex is enough for everything else."
+                    data-confirm-title="Drop &amp; rebuild index?"
+                    data-confirm-label="Drop &amp; rebuild">
+                Drop &amp; rebuild index
+            </button>
+        </form>
+
+        <p class="text-muted small mt-3 mb-0">
+            Per-collection reindex is available via
+            <code>POST /repo/dashboard/admin/indexer/reindex-collection/:pid</code>
+            for admin tooling. The dashboard no longer surfaces it as a
+            button — dirty flags from publish/suppress already trigger
+            reindex on the next worker tick.
+        </p>
+    </div>
+</div>

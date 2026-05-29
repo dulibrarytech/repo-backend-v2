@@ -1,0 +1,73 @@
+<%/* Single-object delete confirmation modal.
+
+     Loaded into #modal-content via HTMX when staff clicks the
+     "Delete" kebab item on an object row. dashboard.js auto-opens
+     the modal once the content swaps in.
+
+     Three pieces of UI:
+       1. The object's title + pid (so staff can confirm what
+          they're nuking).
+       2. A REQUIRED reason textarea (forwarded to Archivematica
+          as the deletion-request event_reason).
+       3. A published-state guard — if the object is somehow still
+          published when this modal renders (shouldn't happen
+          because the menu hides Delete on published rows, but
+          belt-and-braces), the modal refuses to expose the
+          submit button and instead tells staff to suppress
+          first. The model layer enforces the same guard server-
+          side and returns 409 if the published row arrives here. */%>
+<div class="modal-header">
+    <div>
+        <h5 class="modal-title" id="modal-content-title" style="margin: 0;">Delete object?</h5>
+        <div class="text-muted small" style="margin-top: 4px;">
+            Soft-deletes the row + submits an AIP deletion request to Archivematica.
+        </div>
+    </div>
+    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+</div>
+<div class="modal-body">
+    <p class="mb-2">
+        <strong><%= item.title || '(untitled)' %></strong>
+    </p>
+    <div class="font-monospace text-muted small mb-3"><%= item.pid %></div>
+
+    <% if (item.is_published) { %>
+        <%/* Defensive: the model also enforces this and returns 409.
+             Showing the message here avoids a confusing server bounce. */%>
+        <div class="alert alert-warning small mb-0">
+            This object is currently <strong>published</strong>.
+            Suppress it first, then delete.
+        </div>
+    <% } else { %>
+        <%/* hx-target picks the row in the parent page; hx-swap=outerHTML
+             removes it cleanly. The modal closes via the dashboard.js
+             `modal:close` event bus — the dashboard controller's
+             toast trigger now also carries that close signal. */%>
+        <form id="delete-form"
+              hx-delete="<%= dashboard_base %>/objects/<%= item.pid %>"
+              hx-target="#object-<%= item.pid %>"
+              hx-swap="outerHTML">
+            <div class="mb-2">
+                <label for="delete_reason" class="form-label small mb-1">
+                    Reason for deletion <span class="text-danger">*</span>
+                </label>
+                <textarea id="delete_reason"
+                          name="delete_reason"
+                          class="form-control form-control-sm"
+                          rows="3"
+                          maxlength="1000"
+                          required
+                          placeholder="e.g. duplicate of pid X / withdrawn at depositor request / metadata error"></textarea>
+                <div class="form-text small">
+                    Sent to Archivematica as the deletion-request event reason.
+                </div>
+            </div>
+        </form>
+    <% } %>
+</div>
+<div class="modal-footer">
+    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+    <% if (!item.is_published) { %>
+        <button type="submit" form="delete-form" class="btn btn-danger">Delete</button>
+    <% } %>
+</div>

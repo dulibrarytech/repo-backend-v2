@@ -1,0 +1,92 @@
+<tr id="user-<%= item.id %>">
+    <td class="font-monospace" style="font-size: 13px;"><%= item.du_id %></td>
+    <td><%= [item.first_name, item.last_name].filter(Boolean).join(' ') || '—' %></td>
+    <td class="text-muted" style="font-size: 13px;"><%= item.email || '—' %></td>
+    <td>
+        <% if (item.is_active === 1) { %>
+            <span class="sev-badge sev-success">Active</span>
+        <% } else { %>
+            <span class="sev-badge sev-info">Deactivated</span>
+        <% } %>
+    </td>
+    <td class="actions-cell">
+        <%/* Kebab is always rendered now. The dropdown items differ
+             based on active state:
+               - active   → Edit + Deactivate
+               - inactive → Edit + Activate
+             Edit applies in both states because staff might need to
+             fix a deactivated user's email (e.g. before re-enabling). */%>
+        <div class="dropdown">
+            <button type="button" class="kebab-btn"
+                    data-bs-toggle="dropdown"
+                    aria-expanded="false"
+                    aria-label="Actions for this user"
+                    title="Actions">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <circle cx="12" cy="5" r="1.75"/>
+                    <circle cx="12" cy="12" r="1.75"/>
+                    <circle cx="12" cy="19" r="1.75"/>
+                </svg>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end">
+                <%/* Edit — opens the user_edit_modal via #modal-content.
+                     dashboard.js section 4 auto-opens the modal mount
+                     when content lands. */%>
+                <li>
+                    <button type="button" class="dropdown-item"
+                            hx-get="<%= dashboard_base %>/users/<%= item.id %>/edit"
+                            hx-target="#modal-content"
+                            hx-swap="innerHTML">
+                        <%/* pencil icon */%>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M12 20h9"/>
+                            <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                        </svg>
+                        Edit
+                    </button>
+                </li>
+                <% if (item.is_active === 1) { %>
+                    <li>
+                        <button type="button" class="dropdown-item text-danger"
+                                hx-delete="<%= dashboard_base %>/users/<%= item.id %>"
+                                hx-target="#user-<%= item.id %>"
+                                hx-swap="outerHTML"
+                                data-confirm="Deactivate <%= item.du_id %>?"
+                                data-confirm-title="Deactivate user?"
+                                data-confirm-label="Deactivate">
+                            <%/* user-x icon — deactivate */%>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                                <circle cx="8.5" cy="7" r="4"/>
+                                <line x1="18" y1="8" x2="23" y2="13"/>
+                                <line x1="23" y1="8" x2="18" y2="13"/>
+                            </svg>
+                            Deactivate
+                        </button>
+                    </li>
+                <% } else { %>
+                    <li>
+                        <button type="button" class="dropdown-item text-success"
+                                hx-post="<%= dashboard_base %>/users/<%= item.id %>/activate"
+                                hx-target="#user-<%= item.id %>"
+                                hx-swap="outerHTML"
+                                data-confirm="Re-activate <%= item.du_id %>? They will be able to sign in again."
+                                data-confirm-title="Activate user?"
+                                data-confirm-label="Activate">
+                            <%/* user-check icon — activate */%>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                                <circle cx="8.5" cy="7" r="4"/>
+                                <polyline points="17 11 19 13 23 9"/>
+                            </svg>
+                            Activate
+                        </button>
+                    </li>
+                <% } %>
+            </ul>
+        </div>
+    </td>
+</tr>

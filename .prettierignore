@@ -1,0 +1,13 @@
+node_modules
+coverage
+logs
+tmp
+uploads
+public/vendor
+*.min.js
+*.min.css
+package-lock.json
+
+# Plan docs are mirrored from digitaldu-backend; keep them byte-identical.
+docs/MODERNIZATION_PLAN.md
+docs/MERGE_PLAN.md

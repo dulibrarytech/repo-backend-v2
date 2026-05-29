@@ -1,0 +1,67 @@
+<%/* Modal body for the object metadata view. Swapped into
+     #modal-content by HTMX; dashboard.js then opens the parent modal.
+
+     Top-level layout:
+       header  — title + (optional) call number + PID
+       body    — dl of display_record fields, where known ASpace shapes
+                 (identifiers, dates, subjects, notes, names, parts)
+                 are dispatched through metadata_field.ejs to render as
+                 inline, scannable rows. Anything else falls through to
+                 metadata_value.ejs for the generic recursive treatment.
+     footer  — close button (also closeable from the header X).
+
+     The "call number" pulled into the header is the first `type=local`
+     identifier — it's what staff reference verbally, so surfacing it
+     up top saves a click compared to expanding `identifiers`. */%>
+<%
+var _call_number = null;
+if (display_record && Array.isArray(display_record.identifiers)) {
+    for (var _i = 0; _i < display_record.identifiers.length; _i++) {
+        var _id = display_record.identifiers[_i];
+        if (_id && _id.type === 'local'
+                && typeof _id.identifier === 'string'
+                && _id.identifier.trim().length > 0) {
+            _call_number = _id.identifier.trim();
+            break;
+        }
+    }
+}
+var _keys = Object.keys(display_record || {});
+%>
+<div class="modal-header metadata-modal-header">
+    <div class="metadata-modal-header-content">
+        <h5 class="modal-title" id="modal-content-title">
+            <%= display_record.title || obj.title || '(untitled)' %>
+        </h5>
+        <% if (_call_number) { %>
+            <div class="metadata-modal-callnumber font-monospace">
+                <%= _call_number %>
+            </div>
+        <% } %>
+        <div class="metadata-modal-pid font-monospace text-muted">
+            <%= obj.pid %>
+        </div>
+    </div>
+    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+</div>
+<div class="modal-body metadata-modal-body">
+    <% if (_keys.length === 0) { %>
+        <div class="empty-state">
+            No <code>display_record</code> metadata recorded for this object.
+        </div>
+    <% } else { %>
+        <dl class="metadata-dl mb-0">
+            <% _keys.forEach(function (k) { %>
+                <dt class="metadata-dt" title="<%= k %>">
+                    <%= k.replace(/_/g, ' ') %>
+                </dt>
+                <dd class="metadata-dd">
+                    <%- include('metadata_field', { key: k, value: display_record[k] }) %>
+                </dd>
+            <% }); %>
+        </dl>
+    <% } %>
+</div>
+<div class="modal-footer">
+    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+</div>

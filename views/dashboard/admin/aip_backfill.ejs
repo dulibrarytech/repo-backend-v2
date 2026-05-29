@@ -1,0 +1,58 @@
+<%/* Admin: AIP backfill.
+
+     Mirrors the metadata_refresh admin page layout — one polled
+     status panel, status panel itself surfaces the Start / Cancel
+     buttons. The action area is intentionally minimal: the only
+     deliberate operator inputs are "Start next chunk" and (when
+     applicable) "Cancel pending". No filters, no tunables — chunk
+     size is config-driven so an admin who wants to throttle further
+     does it in .env, not in the UI. */%>
+<h1 class="page-title">AIP Backfill</h1>
+<p class="page-subtitle">
+    Each click of <em>Start backfill</em> enqueues up to
+    <code><%= chunk_size %></code> AIPs from the missing set into the
+    ingest worker, which copies them from Archivematica Storage Service
+    to Wasabi via the curation API. Run repeatedly until the missing
+    count is zero.
+</p>
+
+<% if (!aip_store_enabled) { %>
+    <div class="alert alert-warning" role="alert" style="margin-bottom: 16px;">
+        <strong>AIP copy is disabled.</strong>
+        <code>AIP_STORE_ENABLED=false</code> in the worker process. Start /
+        Cancel are inert until you flip the flag and restart the worker —
+        otherwise the synthetic queue rows would drain as no-ops without
+        contacting Wasabi.
+    </div>
+<% } %>
+
+<div class="content-card">
+    <div class="content-card-header">
+        <h2 style="font-size: 18px; margin: 0;">Status</h2>
+        <div class="control-group">
+            <span class="htmx-indicator">
+                <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+            </span>
+        </div>
+    </div>
+
+    <%/* Poll every 3s. The status query is two indexed reads
+         (count_missing_aips + a GROUP BY on the backfill-batch
+         prefix) so this is cheap enough; 3s matches the worker tick
+         cadence so we don't render between worker writes. */%>
+    <div id="aip-backfill-status"
+         hx-get="<%= dashboard_base %>/admin/aip-backfill/status"
+         hx-trigger="load, every 3s"
+         hx-swap="innerHTML"
+         role="status"
+         aria-live="polite"
+         aria-atomic="false">
+        <%- include('../partials/aip_backfill_status', {
+            dashboard_base: dashboard_base,
+            missing: missing,
+            status: status,
+            chunk_size: chunk_size,
+            aip_store_enabled: aip_store_enabled
+        }) %>
+    </div>
+</div>

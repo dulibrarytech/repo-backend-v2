@@ -1,0 +1,92 @@
+<%/*
+   Recursive renderer for a single display_record value. Caller passes
+   `value` (any JSON-shaped JS value). Type-aware output:
+     string      text (URLs become links; UUID strings get monospace;
+                 HTML tags are stripped for safety)
+     number      text
+     boolean     green/grey badge (Yes / No)
+     null/empty  muted dash
+     array       if all strings, badge chips; otherwise an ordered list
+                 of recursive includes
+     object      collapsible details with a nested dl of the object keys,
+                 each recursing through this same partial
+
+   EJS-output expressions auto-escape, so user-supplied data is safe.
+   Tags are also stripped from string values as defense-in-depth.
+*/%>
+
+<% if (value === null || value === undefined || value === '') { %>
+    <span class="text-muted">—</span>
+
+<% } else if (typeof value === 'boolean') { %>
+    <span class="sev-badge <%= value ? 'sev-success' : 'sev-info' %>"
+          style="font-size: 11px;">
+        <%= value ? 'Yes' : 'No' %>
+    </span>
+
+<% } else if (typeof value === 'number') { %>
+    <span class="font-monospace"><%= value %></span>
+
+<% } else if (typeof value === 'string') { %>
+    <% var s = value.trim(); %>
+    <% if (/^https?:\/\//.test(s)) { %>
+        <a href="<%= s %>" target="_blank" rel="noopener"
+           class="font-monospace small" style="word-break: break-all;">
+            <%= s %>
+        </a>
+    <% } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) { %>
+        <span class="font-monospace small"><%= s %></span>
+    <% } else { %>
+        <span style="white-space: pre-wrap; word-break: break-word;">
+            <%= s.replace(/<[^>]+>/g, '') %>
+        </span>
+    <% } %>
+
+<% } else if (Array.isArray(value)) { %>
+    <% var filtered = value.filter(function (v) { return v !== null && v !== undefined && v !== ''; }); %>
+    <% if (filtered.length === 0) { %>
+        <span class="text-muted">[]</span>
+    <% } else if (filtered.every(function (v) { return typeof v === 'string'; })) { %>
+        <% filtered.forEach(function (v) { %>
+            <span class="sev-badge sev-info" style="margin: 0 4px 4px 0; font-size: 11px;">
+                <%= v %>
+            </span>
+        <% }); %>
+    <% } else { %>
+        <ol class="ps-3 mb-0" style="font-size: 13px;">
+            <% filtered.forEach(function (item) { %>
+                <li class="mb-1"><%- include('metadata_value', { value: item }) %></li>
+            <% }); %>
+        </ol>
+    <% } %>
+
+<% } else if (typeof value === 'object') { %>
+    <% var entries = Object.keys(value).filter(function (k) {
+           var v = value[k];
+           return !(v === null || v === undefined || v === '');
+       }); %>
+    <% if (entries.length === 0) { %>
+        <span class="text-muted">{}</span>
+    <% } else { %>
+        <details style="margin-top: 4px;">
+            <summary style="cursor: pointer; color: var(--text-muted); font-size: 12px;">
+                <%= entries.length %> field<%= entries.length === 1 ? '' : 's' %>
+            </summary>
+            <dl class="row mb-0 mt-2 ms-2" style="font-size: 13px; padding-left: 12px; border-left: 2px solid var(--hairline);">
+                <% entries.forEach(function (k) { %>
+                    <dt class="col-sm-4 text-muted text-truncate"
+                        title="<%= k %>"
+                        style="text-transform: capitalize;">
+                        <%= k.replace(/_/g, ' ') %>
+                    </dt>
+                    <dd class="col-sm-8 mb-2">
+                        <%- include('metadata_value', { value: value[k] }) %>
+                    </dd>
+                <% }); %>
+            </dl>
+        </details>
+    <% } %>
+
+<% } else { %>
+    <span class="font-monospace"><%= String(value) %></span>
+<% } %>

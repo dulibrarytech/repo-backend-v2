@@ -1,0 +1,56 @@
+<% if (!items || items.length === 0) { %>
+    <div class="empty-state">No collections match your filters.</div>
+<% } else { %>
+    <table class="queue-table">
+        <thead>
+            <tr>
+                <th class="thumb-cell" aria-label="Thumbnail"><span class="visually-hidden">Thumbnail</span></th>
+                <th>Title</th>
+                <th>Objects</th>
+                <th>Status</th>
+                <th class="actions-cell">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% items.forEach(function(item) { %>
+                <%- include('collection_row', { item: item, dashboard_base: dashboard_base }) %>
+            <% }); %>
+        </tbody>
+    </table>
+    <% if (total > page_size) { %>
+        <div class="app-pagination">
+            <div class="results-count">
+                Showing <%= (page - 1) * page_size + 1 %>–<%= Math.min(page * page_size, total) %> of <%= total.toLocaleString() %>
+            </div>
+            <nav class="page-controls" aria-label="Pagination">
+                <%
+                    var prev = Math.max(1, page - 1);
+                    var next = page * page_size < total ? page + 1 : page;
+                    var qs = function (p) {
+                        var u = new URLSearchParams();
+                        u.set('page', String(p));
+                        u.set('page_size', String(page_size));
+                        if (filters.q) u.set('q', filters.q);
+                        if (filters.sort) u.set('sort', filters.sort);
+                        return u.toString();
+                    };
+                %>
+                <button type="button"
+                        <%= page === 1 ? 'disabled' : '' %>
+                        hx-get="<%= dashboard_base %>/collections/list?<%= qs(prev) %>"
+                        hx-target="#collections-table"
+                        hx-swap="innerHTML">
+                    ← Previous
+                </button>
+                <span class="current">Page <%= page %></span>
+                <button type="button"
+                        <%= page * page_size >= total ? 'disabled' : '' %>
+                        hx-get="<%= dashboard_base %>/collections/list?<%= qs(next) %>"
+                        hx-target="#collections-table"
+                        hx-swap="innerHTML">
+                    Next →
+                </button>
+            </nav>
+        </div>
+    <% } %>
+<% } %>

@@ -1,0 +1,156 @@
+<%/* Partial returned by GET /dashboard/objects/list. Wraps the table
+     and the pagination footer. Inserted into #objects-table.
+
+     The bulk-actions toolbar above the table is hidden via CSS until
+     the row-checkbox listener in dashboard.js detects at least one
+     selection. It posts the selected pids as a comma-joined hidden
+     input to the relevant bulk endpoint. */%>
+<% if (!items || items.length === 0) { %>
+    <div class="empty-state">No objects match your filters.</div>
+<% } else { %>
+    <div class="bulk-toolbar" role="region" aria-label="Bulk actions">
+        <span class="bulk-count">
+            <span class="bulk-count-n">0</span> selected
+        </span>
+        <%/* Hidden input populated by dashboard.js from the checked rows.
+             Four forms target four bulk endpoints; they all carry the
+             same pids value so the toolbar JS only has to update one
+             hidden input shared across them. */%>
+        <input type="hidden" id="bulk-pids" name="pids" value="" form="bulk-form-publish bulk-form-suppress bulk-form-delete bulk-form-refresh-metadata">
+
+        <form id="bulk-form-publish"
+              hx-post="<%= dashboard_base %>/objects/bulk/publish"
+              hx-swap="none"
+              class="d-inline">
+            <button type="submit" class="btn btn-sm btn-outline-primary">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M17 21H7a4 4 0 0 1 0-8h.5"/>
+                    <path d="M14 8a4 4 0 1 1 4 7"/>
+                    <polyline points="12 11 12 17"/>
+                    <polyline points="9 14 12 11 15 14"/>
+                </svg>
+                Publish
+            </button>
+        </form>
+
+        <form id="bulk-form-suppress"
+              hx-post="<%= dashboard_base %>/objects/bulk/suppress"
+              hx-swap="none"
+              class="d-inline">
+            <button type="submit" class="btn btn-sm btn-outline-secondary">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a19.6 19.6 0 0 1 5.06-5.94"/>
+                    <path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 8 11 8a19.6 19.6 0 0 1-3.17 4.19"/>
+                    <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/>
+                    <line x1="1" y1="1" x2="23" y2="23"/>
+                </svg>
+                Suppress
+            </button>
+        </form>
+
+        <form id="bulk-form-refresh-metadata"
+              hx-post="<%= dashboard_base %>/objects/metadata/refresh-bulk"
+              hx-target="#modal-content"
+              hx-swap="innerHTML"
+              class="d-inline">
+            <button type="submit" class="btn btn-sm btn-outline-primary"
+                    title="Re-fetch ArchivesSpace metadata for the selected rows">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="23 4 23 10 17 10"/>
+                    <polyline points="1 20 1 14 7 14"/>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/>
+                    <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/>
+                </svg>
+                Refresh metadata
+            </button>
+        </form>
+
+        <form id="bulk-form-delete"
+              hx-post="<%= dashboard_base %>/objects/bulk/delete/confirm"
+              hx-target="#modal-content"
+              hx-swap="innerHTML"
+              class="d-inline">
+            <button type="submit" class="btn btn-sm btn-outline-danger">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                </svg>
+                Delete
+            </button>
+        </form>
+
+        <button type="button" class="btn btn-sm btn-link bulk-clear">Clear</button>
+        <span class="bulk-spinner htmx-indicator">
+            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+            <span class="visually-hidden">Working…</span>
+        </span>
+    </div>
+
+    <table class="queue-table">
+        <thead>
+            <tr>
+                <th class="select-cell">
+                    <input type="checkbox" class="select-all form-check-input"
+                           aria-label="Select all on this page">
+                </th>
+                <th class="thumb-cell" aria-label="Thumbnail"><span class="visually-hidden">Thumbnail</span></th>
+                <th>Title</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th class="actions-cell">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% items.forEach(function(item) { %>
+                <%- include('object_row', { item: item, dashboard_base: dashboard_base }) %>
+            <% }); %>
+        </tbody>
+    </table>
+    <div class="app-pagination">
+        <div class="results-count">
+            Showing <%= (page - 1) * page_size + 1 %>–<%= Math.min(page * page_size, total) %> of <%= total.toLocaleString() %>
+        </div>
+        <nav class="page-controls" aria-label="Pagination">
+            <%
+                var prev = Math.max(1, page - 1);
+                var next = page * page_size < total ? page + 1 : page;
+                /* IMPORTANT: only `page` + `page_size` go in the URL.
+                   The filter params (q, is_published, collection,
+                   is_active) flow in via the parent #objects-table
+                   div's hx-include. Embedding them here too would
+                   send each filter twice — Express then parses
+                   req.query.q as ['','foo'] (array) and the
+                   controller's .trim() blows up.
+
+                   Same hazard the aips_table.ejs pagination already
+                   guards against. Be careful when editing either
+                   file. */
+                var qs = function (p) {
+                    var u = new URLSearchParams();
+                    u.set('page', String(p));
+                    u.set('page_size', String(page_size));
+                    return u.toString();
+                };
+            %>
+            <button type="button"
+                    <%= page === 1 ? 'disabled' : '' %>
+                    hx-get="<%= dashboard_base %>/objects/list?<%= qs(prev) %>"
+                    hx-target="#objects-table"
+                    hx-swap="innerHTML">
+                ← Previous
+            </button>
+            <span class="current">Page <%= page %></span>
+            <button type="button"
+                    <%= page * page_size >= total ? 'disabled' : '' %>
+                    hx-get="<%= dashboard_base %>/objects/list?<%= qs(next) %>"
+                    hx-target="#objects-table"
+                    hx-swap="innerHTML">
+                Next →
+            </button>
+        </nav>
+    </div>
+<% } %>

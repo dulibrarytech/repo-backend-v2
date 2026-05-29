@@ -1,0 +1,38 @@
+<header class="app-header">
+    <a href="<%= dashboard_base %>/"
+       class="brand-block"
+       aria-label="University Libraries — University of Denver — Home">
+        <img class="du-logo"
+             src="<%= static_base %>/images/du-logo.png"
+             alt="University Libraries — University of Denver">
+    </a>
+
+    <div class="app-title">
+        Repository <span class="accent">@ DU</span>
+    </div>
+
+    <div class="header-spacer"></div>
+
+    <div class="header-actions">
+        <% if (typeof user !== 'undefined' && user) { %>
+            <span class="user-label">
+                <%= user.first_name || user.du_id %><%= user.last_name ? ' ' + user.last_name : '' %>
+            </span>
+            <form method="POST" action="<%= dashboard_base %>/logout" class="m-0">
+                <button type="submit"
+                        class="btn btn-link p-0"
+                        style="color: var(--text-muted); width: 36px; height: 36px;"
+                        title="Sign out"
+                        aria-label="Sign out">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="1.75"
+                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                        <polyline points="16 17 21 12 16 7"/>
+                        <line x1="21" y1="12" x2="9" y2="12"/>
+                    </svg>
+                </button>
+            </form>
+        <% } %>
+    </div>
+</header>

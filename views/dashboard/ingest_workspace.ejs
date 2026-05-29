@@ -1,0 +1,65 @@
+<nav class="small text-muted mb-2" aria-label="Breadcrumb">
+    <a href="<%= dashboard_base %>/collections" style="color: inherit;">← Collection Management</a>
+</nav>
+
+<h1 class="page-title">Digital Preservation Jobs — Make Digital Objects</h1>
+<p class="page-subtitle">
+    Folders awaiting Make Digital Objects (no <code>uri.txt</code> yet).
+    Run the script to register an ArchivesSpace digital-object record for
+    each package and write the <code>uri.txt</code> sidecar files.
+</p>
+
+<%/* Action result zone — populated by HTMX swap from action endpoints. */%>
+<div id="workspace-action-result" aria-live="polite"></div>
+
+<%/* Loading indicator shown while a long-running action (Make Digital
+     Objects can take ~1 hour for big batches) is in flight. CSS rule
+     in styles.css toggles visibility via .htmx-request. */%>
+<div id="workspace-action-spinner" class="action-spinner content-card"
+     style="margin-bottom: 16px;">
+    <div style="display: flex; align-items: center; gap: 12px;">
+        <div class="spinner-border spinner-border-sm" role="status" aria-label="Loading"></div>
+        <div>
+            <strong>Working…</strong>
+            <div class="text-muted small">
+                Make Digital Objects can take up to an hour for large batches.
+                Do not navigate away from this page.
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="content-card">
+    <div class="content-card-header">
+        <div class="control-group">
+            Folders awaiting Make Digital Objects (no <code>uri.txt</code> yet)
+        </div>
+        <div class="control-group">
+            <label for="workspace-search-input" class="form-label mb-0">Search:</label>
+            <input type="text"
+                   id="workspace-search-input"
+                   name="q"
+                   class="form-control form-control-sm"
+                   placeholder="folder or package"
+                   hx-get="<%= dashboard_base %>/ingest/workspace/list"
+                   hx-target="#workspace-content"
+                   hx-trigger="keyup changed delay:300ms"
+                   hx-swap="innerHTML">
+        </div>
+    </div>
+
+    <%/* Workspace content. Polled every 30s — pre-ingest folders change
+         less frequently than the queue (5s), so 30s is enough.
+         aria-live="polite" surfaces poll/search updates to SR users. */%>
+    <div id="workspace-content"
+         hx-get="<%= dashboard_base %>/ingest/workspace/list"
+         hx-trigger="load, every 30s, workspace:refresh from:body"
+         hx-swap="innerHTML"
+         aria-live="polite"
+         aria-atomic="false">
+        <div class="empty-state">
+            <span class="spinner-border spinner-border-sm text-muted me-2"></span>
+            Loading workspace…
+        </div>
+    </div>
+</div>

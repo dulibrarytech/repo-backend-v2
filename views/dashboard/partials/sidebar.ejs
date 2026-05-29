@@ -1,0 +1,341 @@
+<aside class="app-sidebar" aria-label="Main navigation">
+
+    <%/* Context-aware sidebar — three modes:
+         1. Normal     — Home / Collections / Objects / DPJ / Users /
+                         Admin Utils (single icon, expands into mode 3).
+         2. Workflow   — pre-ingest pipeline focus mode (MDO / QA /
+                         Packaging / Queue / History). Hides everything
+                         else so staff stay on task. Entered via the
+                         DPJ icon; exited via the "← Collection
+                         Management" header link, NOT the sidebar.
+         3. Admin Utils — admin tool focus mode (Indexer / Metadata
+                         Refresh / Services Health). Same shape as
+                         workflow mode. Entered via the Admin Utils
+                         icon in normal mode. Home stays visible as
+                         the escape hatch.
+
+         A11y: every link carries both `aria-label` (the accessible
+         name screen readers announce) and `title` (the hover tooltip
+         for sighted mouse users). Active items also get
+         `aria-current="page"` so SR users hear "current page" when
+         landing on the link — the visual `.active` class on its own
+         isn't perceivable to them. */%>
+    <%
+        // History counts as part of the workflow set so the sidebar
+        // stays in focus mode (4 workflow icons + History) when staff
+        // open the history view.
+        var workflow_actives = ['make-digital-objects', 'aspace-qa', 'packaging-and-ingesting', 'queue', 'history'];
+        var in_workflow = workflow_actives.indexOf(active) !== -1;
+        // Every admin page sets `active: 'admin'` (Indexer / Metadata
+        // Refresh / Services Health). Single source of truth.
+        var in_admin = active === 'admin';
+    %>
+
+    <% if (in_workflow) { %>
+
+        <%/* In-workflow: a focused four-step pipeline plus a Home
+             escape hatch at the top. The Home icon lets staff jump
+             back to the dashboard root without scrolling for the
+             "← Collection Management" back-link in the page header
+             — useful when several browser tabs are open at different
+             workflow steps. Collections / Objects / Users / Admin
+             Utils stay hidden to preserve focus mode.
+
+             Order: Home → MDO → ASpace QA → Packaging → Queue → History */%>
+
+        <%/* Home — same icon as the out-of-workflow sidebar so the
+             affordance reads identically in both modes. No `active`
+             class — by definition we're never on /dashboard/ while
+             rendering a workflow view; clicking it leaves the workflow. */%>
+        <a href="<%= dashboard_base %>/" aria-label="Home" title="Home">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M3 9.5L12 3l9 6.5"/>
+                <path d="M5 9v11a1 1 0 0 0 1 1h4v-7h4v7h4a1 1 0 0 0 1-1V9"/>
+            </svg>
+        </a>
+
+        <%/* Make Digital Objects — folder icon. */%>
+        <a href="<%= dashboard_base %>/ingest/workspace"
+           class="<%= active === 'make-digital-objects' ? 'active' : '' %>"
+           <% if (active === 'make-digital-objects') { %>aria-current="page"<% } %>
+           aria-label="Make Digital Objects"
+           title="Make Digital Objects">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+        </a>
+
+        <%/* ASpace Description QA — document-with-check icon. */%>
+        <a href="<%= dashboard_base %>/ingest/aspace-qa"
+           class="<%= active === 'aspace-qa' ? 'active' : '' %>"
+           <% if (active === 'aspace-qa') { %>aria-current="page"<% } %>
+           aria-label="ASpace Description QA"
+           title="ASpace Description QA">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <polyline points="9 13 11 15 15 11"/>
+            </svg>
+        </a>
+
+        <%/* Packaging and Ingesting — package/box icon. */%>
+        <a href="<%= dashboard_base %>/ingest/packaging"
+           class="<%= active === 'packaging-and-ingesting' ? 'active' : '' %>"
+           <% if (active === 'packaging-and-ingesting') { %>aria-current="page"<% } %>
+           aria-label="Packaging and Ingesting"
+           title="Packaging and Ingesting">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+                <line x1="12" y1="22.08" x2="12" y2="12"/>
+            </svg>
+        </a>
+
+        <%/* Queue — list icon. */%>
+        <a href="<%= dashboard_base %>/ingest"
+           class="<%= active === 'queue' ? 'active' : '' %>"
+           <% if (active === 'queue') { %>aria-current="page"<% } %>
+           aria-label="Queue (ingest in progress)"
+           title="Queue (ingest in progress)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="8" y1="6" x2="21" y2="6"/>
+                <line x1="8" y1="12" x2="21" y2="12"/>
+                <line x1="8" y1="18" x2="21" y2="18"/>
+                <circle cx="4" cy="6" r="1.5"/>
+                <circle cx="4" cy="12" r="1.5"/>
+                <circle cx="4" cy="18" r="1.5"/>
+            </svg>
+        </a>
+
+        <%/* Job History — clock icon. Retrospective view of completed
+             Make Digital Objects / ASpace QA / Submit-to-Ingest runs.
+             Sits at the end of the workflow row (it's the look-back
+             surface, not a forward step). */%>
+        <a href="<%= dashboard_base %>/ingest/history"
+           class="<%= active === 'history' ? 'active' : '' %>"
+           <% if (active === 'history') { %>aria-current="page"<% } %>
+           aria-label="Job History"
+           title="Job History">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/>
+                <polyline points="3 3 3 8 8 8"/>
+                <polyline points="12 7 12 12 15 14"/>
+            </svg>
+        </a>
+
+    <% } else if (in_admin) { %>
+
+        <%/* In-admin-utils focus mode. Same shape as the workflow
+             branch: Home escape at the top, then the admin tools in
+             order. Collections / Objects / Users / DPJ stay hidden
+             to keep staff on the admin surface.
+
+             Order: Home → Indexer → Metadata Refresh → Services Health */%>
+
+        <a href="<%= dashboard_base %>/" aria-label="Home" title="Home">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M3 9.5L12 3l9 6.5"/>
+                <path d="M5 9v11a1 1 0 0 0 1 1h4v-7h4v7h4a1 1 0 0 0 1-1V9"/>
+            </svg>
+        </a>
+
+        <%/* Indexer — admin tools. Database icon (server stack). */%>
+        <a href="<%= dashboard_base %>/admin/indexer"
+           class="<%= page === 'indexer' ? 'active' : '' %>"
+           <% if (page === 'indexer') { %>aria-current="page"<% } %>
+           aria-label="Indexer (admin)"
+           title="Indexer (admin)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+            </svg>
+        </a>
+
+        <%/* Metadata Refresh — admin tools. Circular-arrows icon. */%>
+        <a href="<%= dashboard_base %>/admin/metadata-refresh"
+           class="<%= page === 'metadata_refresh' ? 'active' : '' %>"
+           <% if (page === 'metadata_refresh') { %>aria-current="page"<% } %>
+           aria-label="Metadata Refresh (admin)"
+           title="Metadata Refresh (admin)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="23 4 23 10 17 10"/>
+                <polyline points="1 20 1 14 7 14"/>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/>
+                <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/>
+            </svg>
+        </a>
+
+        <%/* Services Health — admin tools. Cloud-with-check icon. */%>
+        <a href="<%= dashboard_base %>/admin/services"
+           class="<%= page === 'services' ? 'active' : '' %>"
+           <% if (page === 'services') { %>aria-current="page"<% } %>
+           aria-label="Services Health (admin)"
+           title="Services Health (admin)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+                <polyline points="9 14 11 16 15 12"/>
+            </svg>
+        </a>
+
+        <%/* AIP Backfill — admin tool for catching up Stage 6 on
+             objects that ingested before the feature flag was on.
+             Sits next to Metadata Refresh because they're the same
+             shape of operation: long-running, paced, admin-only.
+             Up-arrow-stack icon evokes "push to cloud". */%>
+        <a href="<%= dashboard_base %>/admin/aip-backfill"
+           class="<%= page === 'aip_backfill' ? 'active' : '' %>"
+           <% if (page === 'aip_backfill') { %>aria-current="page"<% } %>
+           aria-label="AIP Backfill (admin)"
+           title="AIP Backfill (admin)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 19V5"/>
+                <polyline points="6 11 12 5 18 11"/>
+                <line x1="4" y1="21" x2="20" y2="21"/>
+            </svg>
+        </a>
+
+    <% } else { %>
+
+        <%/* Normal nav: Home / Collections / Objects / DPJ / Users /
+             Admin Utils. DPJ + Admin Utils are both single icons that
+             open into a focused sub-mode (workflow / admin) where the
+             three or four tool icons appear in place of this nav. */%>
+
+        <%/* Home — dashboard root */%>
+        <a href="<%= dashboard_base %>/"
+           class="<%= active === 'home' ? 'active' : '' %>"
+           <% if (active === 'home') { %>aria-current="page"<% } %>
+           aria-label="Home"
+           title="Home">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M3 9.5L12 3l9 6.5"/>
+                <path d="M5 9v11a1 1 0 0 0 1 1h4v-7h4v7h4a1 1 0 0 0 1-1V9"/>
+            </svg>
+        </a>
+
+        <%/* Stats — bar-chart icon. Dedicated /dashboard/stats page
+             with the v1-style 12-card grid + ingests-per-year chart.
+             Sits directly under Home because it's a content-management
+             overview, not a per-collection or workflow surface. */%>
+        <a href="<%= dashboard_base %>/stats"
+           class="<%= active === 'stats' ? 'active' : '' %>"
+           <% if (active === 'stats') { %>aria-current="page"<% } %>
+           aria-label="Stats"
+           title="Stats">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="18" y1="20" x2="18" y2="10"/>
+                <line x1="12" y1="20" x2="12" y2="4"/>
+                <line x1="6" y1="20" x2="6" y2="14"/>
+                <line x1="3" y1="20" x2="21" y2="20"/>
+            </svg>
+        </a>
+
+        <%/* Collections — stacked-layers icon. Primary staff entry point. */%>
+        <a href="<%= dashboard_base %>/collections"
+           class="<%= active === 'collections' ? 'active' : '' %>"
+           <% if (active === 'collections') { %>aria-current="page"<% } %>
+           aria-label="Collections"
+           title="Collections">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                <polyline points="2 17 12 22 22 17"/>
+                <polyline points="2 12 12 17 22 12"/>
+            </svg>
+        </a>
+
+        <%/* Objects — folder icon (flat browse, for power users) */%>
+        <a href="<%= dashboard_base %>/objects"
+           class="<%= active === 'objects' ? 'active' : '' %>"
+           <% if (active === 'objects') { %>aria-current="page"<% } %>
+           aria-label="Objects (flat browse)"
+           title="Objects (flat browse)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+        </a>
+
+        <%/* Digital Preservation Jobs — single entry icon.
+             Clipboard-with-list-lines metaphor: jobs queued up for
+             staff to process. Lands on the Make Digital Objects view
+             and the in-workflow sidebar takes over. */%>
+        <a href="<%= dashboard_base %>/ingest/workspace"
+           aria-label="Digital Preservation Jobs"
+           title="Digital Preservation Jobs">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                <line x1="9" y1="12" x2="15" y2="12"/>
+                <line x1="9" y1="16" x2="13" y2="16"/>
+            </svg>
+        </a>
+
+        <%/* AIPs — preservation storage browse + download.
+             Archive-box icon. Sits directly under DPJ because the
+             two are conceptually adjacent: DPJ is the path AIPs
+             come INTO existence on (ingest), AIPs is where they
+             live AFTER (preservation tier). Visible in the main
+             nav (not hidden behind Admin Utils) so staff verifying
+             or recovering an AIP don't have to enter focus mode. */%>
+        <a href="<%= dashboard_base %>/aips"
+           class="<%= active === 'aips' ? 'active' : '' %>"
+           <% if (active === 'aips') { %>aria-current="page"<% } %>
+           aria-label="AIPs"
+           title="AIPs">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 8v13H3V8"/>
+                <path d="M1 3h22v5H1z"/>
+                <line x1="10" y1="12" x2="14" y2="12"/>
+            </svg>
+        </a>
+
+        <%/* Users — people icon */%>
+        <a href="<%= dashboard_base %>/users"
+           class="<%= active === 'users' ? 'active' : '' %>"
+           <% if (active === 'users') { %>aria-current="page"<% } %>
+           aria-label="Users"
+           title="Users">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+        </a>
+
+        <%/* Admin Utils — single entry icon. Settings-gear metaphor.
+             Mirrors DPJ: lands on the first admin tool (Indexer) and
+             the in-admin sidebar takes over, showing Indexer / Metadata
+             Refresh / Services Health in place of this nav. No `active`
+             class — by definition we're outside admin mode here. */%>
+        <a href="<%= dashboard_base %>/admin/indexer"
+           aria-label="Admin Utils"
+           title="Admin Utils">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+        </a>
+
+    <% } %>
+
+</aside>

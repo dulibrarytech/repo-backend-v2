@@ -1,0 +1,156 @@
+<tr id="collection-<%= item.pid %>">
+    <td class="thumb-cell">
+        <% if (item.thumbnail) { %>
+            <img class="thumb-img"
+                 src="<%= item.thumbnail %>"
+                 alt=""
+                 loading="lazy">
+        <% } else { %>
+            <div class="thumb-placeholder" aria-label="No thumbnail" title="No thumbnail">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                    <circle cx="8.5" cy="8.5" r="1.5"/>
+                    <polyline points="21 15 16 10 5 21"/>
+                </svg>
+            </div>
+        <% } %>
+    </td>
+    <td class="package-cell">
+        <%/* Title links straight to the detail page — primary one-click
+             affordance. The kebab still holds an "Open" item so the
+             actions cell is consistent with the objects/users rows. */%>
+        <div class="package-name">
+            <a href="<%= dashboard_base %>/collections/<%= item.pid %>"
+               style="color: inherit;">
+                <%= item.title || '(untitled)' %>
+            </a>
+        </div>
+        <div class="package-sub" style="font-style: normal; line-height: 1.5;">
+            <% if (item.handle) { %>
+                <div>
+                    <a href="<%= item.handle %>" target="_blank" rel="noopener"
+                       class="font-monospace"
+                       style="font-size: 12px; word-break: break-all;">
+                        <%= item.handle.replace(/^https?:\/\//, '') %>
+                    </a>
+                </div>
+            <% } %>
+            <div class="font-monospace text-muted"
+                 style="font-size: 12px;"
+                 title="<%= item.pid %>">
+                <%= item.pid %>
+            </div>
+        </div>
+    </td>
+    <td>
+        <strong><%= (item.member_count || 0).toLocaleString() %></strong>
+        <span class="text-muted small">
+            (<%= (item.published_count || 0).toLocaleString() %> pub)
+        </span>
+    </td>
+    <td>
+        <% if (item.is_active !== 1) { %>
+            <span class="sev-badge sev-fatal">Deleted</span>
+        <% } else if (item.is_published === 1) { %>
+            <span class="sev-badge sev-success">Published</span>
+        <% } else { %>
+            <span class="sev-badge sev-warn">Unpublished</span>
+        <% } %>
+    </td>
+    <td class="actions-cell">
+        <div class="dropdown">
+            <button type="button" class="kebab-btn"
+                    data-bs-toggle="dropdown"
+                    aria-expanded="false"
+                    aria-label="Actions for this collection"
+                    title="Actions">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <circle cx="12" cy="5" r="1.75"/>
+                    <circle cx="12" cy="12" r="1.75"/>
+                    <circle cx="12" cy="19" r="1.75"/>
+                </svg>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end">
+                <li>
+                    <a class="dropdown-item"
+                       href="<%= dashboard_base %>/collections/<%= item.pid %>">
+                        <%/* folder-open icon — open the collection */%>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/>
+                        </svg>
+                        Open
+                    </a>
+                </li>
+                <li>
+                    <button type="button" class="dropdown-item"
+                            hx-get="<%= dashboard_base %>/objects/<%= item.pid %>/thumbnail/form"
+                            hx-target="#modal-content"
+                            hx-swap="innerHTML">
+                        <%/* image icon — change thumbnail */%>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                            <circle cx="8.5" cy="8.5" r="1.5"/>
+                            <polyline points="21 15 16 10 5 21"/>
+                        </svg>
+                        Change thumbnail
+                    </button>
+                </li>
+                <%/* Refresh ONLY the collection/resource record itself,
+                     not its members. The collection detail page has a
+                     separate "Refresh members' metadata" button for the
+                     bulk path — keeping these two affordances on
+                     different surfaces means an operator can't trigger
+                     a long-running collection-wide refresh from a list
+                     view by mistake.
+
+                     Gated on is_active because the model's
+                     enqueue_collection_record -> fetch_target rejects
+                     soft-deleted rows with a ValidationError; hiding
+                     the menu item is the cleaner UX. */%>
+                <% if (item.is_active === 1) { %>
+                    <li>
+                        <button type="button" class="dropdown-item"
+                                hx-post="<%= dashboard_base %>/collections/<%= item.pid %>/metadata/refresh"
+                                hx-target="#modal-content"
+                                hx-swap="innerHTML"
+                                data-confirm="Re-fetch ArchivesSpace metadata for <%= item.title || item.pid %>? Members will NOT be refreshed — use the collection detail page for the full expansion."
+                                data-confirm-title="Refresh collection metadata?"
+                                data-confirm-label="Refresh">
+                            <%/* refresh icon — re-fetch metadata. Same
+                                 glyph as object_row's "Refresh metadata"
+                                 so the action reads the same across
+                                 collection + object surfaces. */%>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <polyline points="23 4 23 10 17 10"/>
+                                <polyline points="1 20 1 14 7 14"/>
+                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/>
+                                <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/>
+                            </svg>
+                            Refresh metadata
+                        </button>
+                    </li>
+                <% } %>
+                <% if (item.handle) { %>
+                    <li>
+                        <a class="dropdown-item"
+                           href="<%= item.handle %>"
+                           target="_blank" rel="noopener">
+                            <%/* external-link icon — public handle */%>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                                <polyline points="15 3 21 3 21 9"/>
+                                <line x1="10" y1="14" x2="21" y2="3"/>
+                            </svg>
+                            View public handle
+                        </a>
+                    </li>
+                <% } %>
+            </ul>
+        </div>
+    </td>
+</tr>

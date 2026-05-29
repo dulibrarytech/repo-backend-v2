@@ -1,0 +1,73 @@
+<nav class="small text-muted mb-2" aria-label="Breadcrumb">
+    <a href="<%= dashboard_base %>/collections" style="color: inherit;">← Collection Management</a>
+</nav>
+
+<h1 class="page-title">Digital Preservation Jobs — Job History</h1>
+<p class="page-subtitle">
+    Completed Make Digital Objects, ArchivesSpace Description QA, and
+    Packaging and Ingesting runs. Newest first.
+</p>
+
+<div class="content-card">
+    <div class="content-card-header">
+        <div class="control-group">
+            <label for="history-type" class="form-label mb-0">Job type:</label>
+            <select id="history-type" name="job_type"
+                    class="form-select form-select-sm"
+                    style="width: auto;"
+                    hx-get="<%= dashboard_base %>/ingest/history/list"
+                    hx-target="#history-content"
+                    hx-trigger="change"
+                    hx-include="[name=q], [name=status]">
+                <option value="" <%= !filters.job_type ? 'selected' : '' %>>(all)</option>
+                <% Object.keys(job_type_labels).forEach(function (k) { %>
+                    <option value="<%= k %>" <%= filters.job_type === k ? 'selected' : '' %>>
+                        <%= job_type_labels[k] %>
+                    </option>
+                <% }); %>
+            </select>
+        </div>
+        <div class="control-group">
+            <label for="history-status" class="form-label mb-0">Status:</label>
+            <select id="history-status" name="status"
+                    class="form-select form-select-sm"
+                    style="width: auto;"
+                    hx-get="<%= dashboard_base %>/ingest/history/list"
+                    hx-target="#history-content"
+                    hx-trigger="change"
+                    hx-include="[name=q], [name=job_type]">
+                <option value="" <%= !filters.status ? 'selected' : '' %>>(all)</option>
+                <option value="SUCCESSFUL" <%= filters.status === 'SUCCESSFUL' ? 'selected' : '' %>>SUCCESSFUL</option>
+                <option value="FAILED" <%= filters.status === 'FAILED' ? 'selected' : '' %>>FAILED</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <label for="history-q" class="form-label mb-0">Search:</label>
+            <input type="text"
+                   id="history-q"
+                   name="q"
+                   class="form-control form-control-sm"
+                   placeholder="folder name or job id"
+                   value="<%= filters.q || '' %>"
+                   hx-get="<%= dashboard_base %>/ingest/history/list"
+                   hx-target="#history-content"
+                   hx-trigger="keyup changed delay:300ms"
+                   hx-include="[name=job_type], [name=status]"
+                   hx-swap="innerHTML">
+        </div>
+    </div>
+
+    <%/* aria-live="polite" so SR users hear when filter changes
+         reload the history list. */%>
+    <div id="history-content"
+         hx-get="<%= dashboard_base %>/ingest/history/list"
+         hx-trigger="load"
+         hx-swap="innerHTML"
+         aria-live="polite"
+         aria-atomic="false">
+        <div class="empty-state">
+            <span class="spinner-border spinner-border-sm text-muted me-2"></span>
+            Loading job history…
+        </div>
+    </div>
+</div>

@@ -1,0 +1,99 @@
+<%/* Wasabi reachability card.
+
+     Reads three signals from the controller:
+       reachable        — did the curation-API respond at all (transport ok)?
+       body             — JSON returned by /health/wasabi (or null on transport fail).
+                          Shape: { ok, bucket, error, elapsed_ms }
+       transport_error  — populated only when reachable=false
+
+     Three terminal states surfaced to staff:
+       1. Curation unreachable     → red, "curation-api not responding"
+       2. Curation up, Wasabi fail → red, surface the body.error string verbatim
+       3. Curation up, Wasabi OK   → green, show bucket + elapsed_ms
+
+     Re-rendered every 30s by HTMX so transient outages auto-recover
+     without staff intervention. */%>
+<div class="row g-3 p-3">
+    <div class="col-md-4">
+        <div class="text-muted small mb-1">Status</div>
+        <div style="font-size: 24px; font-weight: 600;">
+            <% if (!reachable) { %>
+                <span class="sev-badge sev-fatal">curation unreachable</span>
+            <% } else if (body && body.ok) { %>
+                <span class="sev-badge sev-success">OK</span>
+            <% } else { %>
+                <span class="sev-badge sev-fatal">FAILED</span>
+            <% } %>
+        </div>
+        <div class="text-muted small" style="margin-top: 4px;">
+            <% if (!reachable) { %>
+                Curation-API isn't responding. Check
+                <code>systemctl status curation-api</code> on the curation host.
+            <% } else if (body && body.ok) { %>
+                boto3 <code>head_bucket</code> succeeded.
+            <% } else { %>
+                boto3 <code>head_bucket</code> failed. Details below.
+            <% } %>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="text-muted small mb-1">Bucket</div>
+        <div style="font-size: 18px; font-weight: 600;">
+            <% if (body && body.bucket) { %>
+                <code><%= body.bucket %></code>
+            <% } else { %>
+                <span class="text-muted">—</span>
+            <% } %>
+        </div>
+        <div class="text-muted small" style="margin-top: 4px;">
+            From <code>WASABI_BUCKET</code> on the curation host.
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="text-muted small mb-1">Probe latency</div>
+        <div style="font-size: 24px; font-weight: 600;">
+            <% if (body && Number.isFinite(body.elapsed_ms)) { %>
+                <%= body.elapsed_ms.toLocaleString() %> ms
+            <% } else { %>
+                <span class="text-muted">—</span>
+            <% } %>
+        </div>
+        <div class="text-muted small" style="margin-top: 4px;">
+            Single <code>head_bucket</code> round-trip. Spikes here
+            often precede upload failures.
+        </div>
+    </div>
+
+    <% if (!reachable) { %>
+        <div class="col-12">
+            <div class="alert alert-danger small mb-0" role="alert">
+                <strong>Curation-API transport error.</strong>
+                <code><%= transport_error || 'unknown' %></code>
+            </div>
+        </div>
+    <% } else if (body && !body.ok && body.error) { %>
+        <div class="col-12">
+            <div class="alert alert-danger small mb-0" role="alert">
+                <strong>Wasabi probe failed.</strong>
+                <code><%= body.error %></code>
+                <div class="mt-2 text-muted">
+                    Common fixes:
+                    <code>ProfileNotFound</code> → check the
+                    <code>WASABI_PROFILE</code> name against
+                    <code>~curation/.aws/config</code>;
+                    <code>403</code> → re-issue Wasabi keys;
+                    <code>EndpointConnectionError</code> → check network /
+                    DNS to <code>WASABI_ENDPOINT</code>.
+                </div>
+            </div>
+        </div>
+    <% } %>
+
+    <div class="col-12">
+        <div class="text-muted small" style="margin-top: 4px;">
+            Last checked: <%= checked_at %>
+        </div>
+    </div>
+</div>

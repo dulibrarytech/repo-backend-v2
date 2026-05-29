@@ -1,0 +1,116 @@
+<%/*
+   Inline, shape-aware renderer for the ASpace top-level fields surfaced
+   in display_record. Each `key` we recognize gets a flat, scannable
+   layout (one item per line, with a small badge for the categorical
+   tag — type, label, authority, relator, etc.). Anything else falls
+   through to metadata_value, which still handles arbitrary nested
+   JSON via the generic recursive path.
+
+   This file is the dashboard's single source of truth for what a
+   "human-readable identifier / date / subject" looks like — adjust
+   here, not in metadata_value.
+
+   Inputs:
+     key   — the parent dl's <dt> key, used to dispatch
+     value — the raw value from display_record[key]
+*/%>
+<%
+function _human(s) {
+    return typeof s === 'string' && s.length > 0 ? s.replace(/_/g, ' ') : '';
+}
+function _array_of_objects(v) {
+    return Array.isArray(v) && v.length > 0 && v.every(function (it) {
+        return it && typeof it === 'object' && !Array.isArray(it);
+    });
+}
+function _strip(s) {
+    return typeof s === 'string' ? s.replace(/<[^>]+>/g, '') : '';
+}
+%>
+
+<% if (key === 'identifiers' && _array_of_objects(value)) { %>
+    <ul class="metadata-list">
+        <% value.forEach(function (it) { %>
+            <li class="metadata-item">
+                <% if (it.type) { %>
+                    <span class="metadata-tag"><%= _human(it.type) %></span>
+                <% } %>
+                <span class="font-monospace"><%= it.identifier || '—' %></span>
+            </li>
+        <% }); %>
+    </ul>
+
+<% } else if (key === 'dates' && _array_of_objects(value)) { %>
+    <ul class="metadata-list">
+        <% value.forEach(function (d) { %>
+            <li class="metadata-item">
+                <% var label = d.label || d.type; %>
+                <% if (label) { %>
+                    <span class="metadata-tag"><%= _human(label) %></span>
+                <% } %>
+                <span><%= d.expression || '—' %></span>
+                <% if (d.qualifier) { %>
+                    <span class="text-muted small">(<%= d.qualifier %>)</span>
+                <% } %>
+            </li>
+        <% }); %>
+    </ul>
+
+<% } else if (key === 'subjects' && _array_of_objects(value)) { %>
+    <ul class="metadata-list">
+        <% value.forEach(function (s) { %>
+            <li class="metadata-item">
+                <% if (s.authority) { %>
+                    <span class="metadata-tag"><%= s.authority %></span>
+                <% } %>
+                <span><%= s.title || '—' %></span>
+            </li>
+        <% }); %>
+    </ul>
+
+<% } else if (key === 'notes' && _array_of_objects(value)) { %>
+    <ul class="metadata-list">
+        <% value.forEach(function (n) { %>
+            <li class="metadata-item metadata-item-stacked">
+                <% if (n.type) { %>
+                    <span class="metadata-tag"><%= _human(n.type) %></span>
+                <% } %>
+                <div class="metadata-note-content"><%= _strip(n.content) %></div>
+            </li>
+        <% }); %>
+    </ul>
+
+<% } else if (key === 'names' && _array_of_objects(value)) { %>
+    <ul class="metadata-list">
+        <% value.forEach(function (n) { %>
+            <li class="metadata-item">
+                <% var tag = n.relator || n.role; %>
+                <% if (tag) { %>
+                    <span class="metadata-tag"><%= _human(tag) %></span>
+                <% } %>
+                <span><%= n.title || '—' %></span>
+                <% if (n.source) { %>
+                    <span class="text-muted small">(<%= n.source %>)</span>
+                <% } %>
+            </li>
+        <% }); %>
+    </ul>
+
+<% } else if (key === 'parts' && _array_of_objects(value)) { %>
+    <ul class="metadata-list">
+        <% value.forEach(function (p) { %>
+            <li class="metadata-item">
+                <% if (p.order) { %>
+                    <span class="font-monospace text-muted metadata-part-order"><%= p.order %>.</span>
+                <% } %>
+                <span><%= p.title || '—' %></span>
+                <% if (p.type) { %>
+                    <span class="text-muted small">(<%= p.type %>)</span>
+                <% } %>
+            </li>
+        <% }); %>
+    </ul>
+
+<% } else { %>
+    <%- include('metadata_value', { value: value }) %>
+<% } %>

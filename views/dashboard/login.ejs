@@ -1,0 +1,9 @@
+<%/* Standalone login shell — bypasses the app layout since it has no
+     sidebar/header. Posts to /repo/dashboard/login. */%>
+<div class="login-shell">
+    <div class="login-card">
+        <h1>DU Digital Repository</h1>
+        <div class="sub">Sign in to continue.</div>
+        <%- include('partials/login_form', { next: typeof next !== 'undefined' ? next : '', error: typeof error !== 'undefined' ? error : null }) %>
+    </div>
+</div>

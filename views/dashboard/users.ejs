@@ -1,0 +1,70 @@
+<h1 class="page-title">Users</h1>
+<p class="page-subtitle">Manage who can access the repository back-end.</p>
+
+<div class="content-card">
+    <div class="content-card-header">
+        <%/* Primary action — "Add user" — anchored on the left
+             because creation is the page's headline action. The
+             button fetches an empty form modal via hx-get; the
+             response targets #modal-content and dashboard.js
+             section 4 auto-opens the modal mount. */%>
+        <div class="control-group">
+            <button type="button"
+                    class="btn btn-sm btn-primary"
+                    hx-get="<%= dashboard_base %>/users/new"
+                    hx-target="#modal-content"
+                    hx-swap="innerHTML">
+                <%/* plus-circle icon */%>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                     style="width: 14px; height: 14px; vertical-align: -2px;">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="16"/>
+                    <line x1="8" y1="12" x2="16" y2="12"/>
+                </svg>
+                Add user
+            </button>
+        </div>
+        <div class="control-group">
+            <%/* CSP-safe toggle. We can't use the htmx
+                 `hx-vals='js:{ ... }'` shorthand here — htmx
+                 evaluates that string via `new Function(...)`, which
+                 our CSP (script-src without 'unsafe-eval')
+                 correctly forbids. So we use plain form-style
+                 serialization: name + static value="1", and standard
+                 browser semantics (a checked checkbox submits its
+                 name=value pair; an unchecked one is omitted
+                 entirely). The controller treats absent as falsy,
+                 which is exactly what we want when the toggle is off.
+
+                 The polled `#users-table` div hx-includes the toggle
+                 so background refreshes triggered by `users:created`
+                 respect the current toggle state instead of snapping
+                 back to default. */%>
+            <div class="form-check form-switch m-0">
+                <input class="form-check-input"
+                       type="checkbox"
+                       id="toggle-inactive"
+                       name="include_inactive"
+                       value="1"
+                       hx-get="<%= dashboard_base %>/users/list"
+                       hx-target="#users-table"
+                       hx-swap="innerHTML"
+                       hx-trigger="change">
+                <label class="form-check-label" for="toggle-inactive">
+                    Include deactivated
+                </label>
+            </div>
+        </div>
+    </div>
+    <div id="users-table"
+         hx-get="<%= dashboard_base %>/users/list"
+         hx-include="#toggle-inactive"
+         hx-trigger="load, users:created from:body"
+         hx-swap="innerHTML">
+        <div class="empty-state">
+            <span class="spinner-border spinner-border-sm text-muted me-2"></span>
+            Loading…
+        </div>
+    </div>
+</div>

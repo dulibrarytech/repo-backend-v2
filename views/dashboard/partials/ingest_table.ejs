@@ -1,0 +1,88 @@
+<%
+    // v2 ingest queue table. Columns:
+    //   Package | Status | Suggested action | Created | Actions
+    //
+    // The row partial owns each row's markup; this partial owns the
+    // table chrome + pagination.
+%>
+<% if (!rows || rows.length === 0) { %>
+    <table class="queue-table">
+        <thead>
+            <tr>
+                <th>Package</th>
+                <th>Status</th>
+                <th>Suggested action</th>
+                <th>Created</th>
+                <th class="actions-cell">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td colspan="5">
+                    <div class="empty-state">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                            <line x1="8" y1="9" x2="16" y2="9"/>
+                            <line x1="8" y1="13" x2="14" y2="13"/>
+                            <line x1="8" y1="17" x2="11" y2="17"/>
+                        </svg>
+                        <div>No queue rows match your filters.</div>
+                    </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+<% } else { %>
+    <table class="queue-table">
+        <thead>
+            <tr>
+                <th>Package</th>
+                <th>Status</th>
+                <th>Suggested action</th>
+                <th>Created</th>
+                <th class="actions-cell">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% rows.forEach(function (row) { %>
+                <%- include('ingest_row', { row: row, dashboard_base: dashboard_base, app_path: app_path }) %>
+            <% }); %>
+        </tbody>
+    </table>
+    <div class="app-pagination">
+        <div class="results-count">
+            Showing <%= offset + 1 %>–<%= offset + rows.length %>
+            <% if (has_more) { %>(more available)<% } %>
+        </div>
+        <%
+            var prev_offset = Math.max(0, offset - limit);
+            var next_offset = offset + limit;
+            var qs = function (off) {
+                var u = new URLSearchParams();
+                u.set('limit', String(limit));
+                u.set('offset', String(off));
+                if (filters.status) u.set('status', filters.status);
+                if (filters.batch) u.set('batch', filters.batch);
+                if (filters.is_complete) u.set('is_complete', filters.is_complete);
+                return u.toString();
+            };
+        %>
+        <nav class="page-controls" aria-label="Pagination">
+            <button type="button"
+                    <%= offset === 0 ? 'disabled' : '' %>
+                    hx-get="<%= dashboard_base %>/ingest/list?<%= qs(prev_offset) %>"
+                    hx-target="#ingest-table"
+                    hx-swap="innerHTML">
+                ← Previous
+            </button>
+            <button type="button"
+                    <%= !has_more ? 'disabled' : '' %>
+                    hx-get="<%= dashboard_base %>/ingest/list?<%= qs(next_offset) %>"
+                    hx-target="#ingest-table"
+                    hx-swap="innerHTML">
+                Next →
+            </button>
+        </nav>
+    </div>
+<% } %>

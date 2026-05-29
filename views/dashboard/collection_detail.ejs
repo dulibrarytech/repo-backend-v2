@@ -1,0 +1,197 @@
+<%/* Collection detail page. Renders the collection's metadata header
+     then embeds the existing objects list partial pre-filtered to this
+     collection — every action (publish/suppress/delete) reuses the
+     existing wiring so we don't duplicate behavior. */%>
+
+<nav class="small text-muted mb-2" aria-label="Breadcrumb">
+    <a href="<%= dashboard_base %>/collections" style="color: inherit;">← All collections</a>
+</nav>
+
+<h1 class="page-title"><%= collection.title || '(untitled collection)' %></h1>
+<p class="page-subtitle">
+    <%= collection.member_count.toLocaleString() %> objects
+    · <%= collection.published_count.toLocaleString() %> published
+    <%/* Handle — the public persistent identifier. Replaces the
+         old "PID <uuid>" segment because the handle is what staff
+         and patrons actually share. If a collection has no handle
+         yet (rare; pre-ingest only), fall back to the PID so the
+         column is never just blank. */%>
+    <% if (collection.handle) { %>
+        · <a href="<%= collection.handle %>" target="_blank" rel="noopener"
+             class="font-monospace small"
+             title="<%= collection.handle %>">
+                <%= collection.handle.replace(/^https?:\/\//, '') %>
+          </a>
+    <% } else { %>
+        · PID
+        <code class="font-monospace small" title="No handle minted yet">
+            <%= collection.pid %>
+        </code>
+    <% } %>
+</p>
+
+<div class="content-card mb-3">
+    <div class="row g-3">
+        <div class="col-lg-8">
+            <% if (collection.abstract) {
+                // Strip HTML tags up front — the abstract may carry
+                // <p>/<em>/etc. from ArchivesSpace, which we don't
+                // render inline. Heuristic: anything > ~600 chars
+                // is too long to show un-clamped in this side
+                // panel; show the toggle so staff can expand.
+                var clean_abstract = collection.abstract.replace(/<[^>]+>/g, '');
+                var needs_truncation = clean_abstract.length > 600;
+            %>
+                <h2 style="font-size: 16px; margin: 0 0 8px;">Abstract</h2>
+                <%/* The full abstract is ALWAYS rendered so screen
+                     readers + Ctrl-F see it. CSS .abstract-collapsed
+                     clamps the visible portion to 6 lines (line-clamp,
+                     so we never cut mid-word like the old 600-char
+                     slice did). dashboard.js section 9 toggles the
+                     class on click — no inline JS, CSP-safe. */%>
+                <div class="abstract-block">
+                    <div class="abstract-body text-muted<%=
+                        needs_truncation ? ' abstract-collapsed' : '' %>"
+                         style="font-size: 14px;">
+                        <%= clean_abstract %>
+                    </div>
+                    <% if (needs_truncation) { %>
+                        <button type="button"
+                                class="abstract-toggle"
+                                aria-expanded="false">
+                            … more
+                        </button>
+                    <% } %>
+                </div>
+            <% } else { %>
+                <div class="text-muted small">No abstract recorded.</div>
+            <% } %>
+
+            <% if (collection.subjects && collection.subjects.length) { %>
+                <h2 style="font-size: 16px; margin: 16px 0 8px;">Subjects</h2>
+                <div>
+                    <% collection.subjects.slice(0, 10).forEach(function(s) { %>
+                        <span class="sev-badge sev-info" style="margin-right: 4px;"><%= s %></span>
+                    <% }); %>
+                </div>
+            <% } %>
+        </div>
+        <div class="col-lg-4">
+            <h2 style="font-size: 16px; margin: 0 0 8px;">Details</h2>
+            <dl class="row mb-0 small">
+                <dt class="col-5 text-muted">Object type</dt>
+                <dd class="col-7"><%= collection.object_type %></dd>
+
+                <dt class="col-5 text-muted">Status</dt>
+                <dd class="col-7">
+                    <% if (collection.is_published === 1) { %>
+                        <span class="sev-badge sev-success">Published</span>
+                    <% } else { %>
+                        <span class="sev-badge sev-warn">Unpublished</span>
+                    <% } %>
+                </dd>
+
+                <%/* Handle moved up to the subtitle next to the title
+                     — see the page header above. Keeping it here too
+                     would be duplicate-info noise. */%>
+
+                <dt class="col-5 text-muted">Created</dt>
+                <dd class="col-7 font-monospace small">
+                    <%= collection.created ? new Date(collection.created).toISOString().slice(0, 10) : '—' %>
+                </dd>
+            </dl>
+        </div>
+    </div>
+</div>
+
+<div class="content-card">
+    <div class="content-card-header">
+        <h2 style="font-size: 18px; margin: 0;">Member objects</h2>
+        <div class="control-group">
+            <%/* Scope-based bulk: one UPDATE that flips every active
+                 non-collection member of this collection. Fires on the
+                 #objects-table region via HX-Trigger objects:refresh. */%>
+            <button type="button"
+                    class="btn btn-sm btn-outline-primary"
+                    hx-post="<%= dashboard_base %>/collections/<%= collection.pid %>/bulk/publish"
+                    hx-swap="none"
+                    data-confirm="Publish ALL active member objects of <%= collection.title || collection.pid %>?"
+                    data-confirm-title="Publish all members?"
+                    data-confirm-label="Publish all">
+                Publish all members
+            </button>
+            <button type="button"
+                    class="btn btn-sm btn-outline-secondary"
+                    hx-post="<%= dashboard_base %>/collections/<%= collection.pid %>/bulk/suppress"
+                    hx-swap="none"
+                    data-confirm="Suppress ALL active member objects of <%= collection.title || collection.pid %>?"
+                    data-confirm-title="Suppress all members?"
+                    data-confirm-label="Suppress all">
+                Suppress all members
+            </button>
+            <%/* Queue a metadata refresh for every active member of
+                 this collection. The response opens the progress
+                 modal which polls every 1s. */%>
+            <button type="button"
+                    class="btn btn-sm btn-outline-primary"
+                    hx-post="<%= dashboard_base %>/collections/<%= collection.pid %>/metadata/refresh-members"
+                    hx-target="#modal-content"
+                    hx-swap="innerHTML"
+                    data-confirm="Re-fetch ArchivesSpace metadata for every member of <%= collection.title || collection.pid %>?"
+                    data-confirm-title="Refresh members' metadata?"
+                    data-confirm-label="Refresh metadata">
+                Refresh members' metadata
+            </button>
+            <%/* Per-collection reindex is still available at the
+                 REST surface (POST /admin/indexer/reindex-collection/:pid)
+                 and the admin/indexer page's "Reindex all" covers
+                 the bulk path — staff don't need a per-collection
+                 button alongside the metadata refresh, since dirty
+                 flags from publish/suppress already trigger reindex
+                 on the next worker tick. */%>
+            <input type="search" name="q" class="form-control"
+                   placeholder="Search within this collection…"
+                   value="<%= filters.q || '' %>"
+                   autocomplete="off"
+                   style="max-width: 280px;"
+                   hx-get="<%= dashboard_base %>/objects/list"
+                   hx-target="#objects-table"
+                   hx-trigger="keyup changed delay:300ms, search"
+                   hx-include="[name=is_published], [name=collection], [name=is_active]">
+
+            <select name="is_published" class="form-select"
+                    hx-get="<%= dashboard_base %>/objects/list"
+                    hx-target="#objects-table"
+                    hx-trigger="change"
+                    hx-include="[name=q], [name=collection], [name=is_active]">
+                <option value="" <%= filters.is_published === '' ? 'selected' : '' %>>All states</option>
+                <option value="1" <%= filters.is_published === '1' ? 'selected' : '' %>>Published</option>
+                <option value="0" <%= filters.is_published === '0' ? 'selected' : '' %>>Unpublished</option>
+            </select>
+
+            <%/* Hidden — pin the collection filter so search/filter
+                 always scopes to this collection, and pin is_active=1
+                 so soft-deleted members never appear in the table. */%>
+            <input type="hidden" name="collection" value="<%= collection.pid %>">
+            <input type="hidden" name="is_active" value="1">
+
+            <span class="htmx-indicator">
+                <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+            </span>
+        </div>
+    </div>
+
+    <%/* aria-live="polite" announces filter/search updates to SR
+         users without interrupting whatever they're doing. */%>
+    <div id="objects-table"
+         hx-get="<%= dashboard_base %>/objects/list?collection=<%= collection.pid %>&is_active=1"
+         hx-trigger="load, objects:refresh from:body"
+         hx-swap="innerHTML"
+         aria-live="polite"
+         aria-atomic="false">
+        <div class="empty-state">
+            <span class="spinner-border spinner-border-sm text-muted me-2"></span>
+            Loading objects…
+        </div>
+    </div>
+</div>

@@ -1,0 +1,39 @@
+<%/* Admin: external-service health.
+
+     Today the page hosts a single Wasabi card. Future health cards
+     (Archivematica, ArchivesSpace, curation-API filesystem) drop in
+     as sibling content-card divs — each polled by its own HTMX
+     trigger, each independent of the others so a slow probe can't
+     starve the page.
+
+     30s poll cadence: Wasabi config changes on the order of
+     "someone edited .env and restarted curation-api" — much slower
+     than the indexer's 5s. Keep it gentle. */%>
+<h1 class="page-title">Services Health</h1>
+<p class="page-subtitle">
+    Reachability + auth probes for the external services the ingest
+    pipeline depends on. Each card runs a single lightweight
+    upstream check and refreshes on its own cadence.
+</p>
+
+<div class="content-card mb-3">
+    <div class="content-card-header">
+        <h2 style="font-size: 18px; margin: 0;">Wasabi S3</h2>
+        <div class="control-group">
+            <span class="htmx-indicator">
+                <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+            </span>
+        </div>
+    </div>
+
+    <div id="wasabi-status"
+         hx-get="<%= dashboard_base %>/admin/services/wasabi"
+         hx-trigger="load, every 30s"
+         hx-swap="innerHTML">
+        <div class="text-muted small p-3">Probing Wasabi…</div>
+    </div>
+</div>
+
+<%/* Slot for future cards (Archivematica, ASpace, etc).
+     Each new card is a fresh content-card div + its own HTMX
+     poll. No JS changes needed. */%>

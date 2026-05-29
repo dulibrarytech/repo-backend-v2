@@ -1,0 +1,277 @@
+<%/* Repository stats — v1 dashboard parity.
+
+     Three rows of 4 cards each, then an inline-SVG bar chart of
+     ingests per calendar year. The DB-derived 9 cards + chart paint
+     immediately from server-side data. The 3 DuraCloud-usage cards
+     lazy-load via HTMX after the page paints because each one is a
+     slow round-trip to Archivematica's storage API; we don't want
+     to gate the whole page on those calls.
+
+     Card layout: 4 columns on desktop (col-lg-3), 2 on tablet
+     (col-sm-6), 1 on phone (default). Bootstrap's grid handles all
+     the breakpoints. */%>
+
+<h1 class="page-title">Stats</h1>
+<p class="page-subtitle">
+    Collection and object counts, storage usage, and ingest history
+    over time. Numbers refresh on each page load.
+</p>
+
+<%/* Row 1 — Collections + Objects (published vs total). */%>
+<div class="row g-3 mb-3">
+    <div class="col-lg-3 col-sm-6">
+        <div class="card-stat">
+            <div class="card-stat__value"><%= fmt_count(summary.published_collections) %></div>
+            <div class="card-stat__label">Published Collections</div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-sm-6">
+        <div class="card-stat">
+            <div class="card-stat__value"><%= fmt_count(summary.total_collections) %></div>
+            <div class="card-stat__label">Total Collections</div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-sm-6">
+        <div class="card-stat">
+            <div class="card-stat__value"><%= fmt_count(summary.published_objects) %></div>
+            <div class="card-stat__label">Published Objects</div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-sm-6">
+        <div class="card-stat">
+            <div class="card-stat__value"><%= fmt_count(summary.total_objects) %></div>
+            <div class="card-stat__label">Total Objects</div>
+        </div>
+    </div>
+</div>
+
+<%/* Row 2 — Media-type buckets. Mime-type lists match v1 exactly so
+     the v2 numbers compare directly to the screenshot. */%>
+<div class="row g-3 mb-3">
+    <div class="col-lg-3 col-sm-6">
+        <div class="card-stat">
+            <div class="card-stat__value"><%= fmt_count(summary.images) %></div>
+            <div class="card-stat__label">Total Images</div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-sm-6">
+        <div class="card-stat">
+            <div class="card-stat__value"><%= fmt_count(summary.pdfs) %></div>
+            <div class="card-stat__label">Total PDFs</div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-sm-6">
+        <div class="card-stat">
+            <div class="card-stat__value"><%= fmt_count(summary.audio) %></div>
+            <div class="card-stat__label">Total Audio</div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-sm-6">
+        <div class="card-stat">
+            <div class="card-stat__value"><%= fmt_count(summary.videos) %></div>
+            <div class="card-stat__label">Total Videos</div>
+        </div>
+    </div>
+</div>
+
+<%/* Row 3 — DuraCloud + fiscal-year ingests. The 3 DuraCloud cards
+     are HTMX-loaded as a single partial (one request fetches all
+     three values; the partial renders the three card wrappers
+     itself). The 4th card (FY ingests) comes from the DB-derived
+     summary and renders immediately. */%>
+<div class="row g-3 mb-4">
+    <div id="stats-duracloud"
+         class="col-lg-9 row g-3 m-0 p-0"
+         hx-get="<%= dashboard_base %>/_stats/duracloud"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+        <%/* Placeholder while the DuraCloud probe is in flight.
+             Three skeleton cards keep the row's height stable so the
+             chart below doesn't jump when the real values arrive. */%>
+        <div class="col-md-4">
+            <div class="card-stat">
+                <div class="card-stat__value text-muted">…</div>
+                <div class="card-stat__label">Total DuraCloud DIP Store Usage</div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card-stat">
+                <div class="card-stat__value text-muted">…</div>
+                <div class="card-stat__label">Total DuraCloud AIP Store Usage</div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card-stat">
+                <div class="card-stat__value text-muted">…</div>
+                <div class="card-stat__label">Total DuraCloud Storage Usage</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-sm-12">
+        <div class="card-stat">
+            <div class="card-stat__value"><%= fmt_count(summary.current_fy_ingests) %></div>
+            <div class="card-stat__label">Current Fiscal Year Ingests</div>
+            <div class="text-muted small mt-1" style="font-size: 11px;">
+                <%= summary.current_fy_label %>
+            </div>
+        </div>
+    </div>
+</div>
+
+<%/* Row 4 — Ingests Per Year bar chart. Inline SVG, server-side
+     scale computation. No client-side JS or charting library.
+
+     Scale math:
+       max_value     — actual peak count
+       nice_max      — rounded UP to the next 100/500/1000 step so the
+                       y-axis is readable
+       gridlines     — 4 evenly-spaced horizontal lines at 0/25/50/75/100%
+                       of nice_max
+       bar geometry  — each bar is `bar_width` wide, centered in its
+                       column, height proportional to count/nice_max
+       value label   — drawn ABOVE each bar (skipped if count=0, to
+                       reduce visual noise on the dead years) */%>
+<div class="content-card">
+    <h2 class="h6 mb-3">Ingests Per Year</h2>
+
+    <%
+        // Layout constants. viewBox is logical units; the SVG scales
+        // to fit its container via CSS. Picked to give comfortable
+        // spacing at common card widths (~800-1200px).
+        var W = 720;
+        var H = 280;
+        var PADDING_TOP = 30;       // room for value labels above bars
+        var PADDING_BOTTOM = 30;    // room for year labels below bars
+        var PADDING_LEFT = 48;      // room for y-axis labels
+        var PADDING_RIGHT = 16;
+        var plot_w = W - PADDING_LEFT - PADDING_RIGHT;
+        var plot_h = H - PADDING_TOP - PADDING_BOTTOM;
+
+        // Year buckets — already padded to a contiguous range by the
+        // model. If everything's zero, still render the empty chart
+        // so the layout doesn't collapse.
+        var years = per_year.length > 0 ? per_year : [{year: new Date().getFullYear(), count: 0}];
+        var max_value = years.reduce(function(m, y) { return Math.max(m, y.count); }, 0);
+
+        // Round up to a nice number for the y-axis ceiling.
+        // 0       → ceiling 10 (avoid div-by-zero downstream)
+        // 1-100   → ceiling next 25
+        // 101-1k  → ceiling next 100
+        // 1k-10k  → ceiling next 500
+        // 10k+    → ceiling next 1000
+        function nice(n) {
+            if (n <= 0) return 10;
+            if (n <= 100) return Math.ceil(n / 25) * 25;
+            if (n <= 1000) return Math.ceil(n / 100) * 100;
+            if (n <= 10000) return Math.ceil(n / 500) * 500;
+            return Math.ceil(n / 1000) * 1000;
+        }
+        var nice_max = nice(max_value);
+
+        var bar_slot = plot_w / years.length;       // width per year column
+        var bar_width = Math.min(48, bar_slot * 0.6); // bar is centered in its slot
+
+        var gridline_count = 4;
+    %>
+
+    <%
+        // SR description summarizing the chart's data — combined with
+        // aria-label this gives both a short name AND a longer
+        // narrative summary that some screen readers prefer to read.
+        var _chart_total = 0;
+        var _chart_max = { year: null, count: 0 };
+        for (var _i = 0; _i < years.length; _i++) {
+            _chart_total += years[_i].count;
+            if (years[_i].count > _chart_max.count) {
+                _chart_max = years[_i];
+            }
+        }
+        var _chart_desc = 'Ingests per year, ' + years[0].year + ' to ' +
+            years[years.length - 1].year + '. ' +
+            _chart_total.toLocaleString() + ' total ingests' +
+            (_chart_max.year !== null
+                ? ', peak ' + _chart_max.count.toLocaleString() +
+                  ' in ' + _chart_max.year + '.'
+                : '.');
+    %>
+    <svg viewBox="0 0 <%= W %> <%= H %>"
+         preserveAspectRatio="xMidYMid meet"
+         role="img"
+         aria-label="Ingests per year bar chart"
+         aria-describedby="ingests-chart-desc"
+         style="width: 100%; height: auto; max-height: 320px;">
+
+        <%/* In-SVG <title> + <desc> are the canonical accessibility
+             escape hatch for chart graphics — some SRs read these
+             instead of aria-* attributes. Belt-and-braces. */%>
+        <title>Ingests per year bar chart</title>
+        <desc id="ingests-chart-desc"><%= _chart_desc %></desc>
+
+        <%/* Y-axis gridlines + labels */%>
+        <% for (var g = 0; g <= gridline_count; g++) {
+               var grid_value = Math.round(nice_max * (1 - g / gridline_count));
+               var grid_y = PADDING_TOP + (plot_h * g / gridline_count); %>
+            <line x1="<%= PADDING_LEFT %>"
+                  x2="<%= W - PADDING_RIGHT %>"
+                  y1="<%= grid_y %>"
+                  y2="<%= grid_y %>"
+                  stroke="#e5e5e5"
+                  stroke-width="1"/>
+            <text x="<%= PADDING_LEFT - 8 %>"
+                  y="<%= grid_y + 4 %>"
+                  text-anchor="end"
+                  fill="#6b7280"
+                  style="font-size: 11px; font-family: var(--font-sans, sans-serif);">
+                <%= grid_value.toLocaleString() %>
+            </text>
+        <% } %>
+
+        <%/* Bars + per-bar value labels + year labels */%>
+        <% years.forEach(function(y, idx) {
+               var slot_x = PADDING_LEFT + bar_slot * idx;
+               var bar_x = slot_x + (bar_slot - bar_width) / 2;
+               var bar_h = nice_max === 0 ? 0 : (plot_h * y.count) / nice_max;
+               var bar_y = PADDING_TOP + plot_h - bar_h; %>
+            <%/* Bar — v1's brick-red for brand continuity. */%>
+            <rect x="<%= bar_x %>"
+                  y="<%= bar_y %>"
+                  width="<%= bar_width %>"
+                  height="<%= bar_h %>"
+                  fill="#7a1f1f"
+                  rx="2">
+                <title>FY <%= y.year %>: <%= y.count.toLocaleString() %> ingest<%= y.count === 1 ? '' : 's' %></title>
+            </rect>
+            <%/* Value label above bar — skip zeros to reduce noise. */%>
+            <% if (y.count > 0) { %>
+                <text x="<%= bar_x + bar_width / 2 %>"
+                      y="<%= bar_y - 6 %>"
+                      text-anchor="middle"
+                      fill="#1f2937"
+                      style="font-size: 11px; font-weight: 600; font-family: var(--font-sans, sans-serif);">
+                    <%= y.count.toLocaleString() %>
+                </text>
+            <% } %>
+            <%/* Year label below bar. */%>
+            <text x="<%= bar_x + bar_width / 2 %>"
+                  y="<%= H - PADDING_BOTTOM + 18 %>"
+                  text-anchor="middle"
+                  fill="#6b7280"
+                  style="font-size: 11px; font-family: var(--font-sans, sans-serif);">
+                <%= y.year %>
+            </text>
+        <% }); %>
+
+        <%/* X-axis baseline */%>
+        <line x1="<%= PADDING_LEFT %>"
+              x2="<%= W - PADDING_RIGHT %>"
+              y1="<%= PADDING_TOP + plot_h %>"
+              y2="<%= PADDING_TOP + plot_h %>"
+              stroke="#9ca3af"
+              stroke-width="1"/>
+    </svg>
+
+    <p class="text-muted small mb-0 mt-2" style="font-size: 11px;">
+        Counts include collections, compounds, and objects.
+        Bucketed by calendar year (created_at).
+    </p>
+</div>

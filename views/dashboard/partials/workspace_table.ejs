@@ -1,0 +1,215 @@
+<%
+    // Shared workspace table, used by three pages:
+    //   view='make-digital-objects' — action: Make Digital Objects
+    //   view='aspace-qa'            — actions: Check Metadata, Revert to MDO
+    //   view='packaging-and-ingesting' — actions: Submit to Ingest, Revert to MDO
+    //
+    // Column count varies by whether the view has actions (some scopes
+    // are read-only). Sentinel values:
+    //
+    //   folders[]:
+    //     { name, packages: [name, ...], packages_error?: string }
+    //
+    //   actions[]: subset of
+    //     ['make_digital_objects', 'check_metadata', 'submit_ingest', 'revert_to_mdo']
+    var actions = locals.actions || [];
+    var view = locals.view || 'make-digital-objects';
+    var has_actions = actions.length > 0;
+    var col_count = has_actions ? 4 : 3;
+    var empty_message = {
+        'make-digital-objects': 'No folders are awaiting Make Digital Objects.',
+        'aspace-qa': 'No folders have completed Make Digital Objects yet.',
+        'packaging-and-ingesting': 'No folders are ready to submit to the ingest pipeline.'
+    }[view] || 'No folders.';
+    var revert_target = (view === 'aspace-qa') ? '#qa-action-result' : '#workspace-action-result';
+%>
+<% if (locals.error) { %>
+    <div class="content-card sev-error" style="padding: 12px 16px; margin-bottom: 12px;">
+        <strong>Error:</strong> <%= error %>
+    </div>
+<% } %>
+
+<table class="queue-table">
+    <thead>
+        <tr>
+            <th>Collection Folder</th>
+            <th>Archival Object Folder(s)</th>
+            <th style="width: 100px; text-align: center;">Packages</th>
+            <% if (has_actions) { %>
+                <th class="actions-cell">Actions</th>
+            <% } %>
+        </tr>
+    </thead>
+    <tbody>
+        <% if (folders.length === 0) { %>
+            <tr>
+                <td colspan="<%= col_count %>">
+                    <div class="empty-state">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                        </svg>
+                        <div>
+                            <% if (q && q.length > 0) { %>
+                                No folders match &ldquo;<%= q %>&rdquo;.
+                            <% } else { %>
+                                <%= empty_message %>
+                            <% } %>
+                        </div>
+                    </div>
+                </td>
+            </tr>
+        <% } else { %>
+            <% folders.forEach(function (folder) { %>
+                <tr>
+                    <td class="package-cell">
+                        <div class="package-name"><%= folder.name %></div>
+                    </td>
+                    <td>
+                        <% if (folder.packages_error) { %>
+                            <span class="text-muted small">
+                                <em>Could not load packages: <%= folder.packages_error %></em>
+                            </span>
+                        <% } else if (folder.packages.length === 0) { %>
+                            <span class="text-muted small"><em>No packages</em></span>
+                        <% } else { %>
+                            <ul style="margin: 0; padding-left: 18px; list-style: disc;">
+                                <% folder.packages.forEach(function (pkg) { %>
+                                    <li style="font-size: 13px; padding: 2px 0;"><%= pkg %></li>
+                                <% }); %>
+                            </ul>
+                        <% } %>
+                    </td>
+                    <td style="text-align: center;">
+                        <span class="sev-badge sev-info" style="min-width: 48px;">
+                            <span><%= folder.packages.length %></span>
+                        </span>
+                    </td>
+                    <% if (has_actions) { %>
+                        <td class="actions-cell">
+                            <div class="dropdown">
+                                <button type="button" class="kebab-btn"
+                                        data-bs-toggle="dropdown"
+                                        aria-expanded="false"
+                                        aria-label="Actions for <%= folder.name %>"
+                                        title="Actions">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                        <circle cx="12" cy="6" r="1.6"/>
+                                        <circle cx="12" cy="12" r="1.6"/>
+                                        <circle cx="12" cy="18" r="1.6"/>
+                                    </svg>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+
+                                    <%/* Icons: each action gets a Lucide-style SVG before
+                                         the label to match the visual vocabulary on the
+                                         objects + users row kebabs. The existing CSS rule
+                                         `.dropdown-menu .dropdown-item svg` already handles
+                                         sizing + color inheritance, so no extra inline
+                                         styles are needed here. */%>
+
+                                    <% if (actions.indexOf('make_digital_objects') !== -1) { %>
+                                        <li>
+                                            <a href="#" class="dropdown-item"
+                                               hx-post="<%= dashboard_base %>/ingest/workspace/<%= encodeURIComponent(folder.name) %>/make-digital-objects"
+                                               hx-target="#workspace-action-result"
+                                               hx-swap="innerHTML"
+                                               hx-indicator="#workspace-action-spinner"
+                                               data-confirm-title="Run Make Digital Objects"
+                                               data-confirm-severity="info"
+                                               data-confirm-proceed="Run"
+                                               hx-confirm="Run Make Digital Objects for &ldquo;<%= folder.name %>&rdquo;? This can take up to an hour for large batches. Do not navigate away from this page while it runs.">
+                                                <%/* play-circle icon — "run this action" */%>
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                                    <circle cx="12" cy="12" r="10"/>
+                                                    <polygon points="10 8 16 12 10 16 10 8"/>
+                                                </svg>
+                                                Make Digital Objects
+                                            </a>
+                                        </li>
+                                    <% } %>
+
+                                    <% if (actions.indexOf('check_metadata') !== -1) { %>
+                                        <li>
+                                            <a href="#" class="dropdown-item"
+                                               hx-post="<%= dashboard_base %>/ingest/workspace/<%= encodeURIComponent(folder.name) %>/check-metadata"
+                                               hx-target="#qa-action-result"
+                                               hx-swap="innerHTML"
+                                               hx-indicator="#qa-action-spinner">
+                                                <%/* clipboard-check icon — "validate this" */%>
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                                    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                                                    <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+                                                    <path d="M9 14l2 2 4-4"/>
+                                                </svg>
+                                                Check Metadata
+                                            </a>
+                                        </li>
+                                    <% } %>
+
+                                    <% if (actions.indexOf('submit_ingest') !== -1) { %>
+                                        <li>
+                                            <a href="#" class="dropdown-item"
+                                               style="color: var(--du-crimson);"
+                                               hx-post="<%= dashboard_base %>/ingest/workspace/<%= encodeURIComponent(folder.name) %>/submit-ingest"
+                                               hx-target="#workspace-action-result"
+                                               hx-swap="innerHTML"
+                                               hx-indicator="#workspace-action-spinner"
+                                               data-confirm-title="Submit to Ingest"
+                                               data-confirm-severity="danger"
+                                               data-confirm-proceed="Submit"
+                                               hx-confirm="Submit &ldquo;<%= folder.name %>&rdquo; to the ingest pipeline? This will queue all archival packages and start Archivematica processing.">
+                                                <%/* upload-cloud icon — "send to pipeline" */%>
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                                    <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>
+                                                    <polyline points="16 16 12 12 8 16"/>
+                                                    <line x1="12" y1="12" x2="12" y2="21"/>
+                                                </svg>
+                                                Submit to Ingest
+                                            </a>
+                                        </li>
+                                    <% } %>
+
+                                    <% if (actions.indexOf('revert_to_mdo') !== -1) { %>
+                                        <li><hr class="dropdown-divider"></li>
+                                        <li>
+                                            <a href="#" class="dropdown-item"
+                                               style="color: var(--sev-warn, #b07000);"
+                                               hx-post="<%= dashboard_base %>/ingest/workspace/<%= encodeURIComponent(folder.name) %>/revert-to-mdo"
+                                               hx-target="<%= revert_target %>"
+                                               hx-swap="innerHTML"
+                                               data-confirm-title="Revert to Make Digital Objects"
+                                               data-confirm-severity="warn"
+                                               data-confirm-proceed="Revert"
+                                               hx-confirm="Revert &ldquo;<%= folder.name %>&rdquo; back to Make Digital Objects? This deletes uri.txt from every package in the folder. The original source files are not touched, so re-running Make Digital Objects will rebuild them.">
+                                                <%/* rotate-counter-clockwise icon — "undo" */%>
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                                    <polyline points="1 4 1 10 7 10"/>
+                                                    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+                                                </svg>
+                                                Revert to Make Digital Objects
+                                            </a>
+                                        </li>
+                                    <% } %>
+
+                                </ul>
+                            </div>
+                        </td>
+                    <% } %>
+                </tr>
+            <% }); %>
+        <% } %>
+    </tbody>
+</table>
+
+<div class="app-pagination">
+    <div class="results-count">
+        <strong><%= total_folders %></strong> collection folder<%= total_folders === 1 ? '' : 's' %>
+        &middot;
+        <strong><%= total_packages %></strong> archival package<%= total_packages === 1 ? '' : 's' %>
+    </div>
+</div>

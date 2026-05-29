@@ -1,0 +1,61 @@
+# Dependencies
+node_modules/
+
+# Environment files — never commit
+.env
+.env.*
+!.env-example
+!.env.example
+
+# Logs
+logs/*
+!logs/.gitkeep
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+data
+
+# Test artifacts
+coverage/
+.nyc_output/
+*.lcov
+
+# Editor / OS
+.DS_Store
+.idea/
+*.iml
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Build / cache
+.cache/
+.eslintcache
+.parcel-cache/
+
+# Local state
+tmp/*
+!tmp/.gitkeep
+uploads/*
+!uploads/.gitkeep
+public/tn/*
+public/tn_cache/*
+
+# Database dumps
+*.sql
+*.sql.gz
+
+# Misc
+*.tgz
+*.tar.gz
+*.zip
+.claude
+
+# Ignore files containing '.orig' in the name
+*.orig*

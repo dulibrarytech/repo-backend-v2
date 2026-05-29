@@ -1,0 +1,86 @@
+<h1 class="page-title">Welcome, <%= user.first_name || user.du_id %>.</h1>
+<p class="page-subtitle">
+    Quick view of repository activity. Use the sidebar to manage
+    collections, objects, ingest jobs, and admin tools.
+</p>
+
+<div class="row g-3 mb-3">
+    <div class="col-md-3 col-sm-6">
+        <div class="card-stat">
+            <div class="card-stat__value"><%= stats.total.toLocaleString() %></div>
+            <div class="card-stat__label">Total objects</div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6">
+        <div class="card-stat">
+            <div class="card-stat__value"><%= stats.published.toLocaleString() %></div>
+            <div class="card-stat__label">Published</div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6">
+        <div class="card-stat">
+            <div class="card-stat__value"><%= stats.collections.toLocaleString() %></div>
+            <div class="card-stat__label">Collections</div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6">
+        <div class="card-stat">
+            <div class="card-stat__value"><%= stats.active_users.toLocaleString() %></div>
+            <div class="card-stat__label">Active users</div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-md-6">
+        <div class="content-card">
+            <div class="d-flex justify-content-between align-items-baseline mb-2">
+                <h2 class="h6 m-0">Top collections by object count</h2>
+                <a href="<%= dashboard_base %>/objects" class="small">Browse all →</a>
+            </div>
+            <div id="home-top-collections"
+                 hx-get="<%= dashboard_base %>/_home/top-collections"
+                 hx-trigger="load"
+                 hx-swap="innerHTML">
+                <div class="text-muted small">Loading…</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="content-card">
+            <h2 class="h6 mb-2">Recent ingests</h2>
+            <div id="home-recent-ingests"
+                 hx-get="<%= dashboard_base %>/_home/recent-ingests"
+                 hx-trigger="load"
+                 hx-swap="innerHTML">
+                <div class="text-muted small">Loading…</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-md-6">
+        <div class="content-card">
+            <h2 class="h6 mb-2">Quick actions</h2>
+            <ul class="list-unstyled m-0 small">
+                <li><a href="<%= dashboard_base %>/objects">→ Browse objects</a></li>
+                <li><a href="<%= dashboard_base %>/objects?is_published=0">→ Review unpublished (<%= stats.unpublished.toLocaleString() %>)</a></li>
+                <li><a href="<%= dashboard_base %>/users">→ Manage users</a></li>
+            </ul>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="content-card">
+            <h2 class="h6 mb-2">Your session</h2>
+            <dl class="row mb-0 small">
+                <dt class="col-4">DU ID</dt>
+                <dd class="col-8"><%= user.du_id %></dd>
+                <dt class="col-4">Email</dt>
+                <dd class="col-8"><%= user.email || '—' %></dd>
+                <dt class="col-4">Name</dt>
+                <dd class="col-8"><%= [user.first_name, user.last_name].filter(Boolean).join(' ') || '—' %></dd>
+            </dl>
+        </div>
+    </div>
+</div>

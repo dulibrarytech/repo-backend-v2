@@ -1,0 +1,20 @@
+<%/* Login surface. SSO is the only path — the manual du_id form was
+     removed since LDAP / auth-service-js are decommissioned. The
+     dashboard backend still keeps the POST /dashboard/login route
+     mounted for tests and script callers, but no UI invokes it. */%>
+
+<% if (typeof error !== 'undefined' && error) { %>
+    <div class="alert alert-danger py-2 small mb-3"><%= error %></div>
+<% } %>
+
+<% if (typeof sso_enabled !== 'undefined' && sso_enabled) { %>
+    <a href="<%= app_path %>/auth/sso/start?next=<%= encodeURIComponent(next || '') %>"
+       class="btn btn-primary w-100">
+        Sign in
+    </a>
+<% } else { %>
+    <div class="alert alert-warning small mb-0">
+        <strong>SSO is not configured.</strong>
+        Set <code>SSO_URL</code> in <code>.env</code> to enable sign-in.
+    </div>
+<% } %>

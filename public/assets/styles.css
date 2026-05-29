@@ -1,0 +1,1313 @@
+/**
+ * Copyright 2026 University of Denver
+ *
+ * Repo dashboard theme — matches the ingest-service v2 visual language:
+ * clean white surfaces, DU crimson + gold accents, narrow icon sidebar,
+ * card-wrapped tables, status chips with icon + label.
+ *
+ * Adopted verbatim from digitaldu-backend-ingest-service so the two
+ * dashboards present as one product. When the merge ships in Phase 8
+ * the two stylesheets collapse into this file.
+ */
+
+:root {
+    /* DU brand colors */
+    --du-crimson: #a6192e;
+    --du-crimson-700: #8a1426;
+    --du-gold: #c8ac4a;
+    --du-gold-50: #f7f2e0;
+
+    /* Surfaces */
+    --surface: #ffffff;
+    --surface-alt: #f8f9fa;
+    --surface-rail: #ffffff;
+    --hairline: #e5e7eb;
+    --hairline-soft: #f1f3f5;
+
+    /* Typography
+     *
+     * --text-muted is used for secondary labels, timestamps, table
+     * subtitles, badge text, etc. — frequently on backgrounds other
+     * than pure white (--surface-alt, --hairline-soft, sev-*-bg).
+     * Contrast ratios at the current value (#5a6268):
+     *   on #ffffff (surface)        6.21:1  AA + AAA (normal)
+     *   on #f8f9fa (surface-alt)    5.93:1  AA
+     *   on #f1f3f5 (hairline-soft)  5.57:1  AA
+     *   on #fff8e1 (sev-warn-bg)    5.85:1  AA
+     * Was #6c757d, which dropped to 4.13:1 on hairline-soft (FAIL).
+     */
+    --text: #212529;
+    --text-muted: #5a6268;
+    --text-strong: #111827;
+
+    /* Severity tokens
+     *
+     * --sev-info shares the muted gray for consistency — same
+     * contrast story as --text-muted.
+     * --sev-warn was #b7791f, which gave 3.41:1 on #fff8e1 (FAIL at
+     * the 11px size used by the DRAFT badge on the home page).
+     * Darkened to #8a5a10 → 5.55:1 on warn-bg, 5.90:1 on white.
+     *
+     * --sev-success was Bootstrap's #198754, which gave only 3.99:1
+     * on #e6f4ec (FAIL — the PUB chip on every list row). Darkened
+     * to #0f6938 → 5.67:1.
+     */
+    --sev-info: #5a6268;
+    --sev-info-bg: #f1f3f5;
+    --sev-warn: #8a5a10;
+    --sev-warn-bg: #fff8e1;
+    --sev-error: #a6192e;
+    --sev-error-bg: #fce7eb;
+    --sev-fatal: #1a1a1a;
+    --sev-fatal-bg: #e5e7eb;
+    --sev-success: #0f6938;
+    --sev-success-bg: #e6f4ec;
+
+    /* Layout */
+    --sidebar-width: 64px;
+    --header-height: 64px;
+    --content-max: 1400px;
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 1px rgba(0, 0, 0, 0.02);
+}
+
+/* --- Skip-to-main link --------------------------------------------------- */
+/*
+ * First focusable element on every dashboard page. Visually hidden by
+ * default — slides into view at the top-left when keyboard focus
+ * lands on it (Tab once from page load). Activating it jumps focus
+ * past the sidebar/header to the page's <main id="main-content"> so
+ * keyboard + screen-reader users don't have to traverse the nav on
+ * every navigation.
+ *
+ * High-contrast crimson background + white outline-on-focus so the
+ * pill is clearly distinguishable from any underlying content.
+ */
+.skip-link {
+    position: absolute;
+    top: -48px;
+    left: 12px;
+    z-index: 10000;
+    padding: 8px 16px;
+    background: var(--du-crimson);
+    color: #ffffff;
+    text-decoration: none;
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+    transition: top 0.15s ease;
+}
+.skip-link:focus,
+.skip-link:focus-visible {
+    top: 12px;
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+    .skip-link {
+        transition: none;
+    }
+}
+/* The <main> target carries tabindex="-1" so the skip-link can move
+   focus into it programmatically. We don't want that to render a
+   default focus ring (would draw an outline around the entire page
+   body — distracting). The visible focus indicator lives on the skip
+   link itself, not on its target. */
+.app-main:focus {
+    outline: none;
+}
+
+/* --- Universal keyboard focus ring (WCAG 2.4.7) -------------------------- */
+/*
+ * Crimson outline on any element that receives KEYBOARD focus. Uses
+ * :focus-visible so the ring is suppressed on mouse clicks — clicking
+ * a kebab/button shouldn't leave a lingering ring after the click, but
+ * Tab-navigating to it must show one.
+ *
+ * Selectors with their own focus styles (Bootstrap .btn, our
+ * .skip-link) are unaffected — `outline` and Bootstrap's
+ * `box-shadow` focus indicators coexist, which makes keyboard focus
+ * read MORE prominently on those elements, not less.
+ *
+ * The outline inherits the element's own border-radius automatically
+ * in all current browsers, so a rounded kebab button gets a rounded
+ * ring without us having to repeat the radius.
+ */
+:focus-visible {
+    outline: 2px solid var(--du-crimson);
+    outline-offset: 2px;
+}
+
+/* --- Reduced-motion preference (WCAG 2.3.3) ------------------------------ */
+/*
+ * Users who set OS-level "reduce motion" get all animations and
+ * transitions collapsed to a near-zero duration. Functional state
+ * changes (HTMX indicator visibility, the queue-row "Working…" fade,
+ * sidebar hover background) still happen — they just snap instead of
+ * easing in/out. This is the canonical WCAG-recommended reset.
+ *
+ * `!important` is required because Bootstrap's transitions are
+ * declared with normal specificity and we have to win the cascade
+ * regardless of where in the file the original transition lives.
+ */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+/* --- Base ----------------------------------------------------------------- */
+
+html,
+body {
+    height: 100%;
+    margin: 0;
+}
+
+body {
+    font-family:
+        -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, 'Helvetica Neue', Arial,
+        sans-serif;
+    color: var(--text);
+    background: var(--surface-alt);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+a {
+    color: var(--du-crimson);
+    text-decoration: none;
+}
+
+a:hover {
+    color: var(--du-crimson-700);
+    text-decoration: underline;
+}
+
+h1,
+h2,
+h3 {
+    color: var(--text-strong);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+h1 {
+    font-size: 28px;
+    margin: 0 0 24px;
+}
+
+/* Bootstrap primary button uses DU crimson */
+.btn-primary {
+    --bs-btn-bg: var(--du-crimson);
+    --bs-btn-border-color: var(--du-crimson);
+    --bs-btn-hover-bg: var(--du-crimson-700);
+    --bs-btn-hover-border-color: var(--du-crimson-700);
+    --bs-btn-active-bg: var(--du-crimson-700);
+    --bs-btn-active-border-color: var(--du-crimson-700);
+    --bs-btn-focus-shadow-rgb: 166, 25, 46;
+}
+
+/* --- Layout shell --------------------------------------------------------- */
+
+.app-shell {
+    display: grid;
+    /* `minmax(0, 1fr)` (not just `1fr`) is load-bearing: a bare `1fr`
+       track has an implicit minimum of min-content, so when
+       `.app-main`'s intrinsic minimum hits its own max-width:1400
+       cap, the track stays at 1400 even on narrower viewports —
+       page then overflows by (1400 + sidebar - viewport) and you get
+       horizontal scroll between ~1280 and 1400 viewport widths.
+       `minmax(0, 1fr)` clamps the track's minimum to zero so it
+       always tracks the available space. */
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+    grid-template-rows: var(--header-height) 1fr auto;
+    grid-template-areas:
+        'header header'
+        'sidebar main'
+        'footer  footer';
+    min-height: 100vh;
+}
+
+/* --- Top header ----------------------------------------------------------- */
+
+.app-header {
+    grid-area: header;
+    background: var(--surface);
+    border-bottom: 1px solid var(--hairline);
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    gap: 16px;
+}
+
+.app-header .du-logo {
+    height: 44px;
+    width: auto;
+    flex-shrink: 0;
+    display: block;
+}
+
+.app-header .brand-block {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    text-decoration: none;
+}
+
+.app-header .app-title {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text-strong);
+    margin-left: 16px;
+}
+
+.app-header .app-title .accent {
+    color: var(--du-crimson);
+}
+
+.app-header .header-spacer {
+    flex: 1;
+}
+
+.app-header .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.app-header .header-actions a {
+    color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: var(--radius-sm);
+}
+
+.app-header .header-actions a:hover {
+    background: var(--hairline-soft);
+    color: var(--text-strong);
+    text-decoration: none;
+}
+
+.app-header .user-label {
+    color: var(--text-muted);
+    font-size: 13px;
+    padding-right: 8px;
+}
+
+/* --- Sidebar -------------------------------------------------------------- */
+
+.app-sidebar {
+    grid-area: sidebar;
+    background: var(--surface-rail);
+    border-right: 1px solid var(--hairline);
+    padding: 16px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: center;
+}
+
+.app-sidebar a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    transition: background 0.12s ease;
+}
+
+.app-sidebar a:hover {
+    background: var(--hairline-soft);
+    text-decoration: none;
+    color: var(--text-strong);
+}
+
+.app-sidebar a.active {
+    background: var(--hairline-soft);
+    color: var(--du-crimson);
+}
+
+.app-sidebar svg {
+    width: 22px;
+    height: 22px;
+    stroke-width: 1.75;
+}
+
+/* --- Main content --------------------------------------------------------- */
+
+.app-main {
+    grid-area: main;
+    padding: 24px 28px;
+    max-width: var(--content-max);
+    width: 100%;
+    box-sizing: border-box;
+    /* Bootstrap rows use negative horizontal margins to compensate
+       for column padding. Without an `overflow-x` clamp on the
+       grid-area, those few pixels of overhang escape the viewport
+       on mid-width browsers and trigger horizontal scroll.
+       `clip` is preferred over `hidden` so descendant
+       position:sticky / focus shadows still paint normally. */
+    overflow-x: clip;
+}
+
+/* Bootstrap row columns are flex children with `min-width: auto`,
+   which means a long unbreakable string (UUID, slash-separated path)
+   can force the column wider than its grid track and cascade into
+   a horizontal scroll on the page. Setting `min-width: 0` lets the
+   `text-truncate` rules inside our cards actually clip. */
+.app-main .row > * {
+    min-width: 0;
+}
+
+.page-title {
+    color: var(--text-strong);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    font-size: 26px;
+    margin: 0 0 4px;
+}
+
+.page-subtitle {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin: 0 0 16px;
+}
+
+/* --- Content card --------------------------------------------------------- */
+
+.content-card {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-card);
+    padding: 18px 20px;
+}
+
+.content-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+
+.content-card-header .control-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 14px;
+    flex-wrap: wrap;
+}
+
+.content-card-header .control-group .form-select,
+.content-card-header .control-group .form-control {
+    font-size: 14px;
+}
+
+/* --- Card stat (home page) ------------------------------------------------ */
+
+.card-stat {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-card);
+    padding: 14px 18px;
+}
+
+.card-stat__value {
+    font-size: 26px;
+    font-weight: 600;
+    color: var(--du-crimson);
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+}
+
+.card-stat__label {
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-top: 2px;
+}
+
+/* --- Queue / data table --------------------------------------------------- */
+
+.queue-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+}
+
+.queue-table thead th {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    text-align: left;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--hairline);
+    background: var(--surface);
+    white-space: nowrap;
+    user-select: none;
+}
+
+.queue-table tbody td {
+    padding: 16px;
+    border-bottom: 1px solid var(--hairline-soft);
+    vertical-align: middle;
+    font-size: 14px;
+}
+
+.queue-table tbody tr:nth-child(even) td {
+    background: var(--surface-alt);
+}
+
+.queue-table tbody tr:hover td {
+    background: var(--du-gold-50);
+}
+
+.queue-table .package-cell {
+    min-width: 240px;
+}
+
+.queue-table .package-cell .package-name {
+    font-weight: 600;
+    color: var(--text-strong);
+    word-break: break-word;
+}
+
+.queue-table .package-cell .package-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-style: italic;
+    margin-top: 2px;
+}
+
+.queue-table .timestamp-cell {
+    font-size: 13px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.queue-table .actions-cell {
+    text-align: right;
+    white-space: nowrap;
+}
+
+/* --- Selection cell + bulk toolbar --------------------------------------- */
+
+.queue-table .select-cell {
+    width: 36px;
+    padding: 8px 4px 8px 12px;
+    vertical-align: middle;
+}
+
+/* The toolbar sits above the table and stays hidden via display:none
+ * until the row-select handler in dashboard.js detects a checked row
+ * and toggles `.is-active`. Sticky so it stays in view while the user
+ * scrolls through 25+ rows. */
+.bulk-toolbar {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    background: var(--du-gold-50);
+    border: 1px solid var(--du-gold);
+    border-radius: 6px;
+    font-size: 14px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.bulk-toolbar.is-active {
+    display: flex;
+}
+
+.bulk-toolbar .bulk-count {
+    font-weight: 600;
+    margin-right: 8px;
+}
+
+.bulk-toolbar .bulk-count-n {
+    color: var(--du-crimson);
+}
+
+.bulk-toolbar .btn svg {
+    width: 14px;
+    height: 14px;
+    margin-right: 4px;
+    vertical-align: text-bottom;
+}
+
+.bulk-toolbar .bulk-spinner {
+    margin-left: auto;
+}
+
+/* --- Thumbnail cell ------------------------------------------------------- */
+
+/* Fixed 60×60 leading cell. Set width on the <th> and <td> so the
+ * column doesn't pulse as different rows render their image vs.
+ * placeholder. `vertical-align: middle` keeps both the image and the
+ * placeholder centered relative to the rest of the row content. */
+.queue-table .thumb-cell {
+    width: 76px;
+    padding: 8px 8px 8px 16px;
+    vertical-align: middle;
+}
+
+.queue-table .thumb-img,
+.queue-table .thumb-placeholder {
+    width: 60px;
+    height: 60px;
+    border-radius: 6px;
+    border: 1px solid var(--hairline);
+    display: block;
+    background: var(--surface-alt);
+}
+
+.queue-table .thumb-img {
+    object-fit: cover;
+}
+
+/* If an <img> fails to load (404, network), dashboard.js swaps the
+ * element for a .thumb-placeholder span at the error-event capture
+ * phase. No CSS hook needed — keep this comment as the breadcrumb. */
+
+.queue-table .thumb-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    opacity: 0.6;
+}
+
+.queue-table .thumb-placeholder svg {
+    width: 28px;
+    height: 28px;
+}
+
+/* --- Thumbnail upload modal previews ------------------------------------- */
+
+/* Larger 120×120 previews inside the modal. Two slots sit side-by-side
+ * with an arrow between them so the swap is visually obvious. */
+.thumb-preview {
+    width: 120px;
+    height: 120px;
+    border-radius: 8px;
+    border: 1px solid var(--hairline);
+    background: var(--surface-alt);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.thumb-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.thumb-preview-empty {
+    color: var(--text-muted);
+    opacity: 0.6;
+}
+
+.thumb-preview-empty svg {
+    width: 36px;
+    height: 36px;
+}
+
+/* --- Severity badge ------------------------------------------------------- */
+
+.sev-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    text-align: center;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.3;
+}
+
+.sev-badge .sev-icon {
+    width: 16px;
+    height: 16px;
+    stroke-width: 2;
+}
+
+.sev-badge.sev-info {
+    color: var(--sev-info);
+    background: var(--sev-info-bg);
+}
+
+.sev-badge.sev-success {
+    color: var(--sev-success);
+    background: var(--sev-success-bg);
+}
+
+.sev-badge.sev-warn {
+    color: var(--sev-warn);
+    background: var(--sev-warn-bg);
+}
+
+.sev-badge.sev-error {
+    color: var(--sev-error);
+    background: var(--sev-error-bg);
+}
+
+.sev-badge.sev-fatal {
+    color: var(--sev-fatal);
+    background: var(--sev-fatal-bg);
+}
+
+/* --- Required-field badge ------------------------------------------------- */
+/*
+ * Tiny inline badge that sits next to a form-field label to mark the
+ * field as required. Smaller and lighter than .sev-badge — the
+ * status badges are for table cells where they're the visual focus;
+ * this one is for inline label decoration where it must NOT compete
+ * with the field label itself.
+ */
+.required-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    background: var(--sev-warn-bg, #fff3cd);
+    color: var(--sev-warn, #8a6d3b);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    vertical-align: 1px;
+}
+
+/* --- Object metadata modal ----------------------------------------------- */
+/*
+ * Visual rules for the display_record modal — opened from the Objects
+ * list. The flat <dl> uses CSS grid so labels stay aligned regardless
+ * of value length, and the per-field "item" lists (identifiers, dates,
+ * subjects, notes, names, parts) get a small categorical chip plus the
+ * value on a single readable line.
+ *
+ * The .metadata-tag chip is deliberately quieter than .sev-badge so
+ * the value text remains the primary thing the eye lands on.
+ */
+
+.metadata-modal-header {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 16px;
+}
+
+.metadata-modal-header-content {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.metadata-modal-header .modal-title {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-strong);
+    line-height: 1.3;
+}
+
+.metadata-modal-callnumber {
+    margin-top: 6px;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.metadata-modal-pid {
+    margin-top: 4px;
+    font-size: 12px;
+}
+
+.metadata-modal-body {
+    background: var(--surface);
+    padding: 20px 24px;
+}
+
+.metadata-dl {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    column-gap: 24px;
+    row-gap: 0;
+    font-size: 14px;
+}
+
+.metadata-dt {
+    grid-column: 1;
+    padding: 12px 0;
+    color: var(--text-muted);
+    font-weight: 500;
+    text-transform: capitalize;
+    border-top: 1px solid var(--hairline-soft);
+    align-self: start;
+}
+
+.metadata-dd {
+    grid-column: 2;
+    padding: 12px 0;
+    margin: 0;
+    color: var(--text);
+    border-top: 1px solid var(--hairline-soft);
+    min-width: 0;
+}
+
+.metadata-dl > .metadata-dt:first-of-type,
+.metadata-dl > .metadata-dt:first-of-type + .metadata-dd {
+    border-top: none;
+}
+
+.metadata-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.metadata-item {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 2px 0;
+    line-height: 1.5;
+}
+
+.metadata-item + .metadata-item {
+    margin-top: 4px;
+}
+
+.metadata-item-stacked {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+}
+
+.metadata-note-content {
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text);
+}
+
+.metadata-part-order {
+    min-width: 22px;
+}
+
+.metadata-tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--hairline-soft);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    text-transform: lowercase;
+    white-space: nowrap;
+}
+
+/* --- Severity-coloured content cards -------------------------------------- */
+
+/* The .sev-* classes above color the small pill badges inside tables;
+   these rules extend the same semantic palette to FULL content cards
+   so action-result banners (Make Digital Objects, ASpace QA Check,
+   Submit-to-Ingest outcomes, Revert outcomes) and the queue timeline
+   modal's "Last error" panel all read in the right color at a glance.
+   The pattern: tinted background, left accent border, matching text
+   colour. Stroke is `currentColor` on the SVG icons so they pick up
+   the text colour automatically. */
+.content-card.sev-success {
+    background: var(--sev-success-bg);
+    border-left: 4px solid var(--sev-success);
+    color: var(--sev-success);
+}
+.content-card.sev-info {
+    background: var(--sev-info-bg);
+    border-left: 4px solid var(--sev-info);
+    color: var(--sev-info);
+}
+.content-card.sev-warn {
+    background: var(--sev-warn-bg);
+    border-left: 4px solid var(--sev-warn);
+    color: var(--sev-warn);
+}
+.content-card.sev-error {
+    background: var(--sev-error-bg);
+    border-left: 4px solid var(--sev-error);
+    color: var(--sev-error);
+}
+.content-card.sev-fatal {
+    background: var(--sev-fatal-bg);
+    border-left: 4px solid var(--sev-fatal);
+    color: var(--sev-fatal);
+}
+
+/* Keep child text + structural elements readable inside a sev-coloured
+   card. The card's `color` sets the accent for the title / icon, but
+   body copy and links should fall back to the default text colour so
+   the message stays legible. */
+.content-card.sev-success .text-body,
+.content-card.sev-info .text-body,
+.content-card.sev-warn .text-body,
+.content-card.sev-error .text-body,
+.content-card.sev-fatal .text-body {
+    color: var(--text);
+}
+
+/* --- Pagination ----------------------------------------------------------- */
+
+.app-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--hairline);
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.app-pagination .results-count {
+    color: var(--text);
+    font-size: 14px;
+}
+
+.app-pagination .page-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.app-pagination .page-controls a,
+.app-pagination .page-controls button,
+.app-pagination .page-controls span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: 13px;
+    background: var(--surface);
+    cursor: pointer;
+}
+
+.app-pagination .page-controls a:hover,
+.app-pagination .page-controls button:hover:not([disabled]) {
+    background: var(--surface-alt);
+    text-decoration: none;
+}
+
+.app-pagination .page-controls button[disabled] {
+    color: var(--text-muted);
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.app-pagination .page-controls .current {
+    background: var(--text-strong);
+    color: var(--surface);
+    border-color: var(--text-strong);
+}
+
+/* --- Action menu (kebab + themed dropdown) ------------------------------- */
+
+.kebab-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    line-height: 1;
+}
+
+.kebab-btn:hover,
+.kebab-btn:focus,
+.kebab-btn[aria-expanded='true'] {
+    background: var(--hairline-soft);
+    color: var(--text-strong);
+}
+/* Suppress the outline only on MOUSE focus — the universal
+   :focus-visible rule above paints the crimson keyboard ring, which
+   we want to keep visible for Tab navigation. */
+.kebab-btn:focus:not(:focus-visible) {
+    outline: 0;
+}
+
+/* The dropdown menu itself: clean white card, hairline border, soft shadow,
+   no extra padding around the items (each item supplies its own padding). */
+.dropdown-menu {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-md);
+    box-shadow:
+        0 6px 16px rgba(0, 0, 0, 0.08),
+        0 1px 2px rgba(0, 0, 0, 0.04);
+    padding: 6px 0;
+    min-width: 180px;
+}
+
+/* Items align icon + label horizontally with consistent spacing. Anchor
+   tags (links) and buttons both get the same treatment so the menu reads
+   uniformly. */
+.dropdown-menu .dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+    color: var(--text);
+    font-size: 14px;
+    border: 0;
+    background: transparent;
+    width: 100%;
+}
+
+.dropdown-menu .dropdown-item:hover,
+.dropdown-menu .dropdown-item:focus {
+    background: var(--hairline-soft);
+    color: var(--text-strong);
+    text-decoration: none;
+}
+
+.dropdown-menu .dropdown-item svg {
+    width: 16px;
+    height: 16px;
+    stroke-width: 1.75;
+    flex-shrink: 0;
+    color: var(--text-muted);
+}
+
+.dropdown-menu .dropdown-item:hover svg,
+.dropdown-menu .dropdown-item:focus svg {
+    color: var(--text-strong);
+}
+
+/* Destructive items render in DU crimson, including their icon. */
+.dropdown-menu .dropdown-item.text-danger,
+.dropdown-menu .dropdown-item.text-danger svg {
+    color: var(--sev-error);
+}
+.dropdown-menu .dropdown-item.text-danger:hover,
+.dropdown-menu .dropdown-item.text-danger:focus {
+    background: var(--sev-error-bg);
+    color: var(--du-crimson-700);
+}
+.dropdown-menu .dropdown-item.text-danger:hover svg,
+.dropdown-menu .dropdown-item.text-danger:focus svg {
+    color: var(--du-crimson-700);
+}
+
+/* --- Footer --------------------------------------------------------------- */
+
+.app-footer {
+    grid-area: footer;
+    background: var(--surface);
+    border-top: 1px solid var(--hairline);
+    padding: 16px 40px;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.app-footer a {
+    color: var(--du-crimson);
+}
+
+/* --- Login page ----------------------------------------------------------- */
+
+.login-shell {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    background: var(--surface-alt);
+    padding: 24px;
+}
+
+.login-card {
+    width: 100%;
+    max-width: 420px;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-card);
+    padding: 32px;
+}
+
+.login-card .brand-block {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--hairline);
+}
+
+.login-card .du-logo {
+    height: 44px;
+    width: auto;
+    display: block;
+}
+
+.login-card .app-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-strong);
+}
+
+.login-card .app-title .accent {
+    color: var(--du-crimson);
+}
+
+.login-card h1 {
+    font-size: 20px;
+    margin: 0 0 8px;
+}
+
+.login-card .subtitle {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin-bottom: 20px;
+}
+
+.login-card .alert-danger {
+    background: var(--sev-error-bg);
+    color: var(--sev-error);
+    border: 0;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    margin-bottom: 16px;
+}
+
+.login-card .alert-warning {
+    background: var(--sev-warn-bg);
+    color: var(--sev-warn);
+    border: 0;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+}
+
+/* --- Empty state ---------------------------------------------------------- */
+
+.empty-state {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--text-muted);
+}
+
+/* Constrain the empty-state SVG. Without this rule the SVG inherits its
+   intrinsic size from the viewBox + parent table column, which produces
+   a giant grayscale folder dominating the content card. Ported verbatim
+   from the v2 ingest-service stylesheet (public/app/v2/assets/styles.css). */
+.empty-state svg {
+    width: 48px;
+    height: 48px;
+    stroke-width: 1.25;
+    color: var(--hairline);
+    margin-bottom: 12px;
+}
+
+/* --- Long-running action spinner (workspace pages) ----------------------- */
+
+/* The Make Digital Objects + Submit-to-Ingest pages render a "Working…"
+   card targeted by hx-indicator. HTMX adds .htmx-request to the targeted
+   element during a request; without these rules the card is visible at
+   page-load (because no display:none baseline exists). Ported from the
+   v2 ingest-service stylesheet. */
+.action-spinner {
+    display: none;
+}
+.action-spinner.htmx-request {
+    display: block;
+}
+
+/* --- HTMX request indicator ---------------------------------------------- */
+
+.htmx-indicator {
+    opacity: 0;
+    transition: opacity 200ms ease-in;
+}
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+    opacity: 1;
+}
+.htmx-request {
+    cursor: progress;
+}
+
+/* --- Per-row in-flight state on the ingest queue ------------------------- */
+/* When a kebab-item mutation (cancel / return-to-packaging / rollback /    */
+/* reset) is mid-request, the row's <a> uses hx-indicator="closest tr" so   */
+/* HTMX adds the htmx-request class to the <tr>. The styles below fade the */
+/* row, block further clicks, and surface a "Working…" pill where the      */
+/* Actions cell used to show the kebab. Reverts as soon as the response    */
+/* arrives and outerHTML swaps the row.                                    */
+
+tr.queue-row.htmx-request,
+tr[id^='queue-row-'].htmx-request {
+    opacity: 0.55;
+    pointer-events: none;
+    background: var(--du-tan-50, #faf6ef);
+    transition: opacity 100ms ease-out;
+}
+
+/* Replace the kebab in the Actions column with a "Working…" pill. */
+tr.queue-row.htmx-request .actions-cell .dropdown,
+tr[id^='queue-row-'].htmx-request .actions-cell .dropdown {
+    display: none;
+}
+tr.queue-row.htmx-request .actions-cell::after,
+tr[id^='queue-row-'].htmx-request .actions-cell::after {
+    content: 'Working…';
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--du-tan-200, #f1e6cf);
+    color: var(--du-gray-700, #3f3a31);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+/* --- Confirm modal proceed buttons --------------------------------------- */
+
+.btn-confirm-primary {
+    background: var(--du-crimson);
+    border-color: var(--du-crimson);
+    color: #fff;
+}
+.btn-confirm-primary:hover,
+.btn-confirm-primary:focus {
+    background: var(--du-crimson-700);
+    border-color: var(--du-crimson-700);
+    color: #fff;
+}
+
+.btn-confirm-warn {
+    background: var(--sev-warn);
+    border-color: var(--sev-warn);
+    color: #fff;
+}
+.btn-confirm-warn:hover,
+.btn-confirm-warn:focus {
+    background: #9a6618;
+    border-color: #9a6618;
+    color: #fff;
+}
+
+.btn-confirm-danger {
+    background: var(--sev-error);
+    border-color: var(--sev-error);
+    color: #fff;
+}
+.btn-confirm-danger:hover,
+.btn-confirm-danger:focus {
+    background: var(--du-crimson-700);
+    border-color: var(--du-crimson-700);
+    color: #fff;
+}
+
+/* --- Toast stack ---------------------------------------------------------- */
+
+.toast-stack {
+    position: fixed;
+    top: calc(var(--header-height) + 16px);
+    right: 24px;
+    z-index: 1080;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 360px;
+}
+
+/* --- Expandable abstract -------------------------------------------------- */
+/*
+ * Used by views/dashboard/collection_detail.ejs (and any future page
+ * that renders a long-form abstract in a side panel). The full text
+ * is always present in the DOM; .abstract-collapsed clamps the
+ * VISIBLE portion to 6 lines via -webkit-line-clamp (line-aware, so
+ * the cut lands at a line boundary rather than mid-word). A small
+ * click handler in dashboard.js toggles the class — no inline JS,
+ * CSP-safe.
+ */
+
+.abstract-body.abstract-collapsed {
+    /* line-clamp is the only widely-supported CSS clamp today and
+       requires the -webkit-box display. Fine for our browser target
+       (Chrome / Edge / Safari / Firefox 68+ all support it via
+       this prefix). */
+    display: -webkit-box;
+    -webkit-line-clamp: 6;
+    line-clamp: 6;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.abstract-toggle {
+    /* Link-flavored button — semantic <button> (not <a href="#">) so
+       no fake navigation hash AND it's keyboard-reachable for free.
+       Visual styling makes it read as a text link. */
+    background: none;
+    border: 0;
+    color: var(--accent, #c8102e);
+    padding: 0;
+    margin-top: 4px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.abstract-toggle:hover,
+.abstract-toggle:focus-visible {
+    text-decoration: underline;
+}
+
+/* --- Responsive ----------------------------------------------------------- */
+
+@media (max-width: 768px) {
+    .app-shell {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+            'header'
+            'main'
+            'footer';
+    }
+    .app-sidebar {
+        display: none;
+    }
+    .app-main {
+        padding: 16px;
+    }
+}

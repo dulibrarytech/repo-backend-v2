@@ -1,0 +1,148 @@
+<%/* AIP-backfill status partial. Polled every 3s by the parent
+     #aip-backfill-status div on the admin page (also inlined on
+     first render so the page doesn't flash empty).
+
+     Two columns: headline counts (missing + per-state breakdown)
+     and the action buttons. The action area decides Start vs.
+     Cancel availability from `status.pending`:
+       - pending == 0    → Start enabled (no work in flight)
+       - pending  > 0    → Cancel enabled, Start disabled (would
+                            stack a second batch on the first)
+     This keeps the operator from accidentally enqueuing chunk
+     after chunk while the worker is still chewing — each chunk
+     finishes (or is cancelled) before the next can start. */%>
+
+<dl class="row mb-3 small" style="row-gap: 4px;">
+    <dt class="col-5 text-muted">Missing AIPs</dt>
+    <dd class="col-7">
+        <strong><%= missing.toLocaleString() %></strong>
+        <% if (missing === 0) { %>
+            <span class="text-success ms-2">All caught up.</span>
+        <% } %>
+    </dd>
+
+    <dt class="col-5 text-muted">Latest batch</dt>
+    <dd class="col-7">
+        <% if (status.latest_batch_marker) { %>
+            <span class="font-monospace small" title="<%= status.latest_batch_marker %>">
+                <%= status.latest_batch_marker.slice(-8) %>
+            </span>
+            <span class="text-muted small">
+                started
+                <%= status.latest_batch_started_at
+                    ? new Date(status.latest_batch_started_at).toISOString().slice(0, 19).replace('T', ' ')
+                    : '—' %>
+            </span>
+        <% } else { %>
+            <span class="text-muted">—</span>
+        <% } %>
+    </dd>
+
+    <dt class="col-5 text-muted">Total backfill rows</dt>
+    <dd class="col-7"><%= status.total_backfill_rows.toLocaleString() %></dd>
+
+    <dt class="col-5 text-muted">Pending</dt>
+    <dd class="col-7">
+        <strong><%= status.pending.toLocaleString() %></strong>
+    </dd>
+
+    <dt class="col-5 text-muted">In flight</dt>
+    <dd class="col-7"><%= status.in_progress.toLocaleString() %></dd>
+
+    <dt class="col-5 text-muted">Complete</dt>
+    <dd class="col-7 text-success"><%= status.complete.toLocaleString() %></dd>
+
+    <% if (status.failed > 0) { %>
+        <dt class="col-5 text-muted">Failed</dt>
+        <dd class="col-7 text-warning">
+            <%= status.failed.toLocaleString() %>
+            <span class="text-muted small">
+                - see the AIPs page, filter status=failed, then Retry kabob
+            </span>
+        </dd>
+    <% } %>
+</dl>
+
+<%/* Top failure reasons. Visible only when there's something to
+     show. The dominant cause of a failed backfill is almost always
+     a configuration issue at the curation/AM/Wasabi boundary
+     (WASABI_AIP_BUCKET unset, curation unreachable, AM 404 on the
+     sip_uuid). Surfacing the top reasons inline saves the operator
+     a trip to the AIPs page + per-row hover. UUIDs are token-
+     normalized so per-row variation doesn't fragment buckets. */%>
+<% if (status.top_failure_reasons && status.top_failure_reasons.length > 0) { %>
+    <div class="alert alert-warning" role="alert" style="margin-bottom: 12px;">
+        <div style="font-weight: 600; margin-bottom: 4px;">
+            Top failure reasons
+        </div>
+        <ul class="mb-0 small" style="padding-left: 18px;">
+            <% status.top_failure_reasons.forEach(function(r) { %>
+                <li>
+                    <span class="text-muted">(<%= r.count %>)</span>
+                    <code style="word-break: break-word;"><%= r.reason %></code>
+                </li>
+            <% }) %>
+        </ul>
+    </div>
+<% } %>
+
+<%/* Progress bar — visible whenever there's any backfill activity
+     (pending or in-flight). Math: complete / total_backfill_rows of
+     the CURRENT batch series. We compute on the full backfill row
+     set rather than per-batch because the dashboard's primary signal
+     is "are we making progress" — per-batch breakdowns belong in the
+     timeline view, which we don't render here. */%>
+<% if (status.total_backfill_rows > 0) { %>
+    <% var pct = Math.min(100, Math.round((status.complete / status.total_backfill_rows) * 100)); %>
+    <div class="progress" style="height: 12px; margin-bottom: 12px;">
+        <div class="progress-bar <%= status.failed > 0 ? 'bg-warning' : '' %>"
+             role="progressbar"
+             style="width: <%= pct %>%;"
+             aria-valuenow="<%= pct %>"
+             aria-valuemin="0"
+             aria-valuemax="100"
+             aria-label="Backfill progress">
+            <%= pct %>%
+        </div>
+    </div>
+<% } %>
+
+<%/* Action area. start_disabled gates on both feature-flag state
+     and pending > 0; cancel_disabled is the inverse plus a guard
+     against rendering a Cancel button when there's no batch. */%>
+<%
+    var start_disabled = !aip_store_enabled || status.pending > 0;
+    var cancel_disabled = status.pending === 0 || !status.latest_batch_marker;
+%>
+<div class="d-flex" style="gap: 8px;">
+    <form hx-post="<%= dashboard_base %>/admin/aip-backfill/start"
+          hx-target="#aip-backfill-status"
+          hx-swap="innerHTML"
+          style="margin: 0;">
+        <button type="submit"
+                class="btn btn-primary"
+                <%= start_disabled ? 'disabled' : '' %>
+                <% if (!start_disabled) { %>
+                    data-confirm="Enqueue up to <%= chunk_size %> AIPs for backfill copy to Wasabi?"
+                    data-confirm-title="Start AIP backfill?"
+                    data-confirm-label="Start backfill"
+                <% } %>>
+            Start backfill
+        </button>
+    </form>
+
+    <% if (!cancel_disabled) { %>
+        <form hx-post="<%= dashboard_base %>/admin/aip-backfill/cancel"
+              hx-target="#aip-backfill-status"
+              hx-swap="innerHTML"
+              style="margin: 0;">
+            <button type="submit"
+                    class="btn btn-outline-danger"
+                    data-confirm="Cancel all pending backfill rows in the current batch? In-flight Wasabi uploads will be allowed to finish."
+                    data-confirm-title="Cancel backfill?"
+                    data-confirm-label="Cancel pending">
+                Cancel pending
+            </button>
+        </form>
+    <% } %>
+</div>

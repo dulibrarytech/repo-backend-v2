@@ -1,0 +1,100 @@
+<%
+    // Modal-shaped timeline partial. Swapped into #modal-content when
+    // the user clicks Timeline on a queue row; data-bs-toggle in the
+    // row partial opens the bootstrap modal whose body becomes this
+    // markup.
+    //
+    // Inputs:
+    //   row    — decorated queue row (severity + actions resolved)
+    //   events — array, oldest first, payload already JSON-parsed
+    function fmt_ts(ts) {
+        if (!ts) return '';
+        var d = new Date(ts);
+        if (isNaN(d.getTime())) return String(ts);
+        var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+        return pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + '/' + d.getFullYear() +
+            ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+    var err_text = row && row.error ? String(row.error).trim() : '';
+    var sev = row && row.severity ? String(row.severity).toUpperCase() : 'INFO';
+    var err_class = (sev === 'WARN') ? 'sev-warn' : 'sev-error';
+%>
+<div class="modal-header">
+    <div>
+        <h5 class="modal-title" id="modal-content-title">Timeline — <%= row.package %></h5>
+        <% if (row.batch && row.batch !== 'PENDING') { %>
+            <div class="text-muted small">Batch: <%= row.batch %></div>
+        <% } %>
+    </div>
+    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+</div>
+<div class="modal-body">
+    <% if (err_text.length > 0) { %>
+        <%/* Surface tbl_ingest_queue.error prominently — staff
+             shouldn't have to dig through event payloads to find it. */%>
+        <div class="content-card <%= err_class %>"
+             style="margin-bottom: 16px; padding: 12px 16px;">
+            <div style="display: flex; align-items: flex-start; gap: 12px;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                     style="flex-shrink: 0; margin-top: 2px;">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                <div style="flex: 1; min-width: 0;">
+                    <div style="font-weight: 600;">Last error</div>
+                    <div style="margin-top: 4px; white-space: pre-wrap; word-break: break-word;">
+                        <%= err_text %>
+                    </div>
+                </div>
+            </div>
+        </div>
+    <% } %>
+
+    <% if (!events || events.length === 0) { %>
+        <div class="empty-state">
+            No events recorded for this package yet.
+        </div>
+    <% } else { %>
+        <ul class="timeline-list" style="list-style: none; padding: 0; margin: 0;">
+            <% events.forEach(function (e) {
+                var payload_str = '';
+                if (e.payload === null || e.payload === undefined) {
+                    payload_str = '';
+                } else if (typeof e.payload === 'string') {
+                    payload_str = e.payload;
+                } else {
+                    try { payload_str = JSON.stringify(e.payload, null, 2); }
+                    catch (err) { payload_str = String(e.payload); }
+                }
+            %>
+                <li style="border-left: 3px solid var(--hairline, #ddd); padding: 8px 16px; margin-bottom: 8px;">
+                    <div class="ts text-muted small"><%= fmt_ts(e.created_at) %></div>
+                    <div class="transition" style="margin-top: 2px;">
+                        <% if (e.from_state) { %>
+                            <code class="text-muted"><%= e.from_state %></code>
+                            <span class="arrow text-muted"> → </span>
+                        <% } %>
+                        <strong><%= e.to_state %></strong>
+                        <span class="text-muted small" style="margin-left: 8px;">
+                            [<%= e.event_type %>]
+                        </span>
+                        <% if (e.actor && e.actor !== 'system') { %>
+                            <span class="text-muted small" style="margin-left: 4px;">
+                                by <%= e.actor %>
+                            </span>
+                        <% } %>
+                    </div>
+                    <% if (payload_str) { %>
+                        <pre style="margin: 8px 0 0; font-size: 12px; max-height: 200px; overflow: auto; background: var(--bs-light, #f6f6f6); padding: 8px; border-radius: 4px;"><%= payload_str %></pre>
+                    <% } %>
+                </li>
+            <% }); %>
+        </ul>
+    <% } %>
+</div>
+<div class="modal-footer">
+    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+</div>

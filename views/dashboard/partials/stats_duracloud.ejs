@@ -1,0 +1,30 @@
+<%/* DuraCloud storage-usage cards. Rendered by the stats page after
+     the rest of the grid paints — each AM API call takes 1-3s, and
+     we don't want to gate the whole page on that.
+
+     `usage` shape: { dip_bytes, aip_bytes, total_bytes, ok, error }
+     Any byte field may be null (AM unreachable, missing space UUID,
+     etc.). `fmt_bytes(null)` renders '—' so the cards still lay out
+     cleanly. The error message is hoisted into the title attribute
+     of the first card so staff hovering can see what failed without
+     us cluttering the dashboard with a banner. */%>
+
+<div class="col-md-4">
+    <div class="card-stat"
+         <% if (!usage.ok && usage.error) { %>title="<%= usage.error %>"<% } %>>
+        <div class="card-stat__value"><%= fmt_bytes(usage.dip_bytes) %></div>
+        <div class="card-stat__label">Total DuraCloud DIP Store Usage</div>
+    </div>
+</div>
+<div class="col-md-4">
+    <div class="card-stat">
+        <div class="card-stat__value"><%= fmt_bytes(usage.aip_bytes) %></div>
+        <div class="card-stat__label">Total DuraCloud AIP Store Usage</div>
+    </div>
+</div>
+<div class="col-md-4">
+    <div class="card-stat">
+        <div class="card-stat__value"><%= fmt_bytes(usage.total_bytes) %></div>
+        <div class="card-stat__label">Total DuraCloud Storage Usage</div>
+    </div>
+</div>

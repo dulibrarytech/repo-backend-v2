@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Placeholder served by the DuraCloud thumbnail proxy when the row has
+  no `thumbnail` value, when the env vars aren't configured, or when
+  the upstream fetch fails. Sized to render cleanly at the 60x60 the
+  dashboard rows use, but vector so it scales for the modal preview too.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="No thumbnail">
+  <rect width="120" height="120" fill="#f8f9fa"/>
+  <g fill="none" stroke="#6c757d" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" opacity="0.6">
+    <rect x="22" y="22" width="76" height="76" rx="6" ry="6"/>
+    <circle cx="43" cy="46" r="6"/>
+    <polyline points="98 76 78 56 32 102"/>
+  </g>
+</svg>

@@ -1,0 +1,58 @@
+<% if (!items || items.length === 0) { %>
+    <div class="text-muted small">No recent ingests.</div>
+<% } else { %>
+    <ul class="list-unstyled m-0">
+        <% items.forEach(function(item) { %>
+            <%/* Title-first display. Fallback chain:
+                   1. display_record.title (the human-readable label)
+                   2. file_name (the legacy "object path")
+                   3. shortened pid (last resort — keeps row from going blank)
+
+                 Subtitle line shows the call number when present (the
+                 local identifier from display_record.identifiers). When
+                 a row has both title AND call number, the panel reads:
+
+                   Title text
+                   B002.05.01.0387.0009.00003                    PUB 2026-05-26
+
+                 Falling back paths use sensible single-line layouts. */%>
+            <% var primary = item.title || item.file_name || (item.pid.slice(0, 8) + '…'); %>
+            <% var has_subtitle = !!(item.call_number || (item.title && item.file_name)); %>
+            <li class="py-1 small d-flex justify-content-between align-items-baseline">
+                <a href="<%= dashboard_base %>/objects?q=<%= encodeURIComponent(item.pid) %>"
+                   class="text-truncate"
+                   style="max-width: 65%;"
+                   title="<%= item.title || item.pid %>">
+                    <span class="<%= item.title ? '' : 'font-monospace' %>">
+                        <%= primary %>
+                    </span>
+                    <% if (has_subtitle) { %>
+                        <div class="font-monospace text-muted small text-truncate">
+                            <% if (item.call_number) { %>
+                                <%= item.call_number %><%
+                                /* If we have BOTH a real title AND the
+                                   original file path, append the path
+                                   after the call number — staff
+                                   sometimes need the literal file name
+                                   to match what's on disk. */%><% if (item.title && item.file_name) { %> · <%= item.file_name %><% } %>
+                            <% } else { %>
+                                <%/* No call number but title-and-file
+                                     both exist — surface the file path
+                                     as the subtitle so it's not lost. */%>
+                                <%= item.file_name %>
+                            <% } %>
+                        </div>
+                    <% } %>
+                </a>
+                <span class="text-muted">
+                    <% if (item.is_published === 1) { %>
+                        <span class="sev-badge sev-success" style="font-size: 11px; padding: 2px 8px;">PUB</span>
+                    <% } else { %>
+                        <span class="sev-badge sev-warn" style="font-size: 11px; padding: 2px 8px;">DRAFT</span>
+                    <% } %>
+                    <%= new Date(item.created).toISOString().slice(0, 10) %>
+                </span>
+            </li>
+        <% }); %>
+    </ul>
+<% } %>

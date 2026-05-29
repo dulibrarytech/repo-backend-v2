@@ -1,0 +1,44 @@
+<%/* Metadata-refresh progress modal. The outer shell here is rendered
+     once when staff click "Refresh metadata"; the inner #metadata-progress
+     region polls every second for live counters and a progress bar.
+
+     The first render of the inner partial is triggered by HTMX's
+     `load` event so the modal opens with state immediately instead
+     of showing an empty bar while waiting for the first poll. */%>
+<div class="modal-header">
+    <div>
+        <h5 class="modal-title" id="modal-content-title" style="margin: 0;">Refreshing metadata</h5>
+        <div class="text-muted small" style="margin-top: 4px;">
+            Queued <%= count %> record<%= count === 1 ? '' : 's' %> for
+            <%= source_label %>.
+            <% if (!aspace_configured) { %>
+                <span class="text-warning"
+                      title="ArchivesSpace env vars are not set; the worker is idle.">
+                    ArchivesSpace not configured — refresh will not progress.
+                </span>
+            <% } %>
+        </div>
+    </div>
+    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+</div>
+<div class="modal-body">
+    <%/* hx-trigger fires on load AND every 1s. The progress partial
+         itself bakes in the same polling trigger so once the first
+         render lands, future polls flow through the swapped element.
+         role="status" + aria-live="polite" make per-second progress
+         updates audible to SR users without interrupting them. */%>
+    <div id="metadata-progress"
+         hx-get="<%= dashboard_base %>/jobs/<%= batch_uuid %>/progress"
+         hx-trigger="load, every 1s"
+         hx-swap="innerHTML"
+         role="status"
+         aria-live="polite"
+         aria-atomic="false">
+        <div class="text-muted small">Starting…</div>
+    </div>
+</div>
+<div class="modal-footer">
+    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+        Close
+    </button>
+</div>

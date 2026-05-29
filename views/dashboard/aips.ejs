@@ -1,0 +1,102 @@
+<h1 class="page-title">AIPs</h1>
+<p class="page-subtitle">
+    Browse and download preservation Archival Information Packages (AIPs)
+    stored in Wasabi S3.
+</p>
+
+<% if (!aip_store_enabled) { %>
+    <%/* Surface the feature flag's state plainly. Legacy rows still
+         visible / downloadable below; we just won't write new ones.
+         Same alert style the metadata-refresh admin page uses for
+         "ASpace not configured" warnings. */%>
+    <div class="alert alert-warning" role="alert" style="margin-bottom: 16px;">
+        <strong>AIP copy disabled.</strong>
+        AIP_STORE_ENABLED is off, so new ingests do not write to Wasabi.
+        Existing rows below remain browsable + downloadable.
+    </div>
+<% } %>
+
+<div class="content-card">
+    <div class="content-card-header">
+        <div class="control-group" style="flex: 1;">
+            <%/* Search across uuid, aip basename, and full wasabi_key.
+                 Server-side LIKE — fine for tbl_aip_store at its
+                 expected size (~20k legacy + ~hundreds/month from
+                 Stage 6). */%>
+            <input type="search" name="q" class="form-control"
+                   placeholder="Search PID, AIP filename, key…"
+                   value="<%= filters.q || '' %>"
+                   autocomplete="off"
+                   style="max-width: 360px;"
+                   hx-get="<%= dashboard_base %>/aips/list"
+                   hx-target="#aips-table"
+                   hx-trigger="keyup changed delay:300ms, search"
+                   hx-include="[name=source], [name=status]">
+        </div>
+
+        <div class="control-group">
+            <select name="source" class="form-select"
+                    hx-get="<%= dashboard_base %>/aips/list"
+                    hx-target="#aips-table"
+                    hx-trigger="change"
+                    hx-include="[name=q], [name=status]">
+                <option value="" <%= filters.source === '' ? 'selected' : '' %>>
+                    All sources
+                </option>
+                <option value="ingest_v2"
+                        <%= filters.source === 'ingest_v2' ? 'selected' : '' %>>
+                    v2 ingest
+                </option>
+                <option value="legacy_migration"
+                        <%= filters.source === 'legacy_migration' ? 'selected' : '' %>>
+                    Legacy migration
+                </option>
+            </select>
+
+            <select name="status" class="form-select"
+                    hx-get="<%= dashboard_base %>/aips/list"
+                    hx-target="#aips-table"
+                    hx-trigger="change"
+                    hx-include="[name=q], [name=source]">
+                <option value="" <%= filters.status === '' ? 'selected' : '' %>>
+                    All statuses
+                </option>
+                <option value="copied"
+                        <%= filters.status === 'copied' ? 'selected' : '' %>>
+                    Copied
+                </option>
+                <option value="in_progress"
+                        <%= filters.status === 'in_progress' ? 'selected' : '' %>>
+                    In progress
+                </option>
+                <option value="failed"
+                        <%= filters.status === 'failed' ? 'selected' : '' %>>
+                    Failed (retryable)
+                </option>
+                <option value="orphan"
+                        <%= filters.status === 'orphan' ? 'selected' : '' %>>
+                    Orphan (no AM record)
+                </option>
+            </select>
+
+            <span class="htmx-indicator">
+                <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+            </span>
+        </div>
+    </div>
+
+    <%/* aria-live="polite" mirrors the objects table — filter / search
+         updates are announced to SR users without interrupting typing. */%>
+    <div id="aips-table"
+         hx-get="<%= dashboard_base %>/aips/list"
+         hx-trigger="load"
+         hx-include="[name=q], [name=source], [name=status]"
+         hx-swap="innerHTML"
+         aria-live="polite"
+         aria-atomic="false">
+        <div class="empty-state">
+            <span class="spinner-border spinner-border-sm text-muted me-2"></span>
+            Loading…
+        </div>
+    </div>
+</div>

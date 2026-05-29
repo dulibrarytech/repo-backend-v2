@@ -1,0 +1,97 @@
+<%
+    // Per-package QA validation result card. Shown when staff click
+    // "Check Metadata" on a folder in the ASpace Description QA view.
+    //
+    // Inputs:
+    //   ok:       overall pass (every package validated cleanly)
+    //   folder:   collection folder name
+    //   packages: array of { name, uri, ok, errors[] }
+    //   error:    optional top-level error string
+    var ok = !!locals.ok;
+    var packages = locals.packages || [];
+    var passed = packages.filter(function (p) { return p && p.ok; }).length;
+    var failed = packages.length - passed;
+    var card_class = ok ? 'sev-success' : (locals.error ? 'sev-error' : 'sev-warn');
+%>
+<% if (locals.error && (!packages || packages.length === 0)) { %>
+    <div class="content-card sev-error"
+         style="margin-bottom: 16px; padding: 12px 16px;">
+        <strong>Check Metadata failed for <%= locals.folder || 'folder' %>:</strong>
+        <%= error %>
+    </div>
+<% } else { %>
+    <div class="content-card <%= card_class %>"
+         style="margin-bottom: 16px; padding: 12px 16px;">
+        <div style="display: flex; align-items: flex-start; gap: 12px;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                 style="flex-shrink: 0; margin-top: 2px;">
+                <% if (ok) { %>
+                    <polyline points="9 13 11 15 15 11"/>
+                <% } else { %>
+                    <line x1="9" y1="11" x2="15" y2="17"/>
+                    <line x1="15" y1="11" x2="9" y2="17"/>
+                <% } %>
+                <path d="M17 18a4 4 0 0 0 .8-7.9 6 6 0 0 0-11.4-2A5 5 0 0 0 7 18z"/>
+            </svg>
+            <div style="flex: 1; min-width: 0;">
+                <div style="font-weight: 600;">
+                    Check Metadata &mdash; <%= folder %>
+                </div>
+                <div style="margin-top: 4px;">
+                    <strong><%= passed %></strong> passed,
+                    <strong><%= failed %></strong> failed
+                    of <strong><%= packages.length %></strong> package<%= packages.length === 1 ? '' : 's' %>.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <% if (packages.length > 0) { %>
+        <div class="content-card" style="padding: 0;">
+            <table class="queue-table" style="margin: 0;">
+                <thead>
+                    <tr>
+                        <th>Package</th>
+                        <th>ArchivesSpace URI</th>
+                        <th style="width: 80px;">Result</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <% packages.forEach(function (p) { %>
+                        <tr>
+                            <td class="package-cell">
+                                <div class="package-name"><%= p.name %></div>
+                            </td>
+                            <td>
+                                <% if (p.uri) { %>
+                                    <code class="font-monospace small"
+                                          style="word-break: break-all;"><%= p.uri %></code>
+                                <% } else { %>
+                                    <span class="text-muted small">—</span>
+                                <% } %>
+                                <% if (p.errors && p.errors.length > 0) { %>
+                                    <ul style="margin: 4px 0 0; padding-left: 18px;
+                                               color: var(--sev-error, #b30000);
+                                               font-size: 12px;">
+                                        <% p.errors.forEach(function (e) { %>
+                                            <li><%= e %></li>
+                                        <% }); %>
+                                    </ul>
+                                <% } %>
+                            </td>
+                            <td>
+                                <% if (p.ok) { %>
+                                    <span class="sev-badge sev-success">Pass</span>
+                                <% } else { %>
+                                    <span class="sev-badge sev-error">Fail</span>
+                                <% } %>
+                            </td>
+                        </tr>
+                    <% }); %>
+                </tbody>
+            </table>
+        </div>
+    <% } %>
+<% } %>

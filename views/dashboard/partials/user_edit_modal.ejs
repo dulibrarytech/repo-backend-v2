@@ -1,0 +1,87 @@
+<%/* Edit user modal — body of #modal-content.
+
+     POST .../users/:id updates the row. On success the response is
+     empty + HX-Trigger fires `modal:close` (handled by dashboard.js
+     section 5) AND `users:created` (handled by the users-table div
+     which re-fetches the list). On validation error the response
+     re-renders this same partial with the error alert + retained
+     field values.
+
+     du_id is NOT rendered in the form at all — it's the user's
+     stable identifier across audit logs and tbl_ingest_jobs, and
+     surfacing it as an editable field invites accidental rename.
+     The header still shows it (read-only context) so staff know
+     which user they're editing. The REST API at
+     PUT /repo/users/:id still allows admin tooling to change it. */%>
+<div class="modal-header">
+    <div>
+        <h5 class="modal-title" id="modal-content-title" style="margin: 0;">Edit user</h5>
+        <div class="text-muted small font-monospace" style="margin-top: 4px;">
+            <%= user.du_id %>
+        </div>
+    </div>
+    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+</div>
+<div class="modal-body">
+    <form id="user-edit-form"
+          hx-post="<%= dashboard_base %>/users/<%= user.id %>"
+          hx-target="#modal-content"
+          hx-swap="innerHTML">
+        <% if (typeof error !== 'undefined' && error) { %>
+            <%/* role="alert" announces validation failures to SR
+                 users immediately on re-render — same pattern as the
+                 create modal so the two forms feel consistent. */%>
+            <div id="user-form-error" class="alert alert-danger py-2 small mb-2" role="alert">
+                <%= error %>
+                <% if (Array.isArray(details) && details.length > 0) { %>
+                    <ul class="mb-0 mt-1">
+                        <% details.forEach(function(d) { %>
+                            <li><%= typeof d === 'string' ? d : JSON.stringify(d) %></li>
+                        <% }); %>
+                    </ul>
+                <% } %>
+            </div>
+        <% } %>
+        <%/* Every editable field is required — same badge treatment
+             as the create modal so the two forms feel consistent. */%>
+        <div class="mb-2">
+            <label class="form-label small mb-1" for="edit-email">
+                Email <span class="required-badge">required</span>
+            </label>
+            <input id="edit-email" name="email" type="email"
+                   class="form-control form-control-sm"
+                   required
+                   value="<%= (form && form.email) || '' %>">
+        </div>
+        <div class="row g-2">
+            <div class="col">
+                <label class="form-label small mb-1" for="edit-first">
+                    First name <span class="required-badge">required</span>
+                </label>
+                <input id="edit-first" name="first_name"
+                       class="form-control form-control-sm"
+                       required
+                       value="<%= (form && form.first_name) || '' %>">
+            </div>
+            <div class="col">
+                <label class="form-label small mb-1" for="edit-last">
+                    Last name <span class="required-badge">required</span>
+                </label>
+                <input id="edit-last" name="last_name"
+                       class="form-control form-control-sm"
+                       required
+                       value="<%= (form && form.last_name) || '' %>">
+            </div>
+        </div>
+    </form>
+</div>
+<div class="modal-footer">
+    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+    <button type="submit"
+            class="btn btn-primary"
+            form="user-edit-form">
+        <span class="htmx-indicator spinner-border spinner-border-sm me-1"
+              role="status" aria-hidden="true"></span>
+        Save changes
+    </button>
+</div>

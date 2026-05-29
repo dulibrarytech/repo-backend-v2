@@ -1,0 +1,201 @@
+<%/* Single row of the AIPs table. Rendered both as part of
+     /aips/list and individually after /aips/:id/retry so the table
+     updates in place.
+
+     The `id="aip-row-<id>"` outer wrapper is required so the retry
+     handler's HTMX response (hx-swap="outerHTML") replaces this exact
+     row rather than the whole table.
+
+     Styling mirrors collection_row.ejs / object_row.ejs (package-cell
+     + package-name + package-sub, sev-badge for status, kebab-btn for
+     actions) so the AIPs view reads as part of the same family of
+     list pages. */%>
+<tr id="aip-row-<%= item.id %>">
+    <td class="package-cell">
+        <%/* Title + identifiers, mirroring the collections row:
+             - package-name carries the title (or a fallback if no
+               title can be resolved)
+             - package-sub stacks the PID and AIP filename as
+               monospace muted lines, same shape as the
+               handle / uri / pid subtitle on collection rows */%>
+        <% var aip_filename =
+            item.aip ||
+            (item.wasabi_key ? item.wasabi_key.split('/').pop() : ''); %>
+        <div class="package-name">
+            <% if (item.uuid) { %>
+                <%/* Title links to the objects-page filtered view by
+                     this PID — primary one-click affordance, same as
+                     the title-as-link on collection_row. */%>
+                <a href="<%= dashboard_base %>/objects?q=<%= encodeURIComponent(item.uuid) %>"
+                   style="color: inherit;">
+                    <%= item._object_title || '(untitled)' %>
+                </a>
+            <% } else { %>
+                <%= item._object_title || '(untitled)' %>
+            <% } %>
+        </div>
+        <div class="package-sub" style="font-style: normal; line-height: 1.5;">
+            <% if (item.uuid) { %>
+                <%/* PID rendered as a link with the same styling as
+                     the handle on collection rows: font-monospace at
+                     12px, no text-muted so it inherits the default
+                     dashboard link color (DU maroon). Clicking takes
+                     the operator to the objects page pre-filtered to
+                     this PID — same affordance as before, but now
+                     visually consistent with the handle convention. */%>
+                <div>
+                    <a href="<%= dashboard_base %>/objects?q=<%= encodeURIComponent(item.uuid) %>"
+                       class="font-monospace"
+                       style="font-size: 12px; word-break: break-all;"
+                       title="<%= item.uuid %>">
+                        <%= item.uuid %>
+                    </a>
+                </div>
+            <% } %>
+            <% if (aip_filename) { %>
+                <%/* AIP filename stays text-muted — it's informational
+                     (the download is the kebab action), not a link.
+                     Keeping it muted creates a clear visual hierarchy:
+                     title (default) > PID (link color) > filename
+                     (muted secondary). */%>
+                <div class="font-monospace text-muted"
+                     style="font-size: 12px; word-break: break-all;"
+                     title="<%= item.wasabi_key || item.aip %>">
+                    <%= aip_filename %>
+                </div>
+            <% } %>
+        </div>
+    </td>
+
+    <td>
+        <%/* Status uses the sev-badge palette — same as collections /
+             objects so the visual language is consistent across all
+             three list pages. Mapping:
+                copied   → sev-success (green)
+                failed   → sev-warn    (yellow — retryable)
+                orphan   → sev-fatal   (red — terminal, no retry)
+                pending  → sev-info    (blue — work in progress) */%>
+        <% if (item.display_status === 'copied') { %>
+            <span class="sev-badge sev-success">Copied</span>
+        <% } else if (item.display_status === 'orphan') { %>
+            <span class="sev-badge sev-fatal"
+                  title="Archivematica has no record of this AIP UUID; retry can't recover it.">
+                Orphan
+            </span>
+        <% } else if (item.display_status === 'failed') { %>
+            <span class="sev-badge sev-warn">Failed</span>
+        <% } else { %>
+            <span class="sev-badge sev-info">In progress</span>
+        <% } %>
+        <% if (item.attempts && item.attempts > 0) { %>
+            <span class="text-muted small" title="AIP copy retry count">
+                · <%= item.attempts %> attempt<%= item.attempts === 1 ? '' : 's' %>
+            </span>
+        <% } %>
+        <%/* Inline failure / orphan reason. Truncates at the column
+             boundary; full text in title= for hover-to-read-all. */%>
+        <% if (
+            (item.display_status === 'failed' || item.display_status === 'orphan')
+            && (item.error || item.message)
+        ) { %>
+            <% var err_text = item.error || item.message; %>
+            <%/* Wrap inside the column instead of truncating to a
+                 single line. With table-layout: fixed in aips_table.ejs,
+                 the Status column stays at its colgroup-defined 20%
+                 and this text breaks onto multiple lines to fit.
+                 word-break: break-word lets long unbreakable runs
+                 (mostly UUIDs in error messages) wrap at any
+                 character — otherwise a long UUID would overflow
+                 the column even with the wrap-on-spaces default. */%>
+            <div class="text-muted small mt-1"
+                 title="<%= err_text %>"
+                 style="word-break: break-word; white-space: normal;">
+                <%= err_text %>
+            </div>
+        <% } %>
+    </td>
+
+    <td>
+        <%/* Size + Downloads use the same shape as the Objects column
+             on collection_row.ejs: a bold count + a muted descriptor.
+             For AIPs we just show the size and download count plainly
+             — no parenthetical secondary value. */%>
+        <% if (item.bytes !== null && item.bytes !== undefined) { %>
+            <strong><%= item._bytes_human %></strong>
+        <% } else { %>
+            <span class="text-muted">—</span>
+        <% } %>
+    </td>
+
+    <td>
+        <strong><%= (item.downloaded || 0).toLocaleString() %></strong>
+    </td>
+
+    <td class="actions-cell">
+        <%/* Only render the kebab when there's at least one action
+             available. Orphans get neither Download (no file in
+             Wasabi) nor Retry (AM has no record); showing an empty
+             dropdown menu is worse UX than no kebab.
+
+             kebab-btn + filled-circle SVG matches collection_row.ejs
+             so the affordance reads identically across list pages. */%>
+        <% var has_action = item.display_status === 'copied' || item.display_status === 'failed'; %>
+        <% if (has_action) { %>
+        <div class="dropdown">
+            <button type="button" class="kebab-btn"
+                    data-bs-toggle="dropdown"
+                    aria-expanded="false"
+                    aria-label="Actions for <%= item.aip || item.uuid %>"
+                    title="Actions">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <circle cx="12" cy="5" r="1.75"/>
+                    <circle cx="12" cy="12" r="1.75"/>
+                    <circle cx="12" cy="19" r="1.75"/>
+                </svg>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end">
+                <% if (item.display_status === 'copied') { %>
+                    <li>
+                        <%/* Download — anchor so the browser handles
+                             the 302 redirect to the presigned Wasabi
+                             URL natively. target="_blank" keeps the
+                             dashboard tab in place. */%>
+                        <a href="<%= dashboard_base %>/aips/<%= item.id %>/download"
+                           target="_blank"
+                           rel="noopener"
+                           class="dropdown-item">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="7 10 12 15 17 10"/>
+                                <line x1="12" y1="15" x2="12" y2="3"/>
+                            </svg>
+                            Download
+                        </a>
+                    </li>
+                <% } %>
+                <% if (item.display_status === 'failed') { %>
+                    <li>
+                        <button type="button" class="dropdown-item"
+                                hx-post="<%= dashboard_base %>/aips/<%= item.id %>/retry"
+                                hx-target="#aip-row-<%= item.id %>"
+                                hx-swap="outerHTML"
+                                data-confirm="Retry the AIP preservation copy? The previous failure (<%= (item.error || item.message || 'unknown') %>) will be cleared."
+                                data-confirm-title="Retry AIP copy?"
+                                data-confirm-label="Retry">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <polyline points="23 4 23 10 17 10"/>
+                                <polyline points="1 20 1 14 7 14"/>
+                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/>
+                                <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/>
+                            </svg>
+                            Retry copy
+                        </button>
+                    </li>
+                <% } %>
+            </ul>
+        </div>
+        <% } %>
+    </td>
+</tr>

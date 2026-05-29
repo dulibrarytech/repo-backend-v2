@@ -1,0 +1,82 @@
+<%/* Partial returned by GET /dashboard/aips/list. Wraps the table +
+     pagination footer. Inserted into #aips-table.
+
+     Uses the same `queue-table` class + pagination shape as
+     collections_table.ejs and objects_table.ejs so the three list
+     pages render with identical visual weight. The `queue-table`
+     CSS handles column sizing — no <colgroup> needed. */%>
+<% if (!items || items.length === 0) { %>
+    <div class="empty-state">No AIPs match your filters.</div>
+<% } else { %>
+    <%/* table-layout: fixed is load-bearing here: it makes the
+         browser honor the <colgroup> percentages as ACTUAL widths
+         rather than mere suggestions. Without it (the default
+         `auto`), a long inline error in the Status column would
+         expand the column past 20% to fit the text on one line,
+         and the Object column would get squeezed by the overflow. */%>
+    <table class="queue-table" style="table-layout: fixed; width: 100%;">
+        <%/* Object gets the wider slot since each row stacks three
+             lines (title / PID / AIP filename), all of which can
+             approach the column boundary. Status is comfortable at
+             20% — the badge is fixed-width and the inline failure
+             / orphan reason wraps within the column (see aip_row.ejs
+             status cell styling). */%>
+        <colgroup>
+            <col style="width: 52%;">    <%/* Object — title + PID + AIP filename */%>
+            <col style="width: 20%;">    <%/* Status badge + inline error */%>
+            <col style="width: 8%;">     <%/* Size */%>
+            <col style="width: 10%;">    <%/* Downloads count */%>
+            <col style="width: 10%;">    <%/* Actions kebab */%>
+        </colgroup>
+        <thead>
+            <tr>
+                <th>Object</th>
+                <th>Status</th>
+                <th>Size</th>
+                <th>Downloads</th>
+                <th class="actions-cell">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% items.forEach(function(item) { %>
+                <%- include('./aip_row', { item: item, dashboard_base: dashboard_base }) %>
+            <% }) %>
+        </tbody>
+    </table>
+
+    <% if (total > page_size) { %>
+        <%/* Pagination — same markup as collections_table for visual
+             consistency. URL only carries page + page_size; the
+             filter params (q, source, status) flow in via the
+             #aips-table div's hx-include attribute. Embedding them
+             here would duplicate with hx-include and Express would
+             parse req.query.q as ['','foo']. Be careful editing. */%>
+        <div class="app-pagination">
+            <div class="results-count">
+                Showing <%= (page - 1) * page_size + 1 %>–<%= Math.min(page * page_size, total) %>
+                of <%= total.toLocaleString() %>
+            </div>
+            <nav class="page-controls" aria-label="Pagination">
+                <%
+                    var prev = Math.max(1, page - 1);
+                    var next = page * page_size < total ? page + 1 : page;
+                %>
+                <button type="button"
+                        <%= page === 1 ? 'disabled' : '' %>
+                        hx-get="<%= dashboard_base %>/aips/list?page=<%= prev %>&page_size=<%= page_size %>"
+                        hx-target="#aips-table"
+                        hx-swap="innerHTML">
+                    ← Previous
+                </button>
+                <span class="current">Page <%= page %></span>
+                <button type="button"
+                        <%= page * page_size >= total ? 'disabled' : '' %>
+                        hx-get="<%= dashboard_base %>/aips/list?page=<%= next %>&page_size=<%= page_size %>"
+                        hx-target="#aips-table"
+                        hx-swap="innerHTML">
+                    Next →
+                </button>
+            </nav>
+        </div>
+    <% } %>
+<% } %>

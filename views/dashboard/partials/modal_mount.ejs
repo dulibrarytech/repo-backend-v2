@@ -1,0 +1,22 @@
+<%/* Generic modal shell. HTMX swaps innerHTML of #modal-content (a
+     full modal-header + body + footer fragment) and dashboard.js shows
+     the modal in response. Reusable across pages — any partial that
+     looks like the inside of a Bootstrap modal works. */%>
+<%/* role="dialog" is set statically here even though Bootstrap 5 also
+     applies it on show — having it in the DOM at load-time helps tools
+     that scan the static markup. aria-hidden="true" is kept; Bootstrap
+     flips it on show/hide.
+
+     aria-labelledby points at an id that EVERY swapped modal partial
+     puts on its title <h5> (id="modal-content-title"). When the mount
+     is empty, the reference resolves to nothing (no-op); once HTMX
+     swaps content in, the title element matches and the dialog's
+     accessible name resolves correctly. */%>
+<div id="modal-mount" class="modal fade" tabindex="-1" role="dialog"
+     aria-labelledby="modal-content-title" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content" id="modal-content">
+            <%/* HTMX swaps content here. */%>
+        </div>
+    </div>
+</div>

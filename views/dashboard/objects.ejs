@@ -1,0 +1,76 @@
+<h1 class="page-title">Objects</h1>
+<p class="page-subtitle">Browse, search, publish, suppress, or remove repository objects.</p>
+
+<div class="content-card">
+    <div class="content-card-header">
+        <div class="control-group" style="flex: 1;">
+            <input type="search" name="q" class="form-control"
+                   placeholder="Search PID, handle, file name, collection…"
+                   value="<%= filters.q || '' %>"
+                   autocomplete="off"
+                   style="max-width: 360px;"
+                   hx-get="<%= dashboard_base %>/objects/list"
+                   hx-target="#objects-table"
+                   hx-trigger="keyup changed delay:300ms, search"
+                   hx-include="[name=is_published], [name=collection]">
+        </div>
+
+        <div class="control-group">
+            <select name="is_published" class="form-select"
+                    hx-get="<%= dashboard_base %>/objects/list"
+                    hx-target="#objects-table"
+                    hx-trigger="change"
+                    hx-include="[name=q], [name=collection]">
+                <option value="" <%= filters.is_published === '' ? 'selected' : '' %>>All states</option>
+                <option value="1" <%= filters.is_published === '1' ? 'selected' : '' %>>Published</option>
+                <option value="0" <%= filters.is_published === '0' ? 'selected' : '' %>>Unpublished</option>
+            </select>
+
+            <input type="text" name="collection" class="form-control"
+                   placeholder="Collection UUID exact match…"
+                   value="<%= filters.collection || '' %>"
+                   style="width: 260px;"
+                   hx-get="<%= dashboard_base %>/objects/list"
+                   hx-target="#objects-table"
+                   hx-trigger="keyup changed delay:400ms, search"
+                   hx-include="[name=q], [name=is_published]">
+
+            <span class="htmx-indicator">
+                <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+            </span>
+        </div>
+    </div>
+
+    <%/* aria-live="polite" + aria-atomic="false" announces filter /
+         search updates to screen-reader users when the table swaps.
+         Polite (not assertive) defers the announcement to the next
+         quiet moment so it doesn't interrupt typing in the search
+         input. Atomic=false means only the changed nodes are read,
+         not the whole table each time. */%>
+    <%/* hx-include here is load-bearing: WITHOUT it the load trigger
+         (and any descendant button click — e.g. pagination) fires a
+         GET /objects/list with no query params, so arriving at
+         /dashboard/objects?q=<pid> would populate the search input
+         from the URL but render the unfiltered default page. With
+         it, every request from inside this div picks up the current
+         input values for q / is_published / collection, so URL-
+         driven filtering works on first paint and pagination keeps
+         the filter set on subsequent clicks.
+
+         Pagination URLs in partials/objects_table.ejs have been
+         stripped of these filter params for the same reason as the
+         AIPs table footer: they'd duplicate with hx-include and
+         Express would parse req.query.q as ['','foo']. */%>
+    <div id="objects-table"
+         hx-get="<%= dashboard_base %>/objects/list"
+         hx-trigger="load, objects:refresh from:body"
+         hx-include="[name=q], [name=is_published], [name=collection]"
+         hx-swap="innerHTML"
+         aria-live="polite"
+         aria-atomic="false">
+        <div class="empty-state">
+            <span class="spinner-border spinner-border-sm text-muted me-2"></span>
+            Loading…
+        </div>
+    </div>
+</div>

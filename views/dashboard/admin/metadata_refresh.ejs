@@ -1,0 +1,51 @@
+<%/* Admin: system-wide metadata refresh.
+
+     Mirrors the indexer admin page in layout — one polled status
+     panel + one action area, both server-rendered. The status panel
+     itself surfaces the Start / Cancel buttons depending on whether
+     there's an active batch. */%>
+<h1 class="page-title">Metadata Refresh</h1>
+<p class="page-subtitle">
+    Re-fetch metadata from ArchivesSpace for every active object and
+    collection. Runs in the background — paced so on-demand refreshes
+    (kebab → "Refresh metadata") still get priority and are never
+    starved by a long bulk job. Per-row failures retry up to
+    <code>METADATA_MAX_ATTEMPTS</code> times before landing in the
+    dead-letter set, where they're available for inspection but no
+    longer consume worker capacity.
+</p>
+
+<div class="content-card">
+    <div class="content-card-header">
+        <h2 style="font-size: 18px; margin: 0;">Status</h2>
+        <div class="control-group">
+            <span class="htmx-indicator">
+                <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+            </span>
+        </div>
+    </div>
+
+    <%/* Poll every 2s. The status query is two small indexed reads
+         (the batch row + an activity snapshot capped at 13 rows
+         total) so this is cheap, and 2s is the cadence that makes
+         "currently fetching" feel real-time even at the worker's
+         ~12-row/min steady state.
+
+         Critically, the Start/Cancel buttons live INSIDE this
+         polled region. Without intervention, a polling tick mid-
+         confirm-modal would swap the partial — the original button
+         DOM detaches — and the confirm modal's proceed-click on
+         the orphaned button no-ops.
+         dashboard.js solves this with an htmx:beforeRequest hook
+         that aborts polling requests (any element whose hx-trigger
+         contains `every`) while `body.htmx-confirm-pending` is set.
+         We don't use hx-trigger's `[filter-expr]` syntax because
+         htmx evaluates it via new Function(), which our CSP
+         (script-src without 'unsafe-eval') correctly forbids. */%>
+    <div id="metadata-refresh-status"
+         hx-get="<%= dashboard_base %>/admin/metadata-refresh/status"
+         hx-trigger="load, every 2s"
+         hx-swap="innerHTML">
+        <div class="text-muted small p-3">Loading…</div>
+    </div>
+</div>

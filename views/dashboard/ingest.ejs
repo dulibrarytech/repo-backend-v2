@@ -1,0 +1,114 @@
+<nav class="small text-muted mb-2" aria-label="Breadcrumb">
+    <a href="<%= dashboard_base %>/collections" style="color: inherit;">← Collection Management</a>
+</nav>
+
+<h1 class="page-title">Ingest queue</h1>
+<p class="page-subtitle">
+    Packages flowing through the 5-stage Archivematica pipeline. Use the actions menu
+    (<strong>⋮</strong>) on rows that have halted to roll back or retry.
+</p>
+
+<div class="content-card">
+    <div class="content-card-header">
+        <div class="control-group" style="flex: 1;">
+            <%/* form-control-sm matches the height of form-select-sm
+                 on the State / Show dropdowns below — keeps all three
+                 controls visually aligned on the same row. */%>
+            <input type="search" name="batch"
+                   class="form-control form-control-sm"
+                   placeholder="Filter by batch (folder name)…"
+                   value="<%= filters.batch || '' %>"
+                   autocomplete="off"
+                   style="max-width: 360px;"
+                   hx-get="<%= dashboard_base %>/ingest/list"
+                   hx-target="#ingest-table"
+                   hx-trigger="keyup changed delay:300ms, search"
+                   hx-include="[name=status], [name=is_complete]">
+        </div>
+        <div class="control-group">
+            <%/* form-label + mb-0 zeroes Bootstrap's default label
+                 margin; width:auto + form-select-sm on the select keeps
+                 the dropdown from stretching to 100% (which used to
+                 push the label onto its own row above the dropdown).
+                 Matches the ingest_history filter row pattern. */%>
+            <label for="status" class="form-label mb-0 text-muted">State</label>
+            <select id="status" name="status"
+                    class="form-select form-select-sm"
+                    style="width: auto;"
+                    hx-get="<%= dashboard_base %>/ingest/list"
+                    hx-target="#ingest-table"
+                    hx-trigger="change"
+                    hx-include="[name=batch], [name=is_complete]">
+                <option value="" <%= !filters.status ? 'selected' : '' %>>(all)</option>
+                <optgroup label="In progress">
+                    <option value="PENDING" <%= filters.status === 'PENDING' ? 'selected' : '' %>>PENDING</option>
+                    <option value="PROCESSING_METADATA" <%= filters.status === 'PROCESSING_METADATA' ? 'selected' : '' %>>PROCESSING_METADATA</option>
+                    <option value="UPLOADING" <%= filters.status === 'UPLOADING' ? 'selected' : '' %>>UPLOADING</option>
+                    <option value="TRANSFER_IN_PROGRESS" <%= filters.status === 'TRANSFER_IN_PROGRESS' ? 'selected' : '' %>>TRANSFER_IN_PROGRESS</option>
+                    <option value="INGEST_IN_PROGRESS" <%= filters.status === 'INGEST_IN_PROGRESS' ? 'selected' : '' %>>INGEST_IN_PROGRESS</option>
+                    <option value="WAITING_FOR_DURACLOUD" <%= filters.status === 'WAITING_FOR_DURACLOUD' ? 'selected' : '' %>>WAITING_FOR_DURACLOUD</option>
+                </optgroup>
+                <optgroup label="Halted">
+                    <option value="UPLOAD_TIMEOUT" <%= filters.status === 'UPLOAD_TIMEOUT' ? 'selected' : '' %>>UPLOAD_TIMEOUT</option>
+                    <option value="APPROVE_TIMEOUT" <%= filters.status === 'APPROVE_TIMEOUT' ? 'selected' : '' %>>APPROVE_TIMEOUT</option>
+                    <option value="TRANSFER_STATUS_TIMEOUT" <%= filters.status === 'TRANSFER_STATUS_TIMEOUT' ? 'selected' : '' %>>TRANSFER_STATUS_TIMEOUT</option>
+                    <option value="INGEST_STATUS_TIMEOUT" <%= filters.status === 'INGEST_STATUS_TIMEOUT' ? 'selected' : '' %>>INGEST_STATUS_TIMEOUT</option>
+                    <option value="DURACLOUD_TIMEOUT" <%= filters.status === 'DURACLOUD_TIMEOUT' ? 'selected' : '' %>>DURACLOUD_TIMEOUT</option>
+                    <option value="FAILED" <%= filters.status === 'FAILED' ? 'selected' : '' %>>FAILED</option>
+                    <option value="AS_METADATA_INVALID" <%= filters.status === 'AS_METADATA_INVALID' ? 'selected' : '' %>>AS_METADATA_INVALID</option>
+                    <option value="AS_METADATA_DRIFT" <%= filters.status === 'AS_METADATA_DRIFT' ? 'selected' : '' %>>AS_METADATA_DRIFT</option>
+                    <option value="INGEST_HALTED" <%= filters.status === 'INGEST_HALTED' ? 'selected' : '' %>>INGEST_HALTED</option>
+                </optgroup>
+                <optgroup label="Terminal">
+                    <option value="COMPLETE" <%= filters.status === 'COMPLETE' ? 'selected' : '' %>>COMPLETE</option>
+                    <option value="ROLLED_BACK_TO_READY" <%= filters.status === 'ROLLED_BACK_TO_READY' ? 'selected' : '' %>>ROLLED_BACK_TO_READY</option>
+                    <option value="AM_DELETION_REQUESTED" <%= filters.status === 'AM_DELETION_REQUESTED' ? 'selected' : '' %>>AM_DELETION_REQUESTED</option>
+                </optgroup>
+            </select>
+        </div>
+        <div class="control-group">
+            <label for="is_complete" class="form-label mb-0 text-muted">Show</label>
+            <select id="is_complete" name="is_complete"
+                    class="form-select form-select-sm"
+                    style="width: auto;"
+                    hx-get="<%= dashboard_base %>/ingest/list"
+                    hx-target="#ingest-table"
+                    hx-trigger="change"
+                    hx-include="[name=batch], [name=status]">
+                <%/* Default is "Open only" — hides terminal rows so a re-submit
+                     after cancel + return-to-packaging doesn't look like
+                     a duplicate. Staff can switch to "All rows" or
+                     "Closed only" to audit terminal rows. */%>
+                <option value="0" <%= filters.is_complete === '0' ? 'selected' : '' %>>Open only</option>
+                <option value="1" <%= filters.is_complete === '1' ? 'selected' : '' %>>Closed only</option>
+                <option value="all" <%= filters.is_complete === 'all' ? 'selected' : '' %>>All rows</option>
+            </select>
+            <span class="htmx-indicator">
+                <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+            </span>
+        </div>
+    </div>
+
+    <%/* Live queue table. Three triggers:
+         - load:          first paint
+         - queue:refresh from:body: fires after a per-row mutation
+           (cancel / rollback / return-to-packaging) so the row's
+           new state shows immediately without waiting for the poll
+         - every 5s:      periodic refresh while staff watches the
+           queue. Picks up worker state transitions (PENDING →
+           PROCESSING_METADATA → QA_COMPLETE → UPLOADING → …) so
+           the row doesn't appear stuck. Naming note: we previously
+           listened for "ingest:refresh" while emitters used
+           "queue:refresh" — neither side matched, so the
+           live-refresh feature was silently broken. */%>
+    <div id="ingest-table"
+         hx-get="<%= dashboard_base %>/ingest/list"
+         hx-trigger="load, queue:refresh from:body, every 5s"
+         hx-include="[name=batch], [name=status], [name=is_complete]"
+         hx-swap="innerHTML">
+        <div class="empty-state">
+            <span class="spinner-border spinner-border-sm text-muted me-2"></span>
+            Loading…
+        </div>
+    </div>
+</div>
