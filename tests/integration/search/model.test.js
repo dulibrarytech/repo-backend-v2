@@ -55,17 +55,64 @@ describe('search/model — DB integration', () => {
         expect(r.total).toBe(1);
     });
 
-    it('q without filters returns the indexed-column hits only, not long-text', async () => {
-        // Stage a row whose only "photo"-ish text is in display_record
-        // (a long-text column). search MUST NOT find it — that's the
-        // search/repo separation.
+    it('matches text stored only in display_record (title + descriptive metadata)', async () => {
+        // The title lives ONLY in the display_record JSON envelope —
+        // there's no dedicated title column. Searching it is the whole
+        // point of including display_record in SEARCHABLE_COLUMNS.
         await db_helper.seed_object({
             file_name: 'unrelated.dat',
             handle: 'https://hdl.invalid/x',
             is_member_of_collection: 'codu:misc',
+            display_record: JSON.stringify({
+                title: 'A photo of the quad',
+                abstract: 'springtime',
+            }),
         });
         const r = await search_model.search({ q: 'photo' });
-        expect(r.total).toBe(0);
+        expect(r.total).toBe(1);
+    });
+
+    it('finds a title by plural query (singularization): "Former patients" → "Former patient ..."', async () => {
+        // The exact scenario reported by staff: searching the plural
+        // "patients" must surface a record titled "Former patient ...".
+        await db_helper.seed_object({
+            display_record: JSON.stringify({
+                title: 'Former patient in Ford county sanatorium, 1938',
+            }),
+        });
+        await db_helper.seed_object({
+            display_record: JSON.stringify({ title: 'Unrelated landscape' }),
+        });
+        const r = await search_model.search({ q: 'Former patients' });
+        expect(r.total).toBe(1);
+        const enriched = require('../../../libs/object_projection').enrich(r.items[0]);
+        expect(enriched.title).toMatch(/^Former patient in Ford county/);
+    });
+
+    it('ANDs multi-word queries across the whole display_record, order-independent', async () => {
+        await db_helper.seed_object({
+            display_record: JSON.stringify({
+                title: 'Former patient in Ford county sanatorium',
+            }),
+        });
+        // Both tokens present (out of order) → match.
+        const hit = await search_model.search({ q: 'county Former' });
+        expect(hit.total).toBe(1);
+        // One token absent → no match (AND semantics, not OR).
+        const miss = await search_model.search({ q: 'Former zebra' });
+        expect(miss.total).toBe(0);
+    });
+
+    it('searches descriptive metadata beyond the title (subjects, names, dates)', async () => {
+        await db_helper.seed_object({
+            display_record: JSON.stringify({
+                title: 'Untitled photograph',
+                f_subjects: ['Tuberculosis', 'Public health'],
+                display_record: { dates: [{ expression: '1938' }] },
+            }),
+        });
+        expect((await search_model.search({ q: 'tuberculosis' })).total).toBe(1);
+        expect((await search_model.search({ q: '1938' })).total).toBe(1);
     });
 
     it('respects the is_published filter alongside q', async () => {

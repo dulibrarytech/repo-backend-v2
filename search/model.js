@@ -2,12 +2,32 @@
 
 // Object search over tbl_objects.
 //
-// MariaDB-backed LIKE search across the small/indexed columns:
-// pid, handle, mods_id, file_name, sip_uuid, is_member_of_collection.
-// We deliberately do NOT scan the long-text columns (mods,
-// display_record, transcript, transcript_search) — they're huge and
-// unindexed; that's the ES indexer's job. Phase 8 will swap this
-// implementation with an ES-backed one behind the same interface.
+// MariaDB-backed LIKE search. Two tiers of columns:
+//
+//   1. Small/indexed identity columns — pid, handle, mods_id,
+//      file_name, sip_uuid, is_member_of_collection. Cheap to match.
+//
+//   2. display_record — the denormalized JSON envelope the dashboard
+//      renders from. It carries title, abstract, subjects, names,
+//      dates AND the full nested metadata record, so matching it lets
+//      staff search by ANYTHING shown on an object (the #1 thing they
+//      actually search by — title — lives only here, never in a
+//      dedicated column). This is a long-text column with no index, so
+//      the match is a table scan; that's an accepted cost for the
+//      staff dashboard search (NOT the public path — that's ES). The
+//      transcript/transcript_search/mods blobs stay OUT: transcripts
+//      are huge and noisy, and mods duplicates what display_record
+//      already nests. Phase 8 swaps this whole implementation for an
+//      ES-backed one (with real stemming) behind the same interface.
+//
+// Query handling: `q` is split into whitespace tokens; each token must
+// match (AND) somewhere in the searchable set (OR across columns), so
+// word order doesn't matter and "Former patient" matches a title like
+// "Former patient in Ford county ..." even with words between them. A
+// light singularization (trailing "s" → stem) lets a plural query like
+// "patients" match a stored "patient". This BROADENS recall (never
+// hides a hit) — the safe direction for a lookup tool; precise
+// stemming is the ES search's job.
 //
 // Filters available alongside `q`:
 //   collection      — exact match on is_member_of_collection
@@ -30,7 +50,16 @@ const SEARCHABLE_COLUMNS = [
     'file_name',
     'sip_uuid',
     'is_member_of_collection',
+    // Long-text JSON envelope — title/abstract/subjects/names/dates +
+    // the full nested record. Unindexed (table scan); see module
+    // docstring for the rationale + the ES migration note.
+    'display_record',
 ];
+
+// Cap on tokens per query so a pathological 40-word search (q is
+// capped at 200 chars in normalize) can't fan out into 40 ANDed
+// table-scan predicates. 12 is far more than any real staff query.
+const MAX_QUERY_TOKENS = 12;
 
 const PUBLIC_FIELDS = [
     'id',
@@ -108,19 +137,56 @@ function escape_like(value) {
     return value.replace(/[\\%_]/g, (ch) => '\\' + ch);
 }
 
-// `q` is matched as a case-insensitive substring against each
-// searchable column. UUIDs are caught by the pid/sip_uuid match;
-// handle URLs are caught by the handle match; file names by file_name.
+// Split a query into whitespace-delimited tokens, capped at
+// MAX_QUERY_TOKENS. Empty fragments (from runs of whitespace) drop out.
+function tokenize(q) {
+    return q
+        .split(/\s+/)
+        .map((t) => t.trim())
+        .filter(Boolean)
+        .slice(0, MAX_QUERY_TOKENS);
+}
+
+// Light singularization. Collapses a single trailing plural "s" so a
+// query token like "patients" becomes "patient" — and because we match
+// as a substring, that stem also matches the plural form in stored
+// data ("patient" ⊂ "patients"). So one stemmed needle covers both
+// singular and plural. Rules:
+//   - only tokens longer than 3 chars (don't mangle "is", "los", IDs)
+//   - the char before the trailing "s" must be a letter/digit
+//   - skip words ending in "ss" ("class", "address") — stripping there
+//     reads wrong and the substring match already covers them
+// This can only BROADEN matches (the stem is a substring of the
+// original token), so it never hides the row the user is looking for.
+function stem_token(token) {
+    if (token.length > 3 && /[a-z0-9]s$/i.test(token) && !/ss$/i.test(token)) {
+        return token.slice(0, -1);
+    }
+    return token;
+}
+
+// `q` is tokenized; each token must match (AND) as a case-insensitive
+// substring in at least one searchable column (OR across columns).
+// Identity columns (pid/sip_uuid/handle/file_name) catch UUIDs, handle
+// URLs, and filenames; display_record catches title + all descriptive
+// metadata. Successive query_builder.where() calls AND together, so the
+// per-token OR-groups combine as (tokenA) AND (tokenB) AND ...
 function apply_text_search(query_builder, q) {
     if (!q || q.length === 0) return;
-    const needle = '%' + escape_like(q) + '%';
-    query_builder.where((sub) => {
-        for (const col of SEARCHABLE_COLUMNS) {
-            // sqlite is case-insensitive on ASCII by default; mysql
-            // collations vary. Using LIKE keeps both engines happy.
-            sub.orWhereILike ? sub.orWhereILike(col, needle) : sub.orWhere(col, 'LIKE', needle);
-        }
-    });
+    const tokens = tokenize(q);
+    if (tokens.length === 0) return;
+    for (const token of tokens) {
+        const needle = '%' + escape_like(stem_token(token)) + '%';
+        query_builder.where((sub) => {
+            for (const col of SEARCHABLE_COLUMNS) {
+                // sqlite is case-insensitive on ASCII by default; mysql
+                // collations vary. Using LIKE keeps both engines happy.
+                sub.orWhereILike
+                    ? sub.orWhereILike(col, needle)
+                    : sub.orWhere(col, 'LIKE', needle);
+            }
+        });
+    }
 }
 
 function apply_filters(qb, f) {
@@ -182,4 +248,6 @@ module.exports = {
     SEARCHABLE_COLUMNS,
     PUBLIC_FIELDS,
     _escape_like: escape_like,
+    _tokenize: tokenize,
+    _stem_token: stem_token,
 };
