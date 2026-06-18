@@ -62,12 +62,15 @@ function build_query(opts = {}) {
     const filter = [];
 
     // Eligibility — pin every query to published, even if the indexer
-    // misbehaves and somehow inserted an ineligible doc.
-    filter.push({ term: { is_published: true } });
+    // misbehaves and somehow inserted an ineligible doc. is_published is
+    // an integer (0/1) in the index, so filter on 1 — a boolean `true`
+    // would not match the long-typed field.
+    filter.push({ term: { is_published: 1 } });
 
     // Free text → multi_match against the searchable fields. We
-    // boost title relative to abstract/subjects so a hit on the
-    // title outranks a hit elsewhere.
+    // boost title relative to abstract/f_subjects so a hit on the
+    // title outranks a hit elsewhere. (subjects live in the top-level
+    // `f_subjects` text field in the v1-compatible index shape.)
     if (opts.q && opts.q.trim().length > 0) {
         const q = opts.q.trim();
         if (q.length > MAX_Q_LENGTH) {
@@ -76,7 +79,7 @@ function build_query(opts = {}) {
         must.push({
             multi_match: {
                 query: q,
-                fields: ['title^3', 'abstract', 'subjects'],
+                fields: ['title^3', 'abstract', 'f_subjects'],
                 type: 'best_fields',
             },
         });
@@ -107,7 +110,9 @@ function build_query(opts = {}) {
 
     // Subjects — array of keyword filters. Multiple values = OR
     // (any subject matches). For AND semantics the caller would
-    // chain calls; not needed in v1.
+    // chain calls; not needed in v1. The facet field is `f_subjects`,
+    // a text+keyword multi-field; a terms filter must target the exact
+    // `.keyword` sub-field (this matches the frontend's Subject facet).
     const subjects = as_string_array(opts.subject);
     if (subjects.length > 0) {
         // Cap to a reasonable list — defends against degenerate
@@ -115,17 +120,18 @@ function build_query(opts = {}) {
         if (subjects.length > 50) {
             throw new ValidationError('At most 50 subject filters per request');
         }
-        filter.push({ terms: { subjects } });
+        filter.push({ terms: { 'f_subjects.keyword': subjects } });
     }
 
-    // is_compound — boolean filter. Accept "true"/"false" strings
-    // since query params arrive as strings.
+    // is_compound — accept "true"/"false" strings since query params
+    // arrive as strings, but filter on the integer (0/1) the index
+    // stores; a boolean would not match the long-typed field.
     if (opts.is_compound !== undefined && opts.is_compound !== '') {
         const v = String(opts.is_compound).toLowerCase();
         if (v !== 'true' && v !== 'false') {
             throw new ValidationError('is_compound must be true or false');
         }
-        filter.push({ term: { is_compound: v === 'true' } });
+        filter.push({ term: { is_compound: v === 'true' ? 1 : 0 } });
     }
 
     return {
@@ -156,6 +162,13 @@ function build_sort(sort_key) {
 
 // Project an ES doc into the public response shape.
 //
+// Field names mirror the index (see module header). The indexer emits the
+// 2-level production shape: denormalized query/display fields at the top
+// level (creator, f_subjects, type, object, …) + `display_record` = the raw
+// ArchivesSpace record. Note `uri` no longer has a top-level copy — it lives
+// inside display_record — so it's only populated on the detail endpoint;
+// list responses exclude display_record for slimness (uri is null there).
+//
 // `kind` controls how much we return:
 //   - 'list'   : the slim form, no display_record envelope. Used
 //                for search results + collections list.
@@ -167,25 +180,38 @@ function build_sort(sort_key) {
 // don't want to bake the host into the model layer).
 function project_to_public(doc, kind, make_thumbnail_url) {
     if (!doc) return null;
+    const dr =
+        doc.display_record && typeof doc.display_record === 'object' ? doc.display_record : null;
     const base = {
         pid: doc.pid,
         title: doc.title || null,
+        creator: doc.creator || null,
         abstract: doc.abstract || null,
         handle: doc.handle || null,
-        uri: doc.uri || null,
+        // uri is no longer top-level; it lives in the raw record. Present on
+        // detail (full _source); null on list (display_record excluded).
+        uri: doc.uri || (dr && dr.uri) || null,
         object_type: doc.object_type || 'object',
         mime_type: doc.mime_type || null,
+        type: doc.type || null,
+        // Index uses integer 1/0; expose a clean JS boolean to API consumers.
         is_compound: Boolean(doc.is_compound),
         is_member_of_collection: doc.is_member_of_collection || null,
-        subjects: Array.isArray(doc.subjects) ? doc.subjects : [],
+        // Facet/keyword subjects. The v1-compatible index shape calls this
+        // `f_subjects` (was `subjects` in the earlier 3-level v2 shape).
+        f_subjects: Array.isArray(doc.f_subjects) ? doc.f_subjects : [],
+        object: doc.object || null,
+        // Not emitted by the current (prod-parity) index shape; kept as a
+        // stable key should a top-level `created` ever be reintroduced.
         created: doc.created || null,
         thumbnail_url: make_thumbnail_url(doc.pid),
     };
+    // A/V objects carry a top-level Kaltura entry id; surface it when present.
+    if (doc.entry_id) base.entry_id = doc.entry_id;
     if (kind === 'detail') {
-        // Include the opaque ASpace envelope on the detail endpoint
-        // so consumers can render rich record pages without a second
-        // ES round-trip.
-        base.display_record = doc.display_record || null;
+        // The raw ArchivesSpace record, so consumers can render rich record
+        // pages (parts/notes/dates/names…) without a second ES round-trip.
+        base.display_record = dr;
     }
     // sip_uuid is deliberately omitted — operational metadata, no
     // public consumer should need it.
@@ -234,10 +260,10 @@ function create_model({ es = es_default } = {}) {
             }
             const doc = await es.get_document(pid);
             // Defense in depth: even if the doc is in the index, only
-            // serve it to public callers if it claims is_published=true.
-            // (The indexer should never let a non-eligible doc in,
-            // but if one slipped through we'd rather hide it.)
-            if (!doc || doc.is_published !== true) return null;
+            // serve it to public callers if it claims published. The
+            // index stores is_published as an integer (1/0), so test
+            // truthiness rather than a strict boolean.
+            if (!doc || !doc.is_published) return null;
             return project_to_public(doc, 'detail', make_thumbnail_url);
         },
 
@@ -251,7 +277,7 @@ function create_model({ es = es_default } = {}) {
             const query = {
                 bool: {
                     filter: [
-                        { term: { is_published: true } },
+                        { term: { is_published: 1 } },
                         { term: { object_type: 'collection' } },
                     ],
                 },
@@ -276,7 +302,8 @@ function create_model({ es = es_default } = {}) {
             if (!validator.isUUID(String(pid))) return false;
             try {
                 const doc = await es.get_document(pid);
-                return Boolean(doc && doc.is_published === true);
+                // is_published is an integer (1/0) in the index — truthy check.
+                return Boolean(doc && doc.is_published);
             } catch {
                 return false;
             }

@@ -3,7 +3,7 @@
 // Render the workspace_action_result partial directly with ejs and
 // inspect the resulting HTML. The previous implementation injected
 // an inline <script> tag for the deferred redirect; our CSP
-// (script-src 'self' jsdelivr only) blocks that, leaving the
+// (script-src 'self' only) blocks that, leaving the
 // redirect silently broken. This test pins the CSP-safe pattern:
 // no inline scripts under any rendering path, and a
 // .workspace-deferred-redirect sentinel <div> when a redirect is

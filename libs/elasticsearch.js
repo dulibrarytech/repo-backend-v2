@@ -27,6 +27,12 @@ const { Client } = require('@elastic/elasticsearch');
 const app_config = require('../config/app');
 const log = require('./log');
 const { UpstreamError } = require('./errors');
+// Index mappings live in a sibling JSON file (es_mappings.json) rather
+// than inline below. They mirror the production `repo_public` mapping
+// the public discovery site (digitaldu-frontend-master) queries
+// directly, so the v2 index is a drop-in for that consumer. See
+// project_for_index() for the matching document shape.
+const INDEX_MAPPINGS = require('./es_mappings.json');
 
 function is_configured() {
     const cfg = app_config().elasticsearch;
@@ -122,63 +128,145 @@ function first_string(v) {
     return null;
 }
 
-// Public-domain projection.
+// ---- v1-compatible projection helpers --------------------------------
 //
-// Shape rationale:
+// These mirror digitaldu-backend/libs/display-record.js create_display_record,
+// the function that produced the production `repo_public` documents the
+// public site reads. We derive every denormalized top-level field from
+// the inner ArchivesSpace record so the output is correct regardless of
+// whether the stored display_record column is a rich legacy envelope or
+// the sparse one v2's own ingester writes.
+
+// abstract: the `abstract`-type note's content (string or array), with a
+// plain `abstract` field as fallback.
+function extract_abstract(inner, dr) {
+    if (inner && Array.isArray(inner.notes)) {
+        const note = inner.notes.find((n) => n && n.type === 'abstract');
+        if (note && note.content !== null && note.content !== undefined) {
+            return first_string(note.content);
+        }
+    }
+    return first_string((inner && inner.abstract) || (dr && dr.abstract));
+}
+
+// creator: the title of the first name whose role is 'creator'.
+function derive_creator(inner, dr) {
+    if (inner && Array.isArray(inner.names)) {
+        const c = inner.names.find((n) => n && n.role === 'creator');
+        if (c && c.title) return c.title;
+    }
+    return (dr && dr.creator) || null;
+}
+
+// f_subjects: flat list of subject titles (the facet/search surface).
+function derive_f_subjects(inner, dr) {
+    if (inner && Array.isArray(inner.subjects)) {
+        const arr = inner.subjects.map((s) => s && s.title).filter((s) => typeof s === 'string');
+        if (arr.length > 0) return arr;
+    }
+    return Array.isArray(dr && dr.f_subjects)
+        ? dr.f_subjects.filter((s) => typeof s === 'string')
+        : [];
+}
+
+// The single canonical parts manifest. Stored once at display_record.parts.
+// Prefer an *enriched* copy (one carrying object/thumbnail DuraCloud paths),
+// since the inner ASpace record's own parts are un-enriched for simple
+// objects. Looks in the envelope's `parts`/`compound` (v2 ingest + legacy)
+// before the inner record's `parts`.
+function pick_parts(inner, dr) {
+    const candidates = [dr && dr.parts, dr && dr.compound, inner && inner.parts];
+    for (const c of candidates) {
+        if (Array.isArray(c) && c.length > 0 && c.some((p) => p && (p.object || p.thumbnail)))
+            return c;
+    }
+    for (const c of candidates) {
+        if (Array.isArray(c) && c.length > 0) return c;
+    }
+    return undefined;
+}
+
+// Master file path for the top-level `object` field. Legacy envelopes
+// carry it directly; otherwise take it from the master part.
+function master_object(inner, dr, parts) {
+    if (typeof dr.object === 'string' && dr.object) return dr.object;
+    if (Array.isArray(parts)) {
+        const m =
+            parts.find((p) => p && p.type === 'object' && p.object) ||
+            parts.find((p) => p && p.object);
+        if (m && m.object) return m.object;
+    }
+    return null;
+}
+
+// Kaltura entry id for A/V objects (top-level convenience field; the
+// per-part ids stay inside display_record.parts).
+function derive_entry_id(parts) {
+    if (!Array.isArray(parts)) return null;
+    const p = parts.find((x) => x && (x.entry_id || x.kaltura_id));
+    return p ? p.entry_id || p.kaltura_id : null;
+}
+
+// Public-domain projection — emits the 2-level production `repo_public`
+// document shape (top-level denormalized query/display surface +
+// `display_record` = the raw ArchivesSpace record, verbatim).
 //
-// Top-level: every field we want to QUERY or FILTER on goes here,
-// with an explicit type in ensure_index() below. That's: pid/handle/
-// uri/etc. (keyword), is_compound/is_published (boolean), created
-// (date), title/abstract (text), subjects (keyword for faceting).
+// This deliberately does NOT wrap the document in an extra envelope or
+// nest the raw record under display_record.display_record (the bloated
+// 3-level shape earlier versions produced). The parts manifest is stored
+// exactly once at display_record.parts. See INDEX_STRUCTURE_FINAL.md.
 //
-// display_record: the full ASpace envelope, included for retrieval
-// only. ES stores it in _source but doesn't index sub-fields —
-// declared `dynamic: false` in ensure_index. This is deliberate:
-// the source data has wildly inconsistent shapes across records
-// (extents is a string in one record, an object in the next; same
-// for parts, dates, names, etc.), so any attempt to auto-infer
-// per-field mappings produces mapper_parsing_exception on the next
-// record with a different shape. Treating the blob as opaque sidesteps
-// the problem entirely. If a future public-site query needs to hit
-// a specific sub-path, declare it explicitly in the mappings.
-//
-// Title/abstract/subjects are pulled out of BOTH the outer envelope
-// (v1-style denormalized fields the legacy ingest stamped at write
-// time) and the inner ASpace record (the fresh fetch). The inner
-// one wins when both are present — that's the post-refresh canonical.
+// Collections get the stripped shape prod uses (title/abstract only).
 function project_for_index(row, dr) {
+    dr = dr && typeof dr === 'object' ? dr : {};
     const inner =
-        dr && dr.display_record && typeof dr.display_record === 'object' ? dr.display_record : null;
+        dr.display_record && typeof dr.display_record === 'object' ? dr.display_record : {};
+    const title = inner.title || dr.title || null;
+    const abstract = extract_abstract(inner, dr);
 
-    // Inner (fresh ASpace fetch) wins over outer (denormalized at
-    // ingest time) when both are present. Same priority for both
-    // title and abstract.
-    const title = (inner && inner.title) || (dr && dr.title) || null;
-    const abstract = first_string((inner && inner.abstract) || (dr && dr.abstract));
-    const subjects =
-        Array.isArray(dr && dr.f_subjects) && dr.f_subjects.length > 0
-            ? dr.f_subjects.filter((s) => typeof s === 'string')
-            : [];
+    // Collections: stripped shape (matches production repo_public).
+    if ((row.object_type || '') === 'collection') {
+        return {
+            pid: row.pid,
+            is_member_of_collection: row.is_member_of_collection || null,
+            handle: row.handle || null,
+            object_type: 'collection',
+            title,
+            thumbnail: row.thumbnail || null,
+            is_published: row.is_published ? 1 : 0,
+            abstract,
+            display_record: { title, abstract },
+        };
+    }
 
-    return {
+    // Objects (simple + compound): full shape.
+    const parts = pick_parts(inner, dr);
+    const entry_id = derive_entry_id(parts);
+    // display_record = the raw ASpace record, carrying the single parts copy.
+    const display_record = { ...inner };
+    if (parts) display_record.parts = parts;
+
+    const doc = {
         pid: row.pid,
-        handle: row.handle || null,
-        uri: row.uri || null,
         is_member_of_collection: row.is_member_of_collection || null,
-        object_type: row.object_type || 'object',
-        mime_type: row.mime_type || null,
+        handle: row.handle || null,
         thumbnail: row.thumbnail || null,
-        is_compound: Boolean(row.is_compound),
-        is_published: Boolean(row.is_published),
-        sip_uuid: row.sip_uuid || null,
-        created: row.created || null,
-        // Searchable text fields, promoted out of display_record.
+        mime_type: row.mime_type || null,
+        // v2's ingester tags compounds object_type='compound'; v1/the
+        // frontend only know 'object' (+ is_compound). Normalize.
+        object_type: 'object',
+        is_published: row.is_published ? 1 : 0, // INTEGER 1/0 (matches prod)
+        is_compound: inner.is_compound === true || row.is_compound ? 1 : 0,
         title,
+        creator: derive_creator(inner, dr),
+        f_subjects: derive_f_subjects(inner, dr),
         abstract,
-        subjects,
-        // Opaque blob for retrieval — see ensure_index mapping.
-        display_record: dr,
+        type: inner.resource_type || dr.type || null,
+        object: master_object(inner, dr, parts),
+        display_record,
     };
+    if (entry_id) doc.entry_id = entry_id;
+    return doc;
 }
 
 function create_client(factory = default_client_factory) {
@@ -222,68 +310,22 @@ function create_client(factory = default_client_factory) {
                     number_of_shards: cfg.shards,
                     number_of_replicas: cfg.replicas,
                 },
-                // Explicit mappings for every projection field. See
-                // project_for_index() above for the shape rationale.
-                //
-                //   - Booleans: declared up front so v1's old
-                //     0/1 wire format can never lock us into `long`.
-                //   - id-shaped strings (pid, handle, uri, sip_uuid,
-                //     is_member_of_collection, mime_type, object_type,
-                //     thumbnail) are `keyword`: exact-match filters,
-                //     no tokenization.
-                //   - created is `date`: enables range queries.
-                //   - title + abstract are `text` with a `.keyword`
-                //     sub-field (multi-field pattern). Tokenized for
-                //     full-text search; the .keyword sub-field
-                //     supports exact-value aggregation and sort
-                //     (you can't sort on a `text` field alone).
-                //     ignore_above: 256 caps the keyword side so a
-                //     pathological 100KB title doesn't bloat the
-                //     inverted index — anything past 256 chars
-                //     simply isn't keyword-searchable.
-                //   - subjects is `keyword`: subjects are facets,
-                //     not free text — filter exact-match.
-                //   - display_record is `object` with `dynamic: false`:
-                //     ES stores the blob in _source (so the full
-                //     ASpace envelope is retrievable on a hit) but
-                //     does NOT auto-add sub-fields to the mapping.
-                //     This is critical: source records have wildly
-                //     inconsistent shapes (extents is a string in
-                //     one row, an object in another), and dynamic
-                //     inference produces mapper_parsing_exception on
-                //     the next shape collision. Keeping the blob
-                //     opaque sidesteps the entire problem; if a
-                //     specific sub-path ever needs to be queryable,
-                //     add a property here explicitly.
-                mappings: {
-                    properties: {
-                        pid: { type: 'keyword' },
-                        handle: { type: 'keyword' },
-                        uri: { type: 'keyword' },
-                        is_member_of_collection: { type: 'keyword' },
-                        object_type: { type: 'keyword' },
-                        mime_type: { type: 'keyword' },
-                        thumbnail: { type: 'keyword' },
-                        sip_uuid: { type: 'keyword' },
-                        is_compound: { type: 'boolean' },
-                        is_published: { type: 'boolean' },
-                        created: { type: 'date' },
-                        title: {
-                            type: 'text',
-                            fields: {
-                                keyword: { type: 'keyword', ignore_above: 256 },
-                            },
-                        },
-                        abstract: {
-                            type: 'text',
-                            fields: {
-                                keyword: { type: 'keyword', ignore_above: 256 },
-                            },
-                        },
-                        subjects: { type: 'keyword' },
-                        display_record: { type: 'object', dynamic: false },
-                    },
-                },
+                // Mappings come from es_mappings.json — the production
+                // repo_public mapping the public site queries. Key points:
+                //   - is_compound/is_published are `long` (prod's 0/1 wire
+                //     format), matched by the integer flags project_for_index
+                //     now emits.
+                //   - top-level text fields carry a `.keyword` sub-field for
+                //     exact-match facets/sort (object_type.keyword,
+                //     creator.keyword, f_subjects.keyword, type.keyword, …).
+                //   - display_record is an `object` with `dynamic: false` but
+                //     WITH explicit sub-properties: the fields the frontend
+                //     queries inside it (dates/identifiers as `nested`,
+                //     names.title.keyword, subjects.terms.*, t_language.text,
+                //     notes.*) are mapped and queryable; any other/odd-shaped
+                //     sub-field is stored in _source but not indexed, so a
+                //     shape collision can't throw mapper_parsing_exception.
+                mappings: INDEX_MAPPINGS,
             });
             log.info({ event: 'es_index_created', index: cfg.index });
             return { created: true };

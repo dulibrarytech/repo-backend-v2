@@ -147,6 +147,12 @@ module.exports = function create_app() {
     // Indexer admin endpoints (status, reindex-all, reindex-collection,
     // reindex-pid). All staff-only.
     require('../indexer/routes')(app);
+    // TIFF→JPG conversion — admin page + status partial + start/preview,
+    // plus the single-object /objects/:pid/convert action. Mounted after
+    // the dashboard routes for the same reason metadata is: the per-
+    // object POST has an extra path segment so it can't shadow the
+    // existing /objects/:pid/* routes. Staff-only.
+    require('../convert/dashboard_routes')(app);
 
     // Public API v1 — ES-backed search + object detail + thumbnail proxy +
     // collections list. NO auth, wide-open CORS, separate rate-limit

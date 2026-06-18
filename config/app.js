@@ -375,6 +375,32 @@ function build() {
             cache_path: optional('TN_CACHE_PATH', './public/tn_cache'),
         },
 
+        // Convert service — DU's TIFF→JPG derivative generator
+        // (libspec02). The convert/ subsystem submits repo objects to
+        // this remote API one at a time, paced `delay_ms` apart, because
+        // the service is fragile under load (the legacy
+        // post_tiff_convert.py used the same 20s pacing). Auth is an
+        // api_key query param, matching the deployed service's wire
+        // format. When url/api_key are empty the worker stays idle and
+        // the dashboard shows a "not configured" notice.
+        convert_service: {
+            enabled: boolean('CONVERT_WORKER_ENABLED', true),
+            url: optional('CONVERT_SERVICE', ''),
+            api_key: optional('CONVERT_SERVICE_API_KEY', ''),
+            timeout_ms: integer('CONVERT_SERVICE_TIMEOUT_MS', 30000),
+            // Cooldown BETWEEN requests (end of one → start of next).
+            delay_ms: integer('CONVERT_SERVICE_DELAY_MS', 20000),
+            // Poll cadence while the queue is empty.
+            idle_poll_ms: integer('CONVERT_SERVICE_IDLE_POLL_MS', 5000),
+            // Per-row retry ceiling before a row is marked FAILED.
+            max_attempts: integer('CONVERT_SERVICE_MAX_ATTEMPTS', 3),
+            // Guard against a fat-fingered collection fanning out to tens
+            // of thousands of POSTs. Clamped at enqueue time.
+            max_batch: integer('CONVERT_MAX_BATCH', 5000),
+            // How many payloads the dry-run preview lists (count is exact).
+            preview_sample: integer('CONVERT_PREVIEW_SAMPLE', 25),
+        },
+
         // DuraCloud — used to stream thumbnails for legacy rows whose
         // `thumbnail` column stores a dip-store-relative path (the
         // shape the ingest service writes: <dip_path>/thumbnails/<uuid>.jpg).

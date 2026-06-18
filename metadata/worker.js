@@ -173,10 +173,19 @@ async function process_row(row, aspace, token_holder, get_db_record) {
 
 // Factory so the entry point can pass in injected deps and tests can
 // substitute fakes for every external surface.
+// Backoff for the first-tick token bootstrap when ArchivesSpace is
+// unreachable. The self-rescheduling loop already prevents overlapping
+// ticks, but without backoff a down AS is re-probed every cadence for the
+// whole outage. Exponential backoff (base→max) caps that at one login
+// attempt per TOKEN_BACKOFF_MAX_MS while still recovering within that window.
+const TOKEN_BACKOFF_BASE_MS = 5000;
+const TOKEN_BACKOFF_MAX_MS = 60000;
+
 function create_worker({
     aspace = aspace_default,
     get_db_record = require_db_record,
     on_tick = null,
+    now = () => Date.now(),
 } = {}) {
     let running = false;
     let stopping = false;
@@ -187,6 +196,11 @@ function create_worker({
     // below — to mitigate AS-side per-session cache buildup that
     // dominates the slow-down curve on multi-hour refreshes.
     const token_holder = [null];
+    // Bootstrap backoff state (see TOKEN_BACKOFF_* above). Only the bootstrap
+    // path uses this — the periodic rotation in _maybe_rotate_token has its
+    // own recovery (it nulls the token so the next bootstrap re-mints).
+    let token_fail_count = 0;
+    let token_cooldown_until = 0;
     // Count of rows claimed since the last token rotation. Each
     // claimed row corresponds to ~1 AS request (occasionally 2 if a
     // 401 forces a mid-request token refresh; we accept the
@@ -208,12 +222,28 @@ function create_worker({
         // First-tick token bootstrap. We delay until tick() instead of
         // start() so a transient ASpace outage at boot doesn't crash
         // the entry point — the worker just doesn't make progress
-        // until ASpace comes back.
+        // until ASpace comes back. On failure we back off exponentially
+        // (see TOKEN_BACKOFF_* above) rather than re-attempting every
+        // cadence for the whole outage.
         if (!token_holder[0]) {
+            if (now() < token_cooldown_until) return; // in backoff window
             try {
                 token_holder[0] = await aspace.get_session_token();
+                token_fail_count = 0;
+                token_cooldown_until = 0;
             } catch (err) {
-                log.warn({ event: 'aspace_token_unavailable', err: err.message });
+                token_fail_count += 1;
+                const delay = Math.min(
+                    TOKEN_BACKOFF_BASE_MS * 2 ** (token_fail_count - 1),
+                    TOKEN_BACKOFF_MAX_MS
+                );
+                token_cooldown_until = now() + delay;
+                log.warn({
+                    event: 'aspace_token_unavailable',
+                    attempt: token_fail_count,
+                    retry_in_ms: delay,
+                    err: err.message,
+                });
                 return;
             }
         }

@@ -1,3 +1,12 @@
+<%/* Lazy, non-blocking degraded-services banner: fetched AFTER paint
+     (hx-trigger="load") so a slow/timing-out service probe can't delay this
+     landing page. Renders nothing when every service is reachable — the
+     outerHTML swap then removes this mount entirely. */%>
+<div id="services-banner"
+     hx-get="<%= dashboard_base %>/_services/banner"
+     hx-trigger="load"
+     hx-swap="outerHTML"></div>
+
 <h1 class="page-title">Welcome, <%= user.first_name || user.du_id %>.</h1>
 <p class="page-subtitle">
     Quick view of repository activity. Use the sidebar to manage

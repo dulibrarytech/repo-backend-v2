@@ -160,6 +160,29 @@
                             Refresh metadata
                         </button>
                     </li>
+                    <%/* Generate JPG derivative — queues this object to
+                         the convert service (TIFF→JPG). Fire-and-toast:
+                         hx-swap="none" so the row doesn't change; the
+                         convert worker processes it in the background.
+                         See convert/ and the admin page at
+                         /dashboard/admin/convert. */%>
+                    <li>
+                        <button type="button" class="dropdown-item"
+                                hx-post="<%= dashboard_base %>/objects/<%= item.pid %>/convert"
+                                hx-swap="none"
+                                data-confirm="Generate a JPG derivative for this object? It's queued to the convert service and processed in the background."
+                                data-confirm-title="Generate JPG derivative?"
+                                data-confirm-label="Generate">
+                            <%/* image icon — generate JPG derivative */%>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                                <circle cx="8.5" cy="8.5" r="1.5"/>
+                                <polyline points="21 15 16 10 5 21"/>
+                            </svg>
+                            Generate JPG derivative
+                        </button>
+                    </li>
                     <% if (item.handle) { %>
                         <li>
                             <a class="dropdown-item"

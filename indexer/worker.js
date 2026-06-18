@@ -101,28 +101,63 @@ async function process_batch(rows, es) {
     );
 }
 
-function create_worker({ es = es_default, on_tick = null } = {}) {
+// Backoff for the first-tick ensure_index when ES is unreachable. Without
+// it, a down ES is re-probed every tick at the client's ~10s connect timeout
+// — a log + connection flood for the whole outage (the symptom that motivated
+// this). We retry with exponential backoff (base→max) so a persistent outage
+// is probed at most once per ENSURE_BACKOFF_MAX_MS, while recovery is still
+// detected within that window. When ES is healthy this is a no-op: ensure
+// succeeds on the first tick and never runs again.
+const ENSURE_BACKOFF_BASE_MS = 5000;
+const ENSURE_BACKOFF_MAX_MS = 60000;
+
+function create_worker({ es = es_default, on_tick = null, now = () => Date.now() } = {}) {
     let running = false;
     let stopping = false;
     let timer = null;
     let in_flight = Promise.resolve();
     let ensured = false;
+    // ensure_index backoff state (see ENSURE_BACKOFF_* above). `ensuring`
+    // serializes the attempt so two overlapping ticks can't both fire the
+    // ~10s call; the cooldown gates retries after a failure.
+    let ensure_fail_count = 0;
+    let ensure_cooldown_until = 0;
+    let ensuring = false;
 
     async function tick() {
         if (stopping) return;
         if (!es.is_configured()) return;
 
-        // First tick: ensure the index exists. We try once per
-        // start() — if ES is temporarily down the worker keeps
-        // ticking and we retry the ensure on each tick until it
-        // succeeds. Cheap; idempotent.
+        // First tick: ensure the index exists (idempotent). If ES is down we
+        // retry on a later tick, but with exponential backoff — not every
+        // tick — so a persistent outage doesn't flood logs/connections with
+        // a ~10s-timeout attempt each cycle. See ENSURE_BACKOFF_* above.
         if (!ensured) {
+            // Skip while another tick's ensure is in flight, or during the
+            // post-failure cooldown window.
+            if (ensuring || now() < ensure_cooldown_until) return;
+            ensuring = true;
             try {
                 await es.ensure_index();
                 ensured = true;
+                ensure_fail_count = 0;
+                ensure_cooldown_until = 0;
             } catch (err) {
-                log.warn({ event: 'es_ensure_index_failed', err: err.message });
+                ensure_fail_count += 1;
+                const delay = Math.min(
+                    ENSURE_BACKOFF_BASE_MS * 2 ** (ensure_fail_count - 1),
+                    ENSURE_BACKOFF_MAX_MS
+                );
+                ensure_cooldown_until = now() + delay;
+                log.warn({
+                    event: 'es_ensure_index_failed',
+                    attempt: ensure_fail_count,
+                    retry_in_ms: delay,
+                    err: err.message,
+                });
                 return; // skip this tick — no point claiming rows we can't write
+            } finally {
+                ensuring = false;
             }
         }
 

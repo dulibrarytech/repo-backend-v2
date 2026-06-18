@@ -236,18 +236,51 @@ describe('indexer/worker — integration', () => {
             project_for_index: (row, dr) => ({ pid: row.pid, dr }),
         };
 
-        const worker = create_worker({ es });
+        let clock = 0;
+        const worker = create_worker({ es, now: () => clock });
         await worker.tick();
         // First tick: ensure failed, no claim, no bulk write.
         expect(ensure_calls).toBe(1);
         expect(bulk_calls).toHaveLength(0);
 
+        // Advance past the post-failure backoff window before the retry.
+        clock += 60000;
         await worker.tick();
         // Second tick: ensure succeeded; the still-dirty row got
         // bulk-written. The fake's ensure_calls is now 2.
         expect(ensure_calls).toBe(2);
         expect(bulk_calls).toHaveLength(1);
         expect(bulk_calls[0]).toHaveLength(1);
+    });
+
+    it('backs off ensure retries within the cooldown window', async () => {
+        await db_helper.seed_object({ is_published: 1, is_active: 1, is_updated: 1 });
+        let ensure_calls = 0;
+        const es = {
+            is_configured: () => true,
+            async ensure_index() {
+                ensure_calls += 1;
+                throw new Error('cluster down');
+            },
+            async bulk_write(ops) {
+                return { items: ops.map((o) => ({ op: o.op, pid: o.pid, ok: true })) };
+            },
+            project_for_index: (row, dr) => ({ pid: row.pid, dr }),
+        };
+        let clock = 0;
+        const worker = create_worker({ es, now: () => clock });
+
+        // Three back-to-back ticks, but ensure_index is attempted only
+        // once — the cooldown gates the next two (no 10s-timeout flood).
+        await worker.tick();
+        await worker.tick();
+        await worker.tick();
+        expect(ensure_calls).toBe(1);
+
+        // Once the cooldown elapses, the next tick attempts again.
+        clock += 60000;
+        await worker.tick();
+        expect(ensure_calls).toBe(2);
     });
 
     it('skips ticking entirely when ES is not configured', async () => {

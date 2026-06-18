@@ -24,6 +24,9 @@ module.exports = {
     metadata_update_queue: process.env.REPO_METADATA_UPDATE_QUEUE || 'tbl_metadata_update_queue',
     metadata_refresh_batches:
         process.env.REPO_METADATA_REFRESH_BATCHES || 'tbl_metadata_refresh_batches',
+    // TIFF→JPG conversion queue + batch rollup (convert/ subsystem).
+    convert_queue: process.env.REPO_CONVERT_QUEUE || 'tbl_convert_queue',
+    convert_batches: process.env.REPO_CONVERT_BATCHES || 'tbl_convert_batches',
     kaltura_ids: process.env.REPO_KALTURA_IDS || 'tbl_kaltura_ids',
     kaltura_package_queue: process.env.REPO_KALTURA_PACKAGE_QUEUE || 'tbl_kaltura_package_queue',
 };

@@ -81,6 +81,12 @@ module.exports = function mount(app) {
     app.get(`${admin_base}/health`, require_dashboard_auth, controller.services_health_partial);
     app.get(`${admin_base}/wasabi`, require_dashboard_auth, controller.services_wasabi_partial);
 
+    // Post-sign-in degraded-services banner. Lazy-loaded by the home page
+    // after paint (hx-trigger="load"); any signed-in staff, and deliberately
+    // NOT under /admin/ so it's part of the normal landing experience, not
+    // an admin-only view. Renders nothing when all services are reachable.
+    app.get(`${base}/_services/banner`, require_dashboard_auth, controller.services_banner_partial);
+
     // Queue timeline modal — registered last so the more-specific
     // routes above (e.g. `/list`, `/workspace`, `/history`) match first.
     app.get(`${base}/:id/timeline`, require_dashboard_auth, controller.ingest_timeline_partial);

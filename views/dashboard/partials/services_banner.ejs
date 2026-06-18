@@ -1,0 +1,25 @@
+<%/* Post-sign-in degraded-services banner.
+
+     Locals:
+       degraded        — array of { label, capability } for services that are
+                         configured but currently unreachable. May be empty.
+       dashboard_base  — provided by render_partial.
+
+     Lazy-loaded by the home page AFTER paint (hx-trigger="load"), so it never
+     blocks the landing page even if a probe is slow. When `degraded` is empty
+     the partial emits nothing, so the hx-swap="outerHTML" mount is replaced by
+     an empty node and no banner shows. No inline <script> (CSP: script-src
+     'self'); dismissal uses Bootstrap's data-bs-dismiss. */%>
+<% if (degraded && degraded.length) { %>
+<div class="alert alert-warning alert-dismissible d-flex align-items-start gap-2 mb-3" role="alert">
+    <div class="flex-grow-1">
+        <strong>Some services are temporarily unavailable.</strong>
+        <div class="small mt-1">
+            Affected: <% degraded.forEach(function (s, i) { %><%= s.label %><% if (s.capability) { %> (<%= s.capability %>)<% } %><%= i < degraded.length - 1 ? ', ' : '' %><% }); %>.
+            You can keep working — features that rely on these may be limited.
+            <a href="<%= dashboard_base %>/admin/services" class="alert-link">View service status →</a>
+        </div>
+    </div>
+    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+</div>
+<% } %>

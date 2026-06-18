@@ -25,6 +25,7 @@ const qa_service = require('./libs/qa_service');
 const archivematica = require('../libs/archivematica');
 const duracloud = require('../libs/duracloud');
 const aspace = require('../libs/archivesspace');
+const es = require('../libs/elasticsearch');
 const worker_registry = require('./worker');
 const api_controller = require('./controller');
 const {
@@ -671,15 +672,94 @@ async function services_health_partial(req, res) {
     });
 }
 
+// Capability phrasing for the post-sign-in banner: map each probed service
+// to the user-facing feature it backs, so staff read "search & browse" not
+// just "Elasticsearch". Keys match BANNER_PROBES.
+const SERVICE_CAPABILITY = {
+    elasticsearch: 'search & browse',
+    curation_api: 'ingest / QA moves',
+    archivematica: 'ingest pipeline',
+    duracloud: 'preservation storage',
+    archivesspace: 'metadata sync',
+};
+
+// The banner probes everything the admin grid does PLUS Elasticsearch
+// (search/browse) — the datastore staff notice first when it's down, and
+// the headline service in the outage logs that motivated this work. Reuses
+// SERVICE_PROBES so the curated ingest-upstream set stays single-sourced.
+const BANNER_PROBES = [
+    ...SERVICE_PROBES,
+    { key: 'elasticsearch', label: 'Elasticsearch', probe: _probe_elasticsearch },
+];
+
+// Per-probe deadline for the banner. The banner loads after paint, but we
+// still bound each probe so a hung service (e.g. ES on a 10s connect timeout)
+// can't keep the banner spinning — past this it's reported unreachable.
+const BANNER_PROBE_TIMEOUT_MS = 3000;
+
+// Post-sign-in "degraded services" banner. Lazy-loaded by the home page
+// AFTER paint (hx-trigger="load"), so a slow or timing-out probe can never
+// delay the landing page — the whole point of this work is that sign-in and
+// the page that follows render regardless of third-party availability.
+// Probes run in parallel (each with its own client timeout) and never throw
+// (_run_probe guarantees it). Renders the alert only for services that are
+// configured but unreachable; when nothing is degraded the partial emits
+// nothing and the hx-swap="outerHTML" mount is simply removed.
+async function services_banner_partial(req, res) {
+    const results = await Promise.all(
+        BANNER_PROBES.map(({ key, label, probe }) =>
+            _run_probe(key, label, probe, BANNER_PROBE_TIMEOUT_MS)
+        )
+    );
+    const degraded = results
+        .filter((s) => s.configured && !s.reachable)
+        .map((s) => ({ label: s.label, capability: SERVICE_CAPABILITY[s.key] || '' }));
+    render_partial(req, res, 'dashboard/partials/services_banner', {
+        degraded,
+        checked_at: new Date().toISOString(),
+    });
+}
+
+// Race a probe against a deadline so the post-sign-in banner resolves fast
+// even when a service hangs on a long client timeout (ES's connect timeout is
+// ~10s). On expiry we RESOLVE to a sentinel rather than rejecting, so the
+// caller treats it as a normal "unreachable" — not a surprise throw. A late
+// rejection from the losing promise is swallowed so it can't surface as an
+// unhandledRejection. timeout_ms <= 0 means "no deadline" (the admin grid).
+function _with_deadline(probe, timeout_ms) {
+    const p = Promise.resolve().then(probe);
+    if (!timeout_ms || timeout_ms <= 0) return p;
+    p.catch(() => {});
+    return Promise.race([
+        p,
+        new Promise((resolve) => {
+            const t = setTimeout(() => resolve({ __timed_out: true }), timeout_ms);
+            if (t.unref) t.unref();
+        }),
+    ]);
+}
+
 // Wrap a per-service probe with timing + uniform shape + a hard
 // guarantee it never throws. Returns:
 //   { key, label, configured, reachable, detail, elapsed_ms }
 // `configured:false` renders as a neutral "not configured" badge (dev
 // environments that don't wire a given service shouldn't show red).
-async function _run_probe(key, label, probe) {
+// `timeout_ms` (optional) bounds the probe — on expiry the service is
+// reported unreachable with a "timed out" detail instead of hanging.
+async function _run_probe(key, label, probe, timeout_ms = 0) {
     const started = Date.now();
     try {
-        const out = await probe();
+        const out = await _with_deadline(probe, timeout_ms);
+        if (out && out.__timed_out) {
+            return {
+                key,
+                label,
+                configured: true,
+                reachable: false,
+                detail: `probe timed out after ${timeout_ms}ms`,
+                elapsed_ms: Date.now() - started,
+            };
+        }
         const configured = out.configured !== false;
         return {
             key,
@@ -760,6 +840,21 @@ async function _probe_archivesspace() {
         reachable: ok,
         detail: ok ? 'login succeeded' : 'login failed or unreachable',
     };
+}
+
+// Elasticsearch — cluster health round-trip (the search/browse backend).
+// es.health() catches internally and returns { ok, status, err? }, never
+// throwing. Not part of the ingest-upstream admin grid, but probed by the
+// post-sign-in banner because search is what staff notice first.
+async function _probe_elasticsearch() {
+    if (!es.is_configured()) return { configured: false };
+    const r = await es.health();
+    if (r.ok) return { configured: true, reachable: true, detail: `cluster ${r.status}` };
+    const detail =
+        r.status === 'unreachable'
+            ? `unreachable${r.err ? ': ' + r.err : ''}`
+            : `cluster ${r.status}`;
+    return { configured: true, reachable: false, detail };
 }
 
 // HTMX-polled Wasabi status panel. Single curation-API hit — the
@@ -859,4 +954,8 @@ module.exports = {
     services_page,
     services_health_partial,
     services_wasabi_partial,
+    services_banner_partial,
+    // exported for tests
+    _run_probe,
+    _with_deadline,
 };

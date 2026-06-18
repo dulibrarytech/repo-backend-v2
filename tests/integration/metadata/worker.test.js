@@ -321,6 +321,35 @@ describe('metadata/worker — integration', () => {
             expect(aspace.destroy_count()).toBe(0);
         });
 
+        it('backs off token bootstrap when ArchivesSpace is unreachable', async () => {
+            // get_session_token always fails → the worker must NOT re-attempt
+            // every tick; it backs off until the cooldown elapses.
+            const obj = await db_helper.seed_object({ uri: '/r/back' });
+            await model.enqueue_pids([obj.pid]);
+            let token_calls = 0;
+            const aspace = {
+                is_configured: () => true,
+                async get_session_token() {
+                    token_calls += 1;
+                    throw new Error('aspace down');
+                },
+                async get_record(uri) {
+                    return { status: 200, data: { uri }, headers: {} };
+                },
+                async destroy_session_token() {},
+            };
+            let clock = 0;
+            const worker = create_worker({ aspace, now: () => clock });
+
+            await worker.tick(); // attempt 1 → fails, cooldown set
+            await worker.tick(); // within cooldown → skipped
+            expect(token_calls).toBe(1);
+
+            clock += 60000; // cooldown elapses
+            await worker.tick(); // attempt 2
+            expect(token_calls).toBe(2);
+        });
+
         it('survives a failed rotation — counter resets, next tick re-bootstraps', async () => {
             // Failure mode: destroy succeeds but get_session_token
             // fails on the rotation. Worker must not crash; the next

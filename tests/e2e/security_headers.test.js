@@ -13,7 +13,8 @@ describe('helmet security headers', () => {
         const res = await supertest(app).get('/repo/health');
         expect(res.headers['content-security-policy']).toMatch(/default-src 'self'/);
         expect(res.headers['content-security-policy']).toMatch(/object-src 'none'/);
-        expect(res.headers['content-security-policy']).toMatch(/cdn\.jsdelivr\.net/);
+        // Front-end assets are self-hosted — no third-party CDN in the CSP.
+        expect(res.headers['content-security-policy']).not.toMatch(/cdn\.jsdelivr\.net/);
     });
 
     it('sets Referrer-Policy: no-referrer', async () => {

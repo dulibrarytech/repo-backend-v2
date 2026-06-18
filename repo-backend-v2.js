@@ -29,6 +29,7 @@ const {
     create_worker: create_ingest_worker,
     set_active_worker: set_active_ingest_worker,
 } = require('./ingester/worker');
+const { create_worker: create_convert_worker } = require('./convert/worker');
 
 const cfg = app_config();
 const app = create_app();
@@ -52,6 +53,11 @@ const ingest_worker = create_ingest_worker();
 // ingester/worker.js — `set_active_worker` writes a module-level
 // reference, NOT a global; controller reads via `get_active_worker`.
 set_active_ingest_worker(ingest_worker);
+// TIFF→JPG conversion worker. Serial + paced (one POST every
+// CONVERT_SERVICE_DELAY_MS) because the remote convert service is
+// fragile under load. Idle until a collection/object batch is enqueued
+// from the dashboard (/dashboard/admin/convert). See convert/worker.js.
+const convert_worker = create_convert_worker();
 
 let server = null;
 let shutting_down = false;
@@ -88,6 +94,9 @@ async function shutdown(signal) {
             // (AM transfer-status, QA upload-status) need a beat to
             // react to abort signals before the next cancel-loop tick.
             ingest_worker.stop({ timeout_ms: 12000 }),
+            // Convert worker aborts its in-flight POST on stop; 8s is
+            // plenty for the abort + the row release to land.
+            convert_worker.stop({ timeout_ms: 8000 }),
         ]);
         log.info({ event: 'shutdown', msg: 'workers stopped' });
         await db_module.destroy_all();
@@ -162,6 +171,9 @@ if (require.main === module) {
         });
         ingest_worker.start().catch((err) => {
             log.error({ event: 'ingest_worker_start_failed', err: err.message });
+        });
+        convert_worker.start().catch((err) => {
+            log.error({ event: 'convert_worker_start_failed', err: err.message });
         });
     });
 }

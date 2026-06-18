@@ -10,8 +10,11 @@ const app_config = require('./app');
 // helmet
 //
 // CSP is enabled (the legacy app had it explicitly disabled — see
-// MODERNIZATION_PLAN §1.2). Allow our own origin plus the CDNs used by
-// the v2 dashboard: cdn.jsdelivr.net for HTMX + Bootstrap.
+// MODERNIZATION_PLAN §1.2). All front-end assets (Bootstrap + HTMX) are
+// self-hosted under /static/assets/vendor, so scripts/styles/fonts stay
+// 'self'-only — no third-party CDN origin is allowed. This is also why the
+// sign-in page renders with zero external dependencies; it previously
+// blocked on cdn.jsdelivr.net whenever the network to DU services was down.
 //
 // A function (not a static object) because `form-action` has to include
 // the SSO logout URL's origin when SSO_LOGOUT_URL is set — otherwise the
@@ -37,17 +40,16 @@ function helmet_options() {
             useDefaults: true,
             directives: {
                 'default-src': ["'self'"],
-                'script-src': ["'self'", 'https://cdn.jsdelivr.net'],
-                'style-src': ["'self'", 'https://cdn.jsdelivr.net', "'unsafe-inline'"],
+                'script-src': ["'self'"],
+                // 'unsafe-inline' stays for inline style="..." attributes used
+                // across the EJS partials (style-src-attr); no CDN host needed.
+                'style-src': ["'self'", "'unsafe-inline'"],
                 'img-src': ["'self'", 'data:', 'https:'],
-                'font-src': ["'self'", 'https://cdn.jsdelivr.net'],
-                // jsDelivr is in connect-src so the browser can fetch
-                // Bootstrap/HTMX *.css.map and *.js.map sourcemaps when
-                // DevTools is open. The bundles themselves load under
-                // style-src / script-src; sourcemap fetches go through
-                // connect-src and would otherwise hit a CSP violation
-                // on every page load with DevTools open.
-                'connect-src': ["'self'", 'https://cdn.jsdelivr.net'],
+                'font-src': ["'self'"],
+                // Sourcemaps (*.css.map / *.js.map) are vendored next to the
+                // minified assets, so DevTools fetches them same-origin;
+                // connect-src stays 'self'-only.
+                'connect-src': ["'self'"],
                 'frame-ancestors': ["'self'"],
                 'object-src': ["'none'"],
                 'base-uri': ["'self'"],
