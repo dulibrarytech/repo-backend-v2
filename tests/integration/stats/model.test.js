@@ -197,21 +197,21 @@ describe('stats/model — DB integration', () => {
         it('returns the latest N active objects, newest first', async () => {
             // sqlite created timestamp granularity may collide, so we
             // rely on id-order tie-breaking too.
-            const seeded = [];
             for (let i = 0; i < 6; i++) {
-                seeded.push(await db_helper.seed_object({ file_name: `f-${i}.dat` }));
+                await db_helper.seed_object({ pid: `codu:recent-${i}` });
             }
             const r = await stats_model.recent_ingests({ limit: 3 });
             expect(r).toHaveLength(3);
-            // Last inserted should be first
-            expect(r[0].file_name).toBe('f-5.dat');
+            // Last inserted should be first. Order asserted via pid —
+            // file_name is no longer returned (the card is title-only).
+            expect(r[0].pid).toBe('codu:recent-5');
         });
 
         it('skips soft-deleted rows', async () => {
-            await db_helper.seed_object({ file_name: 'kept.dat' });
-            await db_helper.seed_object({ file_name: 'gone.dat', is_active: 0 });
+            await db_helper.seed_object({ pid: 'codu:kept' });
+            await db_helper.seed_object({ pid: 'codu:gone', is_active: 0 });
             const r = await stats_model.recent_ingests();
-            expect(r.every((row) => row.file_name !== 'gone.dat')).toBe(true);
+            expect(r.every((row) => row.pid !== 'codu:gone')).toBe(true);
         });
 
         it('extracts title from display_record', async () => {
@@ -223,21 +223,6 @@ describe('stats/model — DB integration', () => {
             expect(r[0].title).toBe('Beautiful Photograph');
         });
 
-        it('extracts call_number from display_record.identifiers (type=local)', async () => {
-            await db_helper.seed_object({
-                file_name: 'obj.tif',
-                display_record: JSON.stringify({
-                    title: 'Photo',
-                    identifiers: [
-                        { type: 'pid', identifier: 'codu:xyz' },
-                        { type: 'local', identifier: 'B002.05.01.0387.0009.00003' },
-                    ],
-                }),
-            });
-            const r = await stats_model.recent_ingests({ limit: 1 });
-            expect(r[0].call_number).toBe('B002.05.01.0387.0009.00003');
-        });
-
         it('returns null title when display_record has no title key', async () => {
             await db_helper.seed_object({
                 file_name: 'obj.tif',
@@ -247,23 +232,10 @@ describe('stats/model — DB integration', () => {
             expect(r[0].title).toBeNull();
         });
 
-        it('returns null call_number when no local identifier is present', async () => {
-            await db_helper.seed_object({
-                file_name: 'obj.tif',
-                display_record: JSON.stringify({
-                    title: 'Photo',
-                    identifiers: [{ type: 'pid', identifier: 'codu:xyz' }],
-                }),
-            });
-            const r = await stats_model.recent_ingests({ limit: 1 });
-            expect(r[0].call_number).toBeNull();
-        });
-
-        it('returns null title + call_number when display_record is absent', async () => {
-            await db_helper.seed_object({ file_name: 'obj.tif' });
+        it('returns null title when display_record is absent', async () => {
+            await db_helper.seed_object({});
             const r = await stats_model.recent_ingests({ limit: 1 });
             expect(r[0].title).toBeNull();
-            expect(r[0].call_number).toBeNull();
         });
 
         it('treats whitespace-only title as missing', async () => {
@@ -273,17 +245,6 @@ describe('stats/model — DB integration', () => {
             });
             const r = await stats_model.recent_ingests({ limit: 1 });
             expect(r[0].title).toBeNull();
-        });
-
-        it('treats whitespace-only call_number as missing', async () => {
-            await db_helper.seed_object({
-                file_name: 'obj.tif',
-                display_record: JSON.stringify({
-                    identifiers: [{ type: 'local', identifier: '   ' }],
-                }),
-            });
-            const r = await stats_model.recent_ingests({ limit: 1 });
-            expect(r[0].call_number).toBeNull();
         });
 
         it('does not include the raw display_record blob in the response', async () => {
@@ -296,16 +257,17 @@ describe('stats/model — DB integration', () => {
             });
             const r = await stats_model.recent_ingests({ limit: 1 });
             expect(r[0]).not.toHaveProperty('display_record');
+            // Cleanup: the title-only card no longer surfaces these.
+            expect(r[0]).not.toHaveProperty('file_name');
+            expect(r[0]).not.toHaveProperty('call_number');
         });
 
         it('handles malformed display_record JSON gracefully', async () => {
             await db_helper.seed_object({
-                file_name: 'obj.tif',
                 display_record: '{not valid json',
             });
             const r = await stats_model.recent_ingests({ limit: 1 });
             expect(r[0].title).toBeNull();
-            expect(r[0].call_number).toBeNull();
         });
     });
 

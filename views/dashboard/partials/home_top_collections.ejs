@@ -1,29 +1,28 @@
 <% if (!items || items.length === 0) { %>
     <div class="text-muted small">No collections found.</div>
 <% } else { %>
+    <%/* Row text is sized to match home_recent_ingests (li.small): 14px title,
+         14px count on the right. Keep the two home panels visually identical —
+         see also the count span below, which intentionally drops `small` so it
+         doesn't compound to ~12px. */%>
     <ul class="list-unstyled m-0">
         <% items.forEach(function(c) { %>
-            <%/* Title-first display. The collection's PID still appears
-                 as a small font-monospace subtitle so staff can copy it
-                 when needed — but the readable label is what they
-                 scan against. If a collection row has no title (orphan
-                 membership pid, or display_record never populated),
+            <%/* Title-only display: show the collection's title as the row
+                 label (the PID subtitle was removed). If a row has no title
+                 (orphan membership pid, or display_record never populated),
                  fall back to the PID alone so the row still renders. */%>
-            <li class="d-flex justify-content-between align-items-baseline py-1">
+            <li class="d-flex justify-content-between align-items-baseline py-1 small">
                 <a href="<%= dashboard_base %>/objects?collection=<%= encodeURIComponent(c.collection) %>"
                    class="text-truncate"
                    style="max-width: 75%;"
                    title="<%= c.title || c.collection %>">
                     <% if (c.title) { %>
                         <span><%= c.title %></span>
-                        <div class="font-monospace text-muted small text-truncate">
-                            <%= c.collection %>
-                        </div>
                     <% } else { %>
                         <span class="font-monospace small"><%= c.collection %></span>
                     <% } %>
                 </a>
-                <span class="text-muted small">
+                <span class="text-muted">
                     <strong><%= c.count.toLocaleString() %></strong>
                     <span title="of which published"
                           class="sev-badge sev-success ms-1"

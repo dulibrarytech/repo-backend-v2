@@ -475,7 +475,7 @@ describe('dashboard — e2e', () => {
             expect(res.text).toMatch(/Active users/);
         });
 
-        it('Top Collections partial shows title-first with PID as subtitle', async () => {
+        it('Top Collections partial shows the title only (no PID subtitle)', async () => {
             const stats_model = require('../../stats/model');
             stats_model._reset();
             const cookie = await cookie_for('top-coll-titles');
@@ -492,17 +492,13 @@ describe('dashboard — e2e', () => {
                 .get('/repo/dashboard/_home/top-collections')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // Title rendered as the primary label
+            // Title rendered as the (only) label.
             expect(res.text).toContain('Beta Letters');
-            // PID still shown (smaller, monospace) so staff can copy
-            expect(res.text).toContain('codu:Beta');
-            // Title sits BEFORE the PID in document order — the
-            // partial puts the title in a <span> with the pid in a
-            // following <div>. Use indexOf to verify ordering.
-            const title_pos = res.text.indexOf('Beta Letters');
-            const pid_pos = res.text.indexOf('codu:Beta');
-            expect(title_pos).toBeLessThan(pid_pos);
-            expect(title_pos).toBeGreaterThan(-1);
+            // The PID subtitle was removed — `codu:Beta` no longer appears as
+            // visible text. It survives only in the link href, URL-encoded, so
+            // the literal `codu:Beta` is absent but the filter link still works.
+            expect(res.text).not.toContain('codu:Beta');
+            expect(res.text).toContain('collection=codu%3ABeta');
         });
 
         it('Top Collections partial falls back to PID when no title exists', async () => {

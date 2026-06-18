@@ -138,38 +138,16 @@ function _extract_title_from_dr(dr) {
     return title.length > 0 ? title : null;
 }
 
-// "Call number" in DU's metadata model is the local identifier —
-// `display_record.identifiers[*].type === 'local'` (see
-// libs/archivesspace_transform.js:_build_identifiers, which writes
-// the plugin's component_id / id_0.id_1... shape into this field).
-// Returns null when no local identifier is present.
-function _extract_call_number_from_dr(dr) {
-    if (!dr || typeof dr !== 'object') return null;
-    if (!Array.isArray(dr.identifiers)) return null;
-    for (const id of dr.identifiers) {
-        if (
-            id &&
-            id.type === 'local' &&
-            typeof id.identifier === 'string' &&
-            id.identifier.trim().length > 0
-        ) {
-            return id.identifier.trim();
-        }
-    }
-    return null;
-}
-
 // Latest N ingested objects (active only).
 //
-// Surfaces `title` + `call_number` parsed from `display_record` so
-// the home-page panel can render a human-readable label instead of
-// just the file path. Falls back to null for either field if the
-// display_record doesn't carry the value — the partial decides what
-// to show in that case.
+// Surfaces `title` parsed from `display_record` so the home-page panel can
+// render a human-readable label; `title` is null when the display_record
+// has none, and the partial falls back to a shortened pid. (The card was
+// simplified to title-only — the former call-number/file-path subtitle was
+// dropped, so `call_number` / `file_name` are no longer derived here.)
 //
-// We strip the raw `display_record` blob from the response: it's
-// ~3KB per row and the dashboard partial only needs the two derived
-// fields.
+// We strip the raw `display_record` blob from the response (~3KB per row);
+// the dashboard partial only needs the derived `title`.
 async function recent_ingests({ limit = 5 } = {}) {
     const n = Number.parseInt(limit, 10);
     if (!Number.isFinite(n) || n < 1 || n > 50) {
@@ -183,7 +161,6 @@ async function recent_ingests({ limit = 5 } = {}) {
                 'is_member_of_collection',
                 'object_type',
                 'is_published',
-                'file_name',
                 'display_record',
                 'created'
             )
@@ -198,7 +175,6 @@ async function recent_ingests({ limit = 5 } = {}) {
             return {
                 ...rest,
                 title: _extract_title_from_dr(dr),
-                call_number: _extract_call_number_from_dr(dr),
             };
         });
     });
