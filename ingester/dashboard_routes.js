@@ -85,7 +85,14 @@ module.exports = function mount(app) {
     // after paint (hx-trigger="load"); any signed-in staff, and deliberately
     // NOT under /admin/ so it's part of the normal landing experience, not
     // an admin-only view. Renders nothing when all services are reachable.
-    app.get(`${base}/_services/banner`, require_dashboard_auth, controller.services_banner_partial);
+    // NOTE: path is `${cfg.path}/dashboard/_services/banner` — NOT under
+    // `base` (which is `${cfg.path}/dashboard/ingest`). It must match the
+    // home page's mount, which uses dashboard_base (`${cfg.path}/dashboard`).
+    app.get(
+        `${cfg.path}/dashboard/_services/banner`,
+        require_dashboard_auth,
+        controller.services_banner_partial
+    );
 
     // Queue timeline modal — registered last so the more-specific
     // routes above (e.g. `/list`, `/workspace`, `/history`) match first.

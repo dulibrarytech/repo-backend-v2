@@ -6,6 +6,7 @@
 // normal "unreachable" result within the deadline, not a hang or a throw.
 
 const dashboard = require('../../../ingester/dashboard');
+const app_config = require('../../../config/app');
 
 describe('service probe deadline (banner snappiness)', () => {
     it('_with_deadline resolves a fast probe to its value', async () => {
@@ -54,5 +55,19 @@ describe('service probe deadline (banner snappiness)', () => {
         }));
         expect(res.reachable).toBe(true);
         expect(res.detail).toBe('ok');
+    });
+
+    // Regression guard for the false-positive banner: the per-probe deadline
+    // must give the slowest *interactive* probe its full client budget, or a
+    // healthy-but-slow service is wrongly reported down. ArchivesSpace's probe
+    // is a login round-trip (15s), DuraCloud's is 15s, Elasticsearch's is 10s.
+    // (Archivematica/curation have longer budgets but lightweight liveness, so
+    // they're intentionally capped by the banner deadline.) The original 3s
+    // value violated this and false-flagged ArchivesSpace.
+    it('banner deadline clears the slowest interactive probe (no false "down")', () => {
+        const cfg = app_config();
+        expect(dashboard.BANNER_PROBE_TIMEOUT_MS).toBeGreaterThanOrEqual(cfg.archivespace.timeout_ms);
+        expect(dashboard.BANNER_PROBE_TIMEOUT_MS).toBeGreaterThanOrEqual(cfg.duracloud.timeout_ms);
+        expect(dashboard.BANNER_PROBE_TIMEOUT_MS).toBeGreaterThanOrEqual(cfg.elasticsearch.timeout_ms);
     });
 });

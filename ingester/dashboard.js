@@ -692,10 +692,18 @@ const BANNER_PROBES = [
     { key: 'elasticsearch', label: 'Elasticsearch', probe: _probe_elasticsearch },
 ];
 
-// Per-probe deadline for the banner. The banner loads after paint, but we
-// still bound each probe so a hung service (e.g. ES on a 10s connect timeout)
-// can't keep the banner spinning — past this it's reported unreachable.
-const BANNER_PROBE_TIMEOUT_MS = 3000;
+// Per-probe deadline for the banner. It MUST exceed the slowest *healthy*
+// probe, or a real service gets false-flagged as down. ArchivesSpace's probe
+// is a full login round-trip bounded by ARCHIVESPACE_TIMEOUT_MS (15s), and
+// DuraCloud's is also 15s; the original 3s value guillotined a healthy-but-slow
+// ArchivesSpace login and rendered a spurious "Some services are temporarily
+// unavailable" banner — while the admin health view, which runs the SAME probes
+// unbounded, correctly showed everything online. 20s clears the 15s
+// ArchivesSpace/DuraCloud and 10s Elasticsearch probes, while still capping a
+// genuinely hung probe so this after-paint banner doesn't wait on
+// Archivematica's 60s request budget (healthy AM/curation liveness is fast,
+// well under 20s). Invariant guarded in tests against the ArchivesSpace timeout.
+const BANNER_PROBE_TIMEOUT_MS = 20000;
 
 // Post-sign-in "degraded services" banner. Lazy-loaded by the home page
 // AFTER paint (hx-trigger="load"), so a slow or timing-out probe can never
@@ -958,4 +966,5 @@ module.exports = {
     // exported for tests
     _run_probe,
     _with_deadline,
+    BANNER_PROBE_TIMEOUT_MS,
 };
