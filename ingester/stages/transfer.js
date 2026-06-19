@@ -319,45 +319,43 @@ async function run(row, deps = {}) {
             const am_status = st_res.data.status;
             const am_sip = st_res.data.sip_uuid;
             const microservice = st_res.data.microservice;
-            // Record the microservice so the dashboard can show "where
-            // it is" without staff drilling into AM. We only write on
-            // change (not every probe) to avoid event spam.
-            //
-            // AWAIT the update — previously this was fire-and-forget
-            // ("not critical for the poll to continue"), but on the
-            // FINAL poll tick (the one that returns done=true), the
-            // unawaited transaction was still in-flight when the
-            // subsequent TRANSFER_COMPLETE update fired. MariaDB's
-            // optimistic-concurrency check detected the row checksum
-            // had changed between read and write and threw
-            // "Record has changed since last read in table
-            // 'tbl_ingest_queue'" — a real production halt that
-            // sqlite tests never reproduced. Awaiting serializes the
-            // two writes and removes the race. Performance cost is
-            // negligible (one extra ~10ms write per AM microservice
-            // transition; poll cadence is 30s+).
-            if (microservice && microservice !== row.micro_service) {
-                row.micro_service = microservice; // local cache
-                try {
-                    await model.update_queue({ id: row.id }, { micro_service: microservice });
-                } catch (err) {
-                    // Best-effort: log + continue. The poll should
-                    // keep running even if this column write fails
-                    // (it's an informational field, not part of the
-                    // state-machine contract).
-                    log.warn({
-                        event: 'transfer_microservice_write_failed',
-                        queue_id: row.id,
-                        microservice,
-                        err: err.message,
-                    });
-                }
-            }
+
+            // Terminal FIRST — the stage writes the terminal state next, so
+            // writing the row here would race that write. MariaDB's
+            // optimistic-concurrency check throws "Record has changed since
+            // last read in table 'tbl_ingest_queue'" when two writes to the
+            // same row interleave (a real production halt sqlite never
+            // reproduced). Returning immediately keeps the terminal tick
+            // write-free, so the only writer on that tick is the stage.
             if (am_status === 'FAILED' || am_status === 'REJECTED') {
                 return { done: true, value: { failed: true, am_status, microservice } };
             }
             if (am_status === 'COMPLETE' && am_sip) {
                 return { done: true, value: { am_sip, microservice } };
+            }
+
+            // Still in progress — persist a heartbeat (last_poll_at) every
+            // poll so the dashboard shows "checked Ns ago" (a slow-but-
+            // working transfer vs a stalled one), plus the current AM
+            // microservice ("where it is") when it changes. NO status in the
+            // update → enrich_update writes no event, so the audit log stays
+            // clean across a multi-hour transfer.
+            const progress = { last_poll_at: Date.now() };
+            if (microservice && microservice !== row.micro_service) {
+                row.micro_service = microservice; // local cache
+                progress.micro_service = microservice;
+            }
+            try {
+                await model.update_queue({ id: row.id }, progress);
+            } catch (err) {
+                // Best-effort: informational only, not part of the
+                // state-machine contract — log and keep polling.
+                log.warn({
+                    event: 'transfer_progress_write_failed',
+                    queue_id: row.id,
+                    microservice,
+                    err: err.message,
+                });
             }
             return { done: false };
         },

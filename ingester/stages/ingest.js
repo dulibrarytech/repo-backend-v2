@@ -85,30 +85,34 @@ async function run(row, deps = {}) {
                 }
                 const am_status = res.data.status;
                 const microservice = res.data.microservice;
-                if (microservice && microservice !== row.micro_service) {
-                    row.micro_service = microservice;
-                    // AWAIT to avoid a race with the subsequent
-                    // INGEST_COMPLETE write — see the matching
-                    // comment in stages/transfer.js. MariaDB
-                    // optimistic-concurrency detects in-flight
-                    // unawaited updates and throws "Record has
-                    // changed since last read in table".
-                    try {
-                        await model.update_queue({ id: row.id }, { micro_service: microservice });
-                    } catch (err) {
-                        log.warn({
-                            event: 'ingest_microservice_write_failed',
-                            queue_id: row.id,
-                            microservice,
-                            err: err.message,
-                        });
-                    }
-                }
+
+                // Terminal FIRST so the terminal tick is write-free and can't
+                // race the subsequent INGEST_COMPLETE write (MariaDB
+                // optimistic-concurrency — see stages/transfer.js).
                 if (am_status === 'FAILED' || am_status === 'REJECTED') {
                     return { done: true, value: { failed: true, am_status, microservice } };
                 }
                 if (am_status === 'COMPLETE') {
                     return { done: true, value: { microservice } };
+                }
+
+                // In progress — heartbeat (last_poll_at) every poll for the
+                // dashboard's "checked Ns ago", plus the current microservice
+                // on change. No status → no event.
+                const progress = { last_poll_at: Date.now() };
+                if (microservice && microservice !== row.micro_service) {
+                    row.micro_service = microservice;
+                    progress.micro_service = microservice;
+                }
+                try {
+                    await model.update_queue({ id: row.id }, progress);
+                } catch (err) {
+                    log.warn({
+                        event: 'ingest_progress_write_failed',
+                        queue_id: row.id,
+                        microservice,
+                        err: err.message,
+                    });
                 }
                 return { done: false };
             },
@@ -245,6 +249,17 @@ async function run(row, deps = {}) {
             const res = await duracloud.fetch_text(mets_path, { signal });
             if (res.status === 200 && typeof res.data === 'string' && res.data.length > 0) {
                 return { done: true, value: { mets_xml: res.data } };
+            }
+            // Not ready yet — heartbeat so the dashboard shows the DuraCloud
+            // wait is alive ("checked Ns ago"), not stalled. No status → no event.
+            try {
+                await model.update_queue({ id: row.id }, { last_poll_at: Date.now() });
+            } catch (err) {
+                log.warn({
+                    event: 'duracloud_heartbeat_write_failed',
+                    queue_id: row.id,
+                    err: err.message,
+                });
             }
             // 404 is the expected "not ready yet" signal during AIP
             // propagation; log only the non-404 cases to avoid noise.

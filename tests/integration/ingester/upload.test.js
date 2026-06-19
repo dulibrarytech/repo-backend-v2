@@ -174,6 +174,51 @@ describe('ingester/stages/upload', () => {
         expect(fresh.pipeline_state).toBe('UPLOAD_COMPLETE');
     });
 
+    it('persists byte progress (bytes_uploaded / total_bytes) from check_sftp', async () => {
+        // Tier 2 upload progress: the curation API's in_progress polls carry
+        // remote_package_size_bytes (uploaded) + local_package_size_bytes
+        // (total). The stage persists them so the dashboard can render a live
+        // %. The row should end with the LAST in_progress values (the
+        // terminal upload_complete shape carries no bytes, so it's ignored).
+        const row = await seed_row();
+        let n = 0;
+        const responses = [
+            {
+                status: 200,
+                data: {
+                    message: 'in_progress',
+                    remote_file_count: 1,
+                    local_file_count: 2,
+                    remote_package_size_bytes: 13_207_024_435,
+                    local_package_size_bytes: 37_580_963_840,
+                },
+            },
+            {
+                status: 200,
+                data: {
+                    message: 'in_progress',
+                    remote_file_count: 1,
+                    local_file_count: 2,
+                    remote_package_size_bytes: 26_414_048_870,
+                    local_package_size_bytes: 37_580_963_840,
+                },
+            },
+            { status: 200, data: { message: 'upload_complete', data: [['a', 'b'], 2] } },
+        ];
+        const qa = make_qa({
+            get_package_file_count: { status: 200, data: { package_file_count: 2 } },
+            move_to_ingest: { status: 200, data: {} },
+            move_to_sftp: { status: 200, data: {} },
+            sftp_upload_status: () => responses[Math.min(n++, responses.length - 1)],
+        });
+        const out = await stage.run(row, { qa, model });
+        expect(out.ok).toBe(true);
+        const fresh = await db_queue()(tables.ingest_queue).where({ id: row.id }).first();
+        // bigInteger may surface as a string depending on the driver — coerce.
+        expect(Number(fresh.bytes_uploaded)).toBe(26_414_048_870);
+        expect(Number(fresh.total_bytes)).toBe(37_580_963_840);
+    });
+
     it("advances on remote_file_count >= expected even without 'upload_complete' marker", async () => {
         // Some curation-API builds may not emit the terminal
         // 'upload_complete' marker; the count alone should be enough.

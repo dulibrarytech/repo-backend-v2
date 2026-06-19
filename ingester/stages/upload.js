@@ -113,6 +113,8 @@ async function run(row, deps = {}) {
 
     // Step 3 — poll sftp_upload_status until we hit `expected_count`.
     let last_uploaded = 0;
+    let last_bytes = -1;
+    let total_bytes = 0;
     const outcome = await poll(
         async ({ attempt, elapsed_ms }) => {
             const res = await qa.sftp_upload_status(qa_uuid, expected_count);
@@ -128,6 +130,31 @@ async function run(row, deps = {}) {
                 });
                 return { done: false };
             }
+
+            // Byte-accurate progress for the dashboard. check_sftp returns
+            // remote_package_size_bytes (uploaded so far) + local_package_
+            // size_bytes (total) on each in-progress poll. Persist them so
+            // the queue row can render a live upload % — we pass NO status,
+            // so enrich_update writes no event (the audit log stays clean
+            // through a multi-hour upload).
+            const bytes = pick_bytes(res.data);
+            if (bytes && (bytes.uploaded !== last_bytes || (bytes.total > 0 && bytes.total !== total_bytes))) {
+                last_bytes = bytes.uploaded;
+                if (bytes.total > 0) total_bytes = bytes.total;
+                try {
+                    await model.update_queue(
+                        { id: row.id },
+                        { bytes_uploaded: bytes.uploaded, total_bytes }
+                    );
+                } catch (err) {
+                    log.warn({
+                        event: 'upload_progress_persist_failed',
+                        queue_id: row.id,
+                        err: err.message,
+                    });
+                }
+            }
+
             const uploaded = pick_uploaded(res.data);
             if (uploaded !== last_uploaded) {
                 last_uploaded = uploaded;
@@ -136,6 +163,8 @@ async function run(row, deps = {}) {
                     queue_id: row.id,
                     uploaded,
                     expected: expected_count,
+                    bytes_uploaded: last_bytes,
+                    total_bytes,
                     elapsed_ms,
                 });
             }
@@ -261,6 +290,21 @@ function pick_uploaded(data) {
     return null;
 }
 
+// Extract byte progress from a curation-API upload-status response. The
+// `in_progress` shape carries remote_package_size_bytes (uploaded) and
+// local_package_size_bytes (total) — see
+// lib/archivematica_ops.py::check_sftp. Returns null when those keys
+// aren't present (the `upload_complete` done shape, or an older curation
+// build) so the caller leaves the persisted progress untouched. total=0
+// means "unknown total" → the dashboard falls back to the file count.
+function pick_bytes(data) {
+    if (!data || typeof data !== 'object') return null;
+    const uploaded = Number(data.remote_package_size_bytes);
+    if (!Number.isFinite(uploaded)) return null;
+    const total = Number(data.local_package_size_bytes);
+    return { uploaded, total: Number.isFinite(total) && total > 0 ? total : 0 };
+}
+
 async function halt(model, row, terminal_state, payload) {
     const error_text = payload.errors
         ? payload.errors.join('; ').slice(0, 1000)
@@ -272,4 +316,4 @@ async function halt(model, row, terminal_state, payload) {
     );
 }
 
-module.exports = { run, _pick_count: pick_count, _pick_uploaded: pick_uploaded };
+module.exports = { run, _pick_count: pick_count, _pick_uploaded: pick_uploaded, _pick_bytes: pick_bytes };

@@ -85,6 +85,22 @@ describe('libs/object_projection', () => {
         });
     });
 
+    describe('media_category', () => {
+        it('maps mime types to coarse categories', () => {
+            expect(projection.media_category('audio/mpeg')).toBe('audio');
+            expect(projection.media_category('video/mp4')).toBe('video');
+            expect(projection.media_category('application/pdf')).toBe('pdf');
+            expect(projection.media_category('image/tiff')).toBe('image');
+            expect(projection.media_category('IMAGE/JPEG')).toBe('image'); // case-insensitive
+        });
+        it('falls back to "file" for unknown or empty mime', () => {
+            expect(projection.media_category('application/zip')).toBe('file');
+            expect(projection.media_category('')).toBe('file');
+            expect(projection.media_category(null)).toBe('file');
+            expect(projection.media_category(undefined)).toBe('file');
+        });
+    });
+
     describe('enrich', () => {
         it('drops display_record and exposes the parsed fields', () => {
             const out = projection.enrich({
@@ -100,6 +116,12 @@ describe('libs/object_projection', () => {
             expect(out.title).toBe('A title');
             expect(out.abstract).toBe('First abstract');
             expect(out.subjects).toEqual(['One', 'Two']);
+        });
+
+        it('exposes media_category derived from the row mime_type', () => {
+            expect(projection.enrich({ pid: 'a', mime_type: 'audio/mpeg' }).media_category).toBe('audio');
+            expect(projection.enrich({ pid: 'b', mime_type: 'application/pdf' }).media_category).toBe('pdf');
+            expect(projection.enrich({ pid: 'c' }).media_category).toBe('file'); // no mime_type
         });
 
         it('synthesizes a proxy URL for legacy dip-store thumbnails', () => {

@@ -18,6 +18,48 @@
         return pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + '/' + d.getFullYear() +
             ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
     }
+    // Short byte formatter for the upload-progress readout. Inline (like
+    // fmt_ts) so the partial stays self-contained and CSP-safe.
+    function fmt_bytes(n) {
+        var v = Number(n);
+        if (!isFinite(v) || v < 0) return '—';
+        if (v < 1024) return Math.round(v) + ' B';
+        var units = ['KB', 'MB', 'GB', 'TB', 'PB'];
+        var i = -1;
+        do { v /= 1024; i += 1; } while (v >= 1024 && i < units.length - 1);
+        return v.toFixed(1) + ' ' + units[i];
+    }
+    // Live byte-progress for the Archivematica SFTP upload (Stage 2). The
+    // worker persists bytes_uploaded + total_bytes each poll; the queue
+    // table's 5s refresh makes the bar climb. Only shown while UPLOADING
+    // and once we have a total (else fall back to the suggested_action).
+    var up_bytes = Number(row.bytes_uploaded) || 0;
+    var tot_bytes = Number(row.total_bytes) || 0;
+    var show_upload_progress = row.pipeline_state === 'UPLOADING' && tot_bytes > 0;
+    var up_pct = show_upload_progress ? Math.min(100, Math.round((up_bytes / tot_bytes) * 100)) : 0;
+
+    // Relative "ago" for the Archivematica/DuraCloud heartbeat (last_poll_at,
+    // epoch ms). Lets staff see a slow stage is still alive vs stalled.
+    function fmt_ago(ms) {
+        var t = Number(ms);
+        if (!isFinite(t) || t <= 0) return null;
+        var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+        if (s < 60) return s + 's ago';
+        var m = Math.round(s / 60);
+        if (m < 60) return m + 'm ago';
+        return Math.round(m / 60) + 'h ago';
+    }
+    // Step-level feedback for the long-running AM transfer/ingest + DuraCloud-
+    // wait states: show the current AM microservice ("where it is") and a
+    // heartbeat ("checked Ns ago"). AM exposes the current step name, not a %
+    // within it — so this is the meaningful "it's alive and here" signal.
+    var AM_PROGRESS_STATES = ['TRANSFER_STARTED', 'TRANSFER_IN_PROGRESS',
+        'INGEST_IN_PROGRESS', 'WAITING_FOR_DURACLOUD'];
+    var show_am_progress = !show_upload_progress
+        && AM_PROGRESS_STATES.indexOf(row.pipeline_state) !== -1;
+    var micro = (row.micro_service && row.micro_service !== 'PENDING') ? row.micro_service : null;
+    var checked_ago = fmt_ago(row.last_poll_at);
+
     var actions = (row && Array.isArray(row.actions)) ? row.actions : [];
     var has_rollback = actions.indexOf('rollback_pre_ingest') !== -1
         || actions.indexOf('rollback_archivematica') !== -1
@@ -48,7 +90,30 @@
         }) %>
     </td>
     <td>
-        <span class="text-muted small"><%= row.suggested_action || '' %></span>
+        <% if (show_upload_progress) { %>
+            <div class="text-muted small mb-1">
+                Uploading to Archivematica — <%= fmt_bytes(up_bytes) %> / <%= fmt_bytes(tot_bytes) %> (<%= up_pct %>%)
+            </div>
+            <div class="progress" role="progressbar"
+                 aria-label="Upload progress"
+                 aria-valuenow="<%= up_pct %>" aria-valuemin="0" aria-valuemax="100"
+                 style="height: 6px; max-width: 280px;">
+                <div class="progress-bar" style="width: <%= up_pct %>%; background-color: var(--du-crimson);"></div>
+            </div>
+        <% } else if (show_am_progress) { %>
+            <div class="text-muted small">
+                <% if (micro) { %>
+                    Archivematica — <span class="fw-semibold"><%= micro %></span>
+                <% } else { %>
+                    <%= row.suggested_action || 'Processing…' %>
+                <% } %>
+                <% if (checked_ago) { %>
+                    <span class="text-muted"> · checked <%= checked_ago %></span>
+                <% } %>
+            </div>
+        <% } else { %>
+            <span class="text-muted small"><%= row.suggested_action || '' %></span>
+        <% } %>
     </td>
     <td class="timestamp-cell">
         <%= fmt_ts(row.created) %>

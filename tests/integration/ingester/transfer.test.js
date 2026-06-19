@@ -484,4 +484,27 @@ describe('ingester/stages/transfer', () => {
         const fresh = await db_queue()(tables.ingest_queue).where({ id: row.id }).first();
         expect(['Verify metadata', 'Finished'].includes(fresh.micro_service)).toBe(true);
     });
+
+    it('writes a last_poll_at heartbeat during the in-progress status poll', async () => {
+        const row = await seed_row();
+        const before = Date.now();
+        const am = make_am({
+            start_transfer: { status: 200, data: { id: 'tx-1', directory: 'd' } },
+            get_unapproved_transfer_list: {
+                status: 200,
+                data: { results: [{ directory: 'd', uuid: 'tx-1' }] },
+            },
+            approve_transfer: { status: 200, data: {} },
+            get_transfer_status: [
+                { status: 200, data: { status: 'PROCESSING', microservice: 'Normalize' } },
+                { status: 200, data: { status: 'COMPLETE', sip_uuid: 'sip-9' } },
+            ],
+        });
+        const out = await stage.run(row, { am, model });
+        expect(out.ok).toBe(true);
+        const fresh = await db_queue()(tables.ingest_queue).where({ id: row.id }).first();
+        // The in-progress poll persisted a recent epoch-ms heartbeat.
+        expect(Number(fresh.last_poll_at)).toBeGreaterThanOrEqual(before);
+        expect(Number(fresh.last_poll_at)).toBeLessThanOrEqual(Date.now());
+    });
 });

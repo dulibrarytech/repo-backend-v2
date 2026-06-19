@@ -58,6 +58,20 @@ function thumbnail_src(raw, pid) {
 // the dashboard needs. Does NOT replace the original row — adds keys.
 // The big `display_record` blob is dropped from the result so callers
 // don't accidentally serialize 3KB per row to the browser.
+// Map a master-file mime_type to a coarse media category, used by the
+// dashboard to pick a default-thumbnail icon when an object has no real
+// thumbnail derivative. Audio / video / PDF read distinctly from images;
+// unknown or absent → 'file' (a generic document icon).
+function media_category(mime_type) {
+    const m = typeof mime_type === 'string' ? mime_type.trim().toLowerCase() : '';
+    if (!m) return 'file';
+    if (m === 'application/pdf') return 'pdf';
+    if (m.startsWith('audio/')) return 'audio';
+    if (m.startsWith('video/')) return 'video';
+    if (m.startsWith('image/')) return 'image';
+    return 'file';
+}
+
 function enrich(row) {
     if (!row) return row;
     const dr = parse_display_record(row.display_record);
@@ -83,6 +97,7 @@ function enrich(row) {
         // if it ever needs to.
         thumbnail_raw: raw_thumbnail,
         thumbnail: thumbnail_src(raw_thumbnail, rest.pid),
+        media_category: media_category(rest.mime_type),
         subjects: Array.isArray(dr.f_subjects) ? dr.f_subjects.filter(Boolean) : [],
     };
 }
@@ -96,6 +111,7 @@ module.exports = {
     parse_display_record,
     first_string,
     thumbnail_src,
+    media_category,
     enrich,
     enrich_all,
 };
