@@ -394,7 +394,9 @@ async function objects_delete(req, res) {
     // delete_reason flows through from the confirmation modal's
     // textarea. Required — model throws ValidationError if missing.
     const delete_reason = req.body && req.body.delete_reason;
-    const actor = req.user && (req.user.du_id || req.user.email || req.user.sub);
+    // Audit actor: "First Last (du_id)" so the AM admin can identify who
+    // initiated the delete by name, with the du_id as the unambiguous key.
+    const actor = await user_model.actor_label(req.user);
     const result = await repo_model.soft_delete(req.params.pid, {
         delete_reason,
         actor,
@@ -470,7 +472,9 @@ async function objects_bulk_action(req, res, kind) {
     if (pids.length === 0) {
         throw new ValidationError('Select at least one object');
     }
-    const actor = req.user && (req.user.du_id || req.user.email || req.user.sub);
+    // Audit actor: "First Last (du_id)" — same label the single-delete and
+    // API paths stamp, so the AM admin sees a consistent "Deleted by ...".
+    const actor = await user_model.actor_label(req.user);
 
     let result;
     let verb;

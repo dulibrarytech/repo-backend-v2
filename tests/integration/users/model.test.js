@@ -2,6 +2,8 @@
 
 const user_model = require('../../../users/model');
 const db_helper = require('../../helpers/db');
+const { db } = require('../../../config/db');
+const tables = require('../../../config/db_tables');
 const { NotFoundError, ConflictError } = require('../../../libs/errors');
 
 describe('users/model — DB integration', () => {
@@ -140,5 +142,65 @@ describe('users/model — DB integration', () => {
         await user_model.soft_delete(u.id);
         expect(await user_model.get_by_du_id('lookup')).toBeUndefined();
         expect((await user_model.get_by_du_id('lookup', { include_inactive: true })).id).toBe(u.id);
+    });
+
+    describe('actor_label (audit "Deleted by ..." label)', () => {
+        it('returns "First Last (du_id)" when the user resolves', async () => {
+            await db_helper.seed_user({
+                du_id: '871095226',
+                first_name: 'Fernando',
+                last_name: 'Reyes',
+            });
+            const label = await user_model.actor_label({
+                du_id: '871095226',
+                sub: '7',
+                email: 'f@du.edu',
+            });
+            expect(label).toBe('Fernando Reyes (871095226)');
+        });
+
+        it('resolves a just-deactivated (still-authenticated) user by name', async () => {
+            const u = await db_helper.seed_user({
+                du_id: 'gone',
+                first_name: 'Grace',
+                last_name: 'Hopper',
+            });
+            await user_model.soft_delete(u.id);
+            const label = await user_model.actor_label({ du_id: 'gone' });
+            expect(label).toBe('Grace Hopper (gone)');
+        });
+
+        it('falls back to the du_id when no matching user row exists', async () => {
+            const label = await user_model.actor_label({
+                du_id: 'ghost',
+                email: 'g@du.edu',
+                sub: '9',
+            });
+            expect(label).toBe('ghost');
+        });
+
+        it('falls back to the du_id when the row has no name', async () => {
+            // Direct insert — seed_user coerces empty names to defaults.
+            await db()(tables.users).insert({
+                du_id: 'noname',
+                email: 'n@du.edu',
+                first_name: '',
+                last_name: '',
+                is_active: 1,
+                token: '0',
+            });
+            const label = await user_model.actor_label({ du_id: 'noname' });
+            expect(label).toBe('noname');
+        });
+
+        it('falls back to email, then sub, when du_id is absent', async () => {
+            expect(await user_model.actor_label({ email: 'e@du.edu', sub: '5' })).toBe('e@du.edu');
+            expect(await user_model.actor_label({ sub: '5' })).toBe('5');
+        });
+
+        it('returns null for a missing principal', async () => {
+            expect(await user_model.actor_label(null)).toBeNull();
+            expect(await user_model.actor_label(undefined)).toBeNull();
+        });
     });
 });

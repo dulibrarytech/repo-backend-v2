@@ -69,6 +69,28 @@ async function get_by_du_id(du_id, { include_inactive = false } = {}) {
     return q.first();
 }
 
+// Build a human-readable audit "actor" label from a JWT principal
+// (req.user — which carries only du_id/email/sub, NOT the name). Returns
+// "First Last (du_id)" when the name resolves from the users table, else
+// the du_id / email / sub alone. Used for the "Deleted by ..." reason
+// stamped on Archivematica deletion requests so an admin reviewing the AM
+// queue can identify the staff member by name, with the du_id as the
+// unambiguous key. include_inactive so a just-deactivated-but-still-
+// authenticated user is still named. NEVER throws — an audit label must
+// not be able to block the action it describes.
+async function actor_label(principal) {
+    if (!principal) return null;
+    const fallback = principal.du_id || principal.email || principal.sub || null;
+    if (!principal.du_id) return fallback;
+    try {
+        const row = await get_by_du_id(principal.du_id, { include_inactive: true });
+        const name = row ? `${row.first_name || ''} ${row.last_name || ''}`.trim() : '';
+        return name ? `${name} (${principal.du_id})` : fallback;
+    } catch {
+        return fallback;
+    }
+}
+
 async function create(input) {
     validate_create(input);
     const row = normalize(input);
@@ -120,6 +142,7 @@ module.exports = {
     list,
     get,
     get_by_du_id,
+    actor_label,
     create,
     update,
     soft_delete,
