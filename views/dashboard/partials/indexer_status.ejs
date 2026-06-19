@@ -8,7 +8,10 @@
        - ES cluster: configured?, health color, doc count in the
          public index
        - Drift: eligible vs indexed in ES — should match in steady
-         state; a large gap means the worker is behind or ES is down */%>
+         state; a large gap means the worker is behind or ES is down
+       - Dead-letter alert: rows that exhausted the retry cap and were
+         parked (index_error set). Shown only when > 0, with a "Retry
+         failed" action — "no silent caps." */%>
 <div class="row g-3 p-3">
     <div class="col-md-4">
         <div class="text-muted small mb-1">Dirty (awaiting indexer)</div>
@@ -57,6 +60,33 @@
             <% } %>
         </div>
     </div>
+
+    <% var dead = counts.dead_lettered || 0; %>
+    <% if (dead > 0) { %>
+        <div class="col-12">
+            <div class="alert alert-danger small mb-0 d-flex justify-content-between align-items-center" role="alert">
+                <div>
+                    <strong><%= dead.toLocaleString() %></strong>
+                    row<%= dead === 1 ? '' : 's' %> dead-lettered — failed to
+                    index repeatedly and parked (no longer auto-retried).
+                    Check the log for <code>indexer_row_dead_lettered</code>,
+                    fix the underlying data or mapping, then retry.
+                </div>
+                <form class="d-inline ms-3"
+                      hx-post="<%= dashboard_base %>/admin/indexer/reindex-failed"
+                      hx-target="#indexer-status"
+                      hx-swap="innerHTML">
+                    <button type="submit"
+                            class="btn btn-sm btn-outline-danger text-nowrap"
+                            data-confirm="Re-queue all dead-lettered rows for indexing? Do this only after fixing the underlying cause — otherwise they'll just fail again."
+                            data-confirm-title="Retry dead-lettered?"
+                            data-confirm-label="Retry failed">
+                        Retry failed
+                    </button>
+                </form>
+            </div>
+        </div>
+    <% } %>
 
     <% if (counts.eligible !== index_count && es_configured) { %>
         <div class="col-12">

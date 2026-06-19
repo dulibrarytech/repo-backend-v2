@@ -268,5 +268,114 @@ describe('indexer/model — DB integration', () => {
             expect(c.indexed_flag).toBe(1);
             expect(c.eligible).toBe(2);
         });
+
+        it('counts dead-lettered rows (index_error set)', async () => {
+            await db_helper.seed_object({ index_error: 'parked: parse error' });
+            await db_helper.seed_object({ index_error: null });
+            const c = await model.status_counts();
+            expect(c.dead_lettered).toBe(1);
+        });
+    });
+
+    describe('record_failures (dead-letter retry cap)', () => {
+        it('increments index_attempts and requeues a row under the cap', async () => {
+            const a = await db_helper.seed_object({ is_updated: 0, index_attempts: 0 });
+            const r = await model.record_failures([{ pid: a.pid, err: 'boom' }], {
+                max_attempts: 3,
+            });
+            expect(r.requeued).toEqual([a.pid]);
+            expect(r.dead_lettered).toEqual([]);
+            const row = await db()(tables.objects).where({ pid: a.pid }).first();
+            expect(row.index_attempts).toBe(1);
+            expect(row.is_updated).toBe(1); // re-queued for another try
+            expect(row.index_error).toBeFalsy(); // not parked yet
+        });
+
+        it('dead-letters a row once it reaches the cap', async () => {
+            // Two prior attempts; cap is 3, so this third failure parks it.
+            const a = await db_helper.seed_object({ is_updated: 0, index_attempts: 2 });
+            const r = await model.record_failures([{ pid: a.pid, err: 'parse error' }], {
+                max_attempts: 3,
+            });
+            expect(r.dead_lettered).toEqual([a.pid]);
+            expect(r.requeued).toEqual([]);
+            const row = await db()(tables.objects).where({ pid: a.pid }).first();
+            expect(row.index_attempts).toBe(3);
+            expect(row.is_updated).toBe(0); // NOT re-claimed — the fix
+            expect(row.index_error).toBe('parse error'); // visible to admin
+        });
+
+        it('partitions a mixed batch into requeued + dead-lettered', async () => {
+            const under = await db_helper.seed_object({ is_updated: 0, index_attempts: 0 });
+            const over = await db_helper.seed_object({ is_updated: 0, index_attempts: 4 });
+            const r = await model.record_failures(
+                [
+                    { pid: under.pid, err: 'x' },
+                    { pid: over.pid, err: 'y' },
+                ],
+                { max_attempts: 5 }
+            );
+            expect(r.requeued).toEqual([under.pid]);
+            expect(r.dead_lettered).toEqual([over.pid]);
+        });
+
+        it('truncates a long error message to 1000 chars', async () => {
+            const a = await db_helper.seed_object({ is_updated: 0, index_attempts: 4 });
+            await model.record_failures([{ pid: a.pid, err: 'e'.repeat(5000) }], {
+                max_attempts: 5,
+            });
+            const row = await db()(tables.objects).where({ pid: a.pid }).first();
+            expect(row.index_error).toHaveLength(1000);
+        });
+
+        it('is a no-op on empty input', async () => {
+            expect(await model.record_failures([], { max_attempts: 5 })).toEqual({
+                requeued: [],
+                dead_lettered: [],
+            });
+        });
+
+        it('mark_indexed_bulk clears attempts + error on success', async () => {
+            const a = await db_helper.seed_object({ index_attempts: 4, index_error: 'old failure' });
+            await model.mark_indexed_bulk([a.pid]);
+            const row = await db()(tables.objects).where({ pid: a.pid }).first();
+            expect(row.is_indexed).toBe(1);
+            expect(row.index_attempts).toBe(0);
+            expect(row.index_error).toBeFalsy();
+        });
+
+        it('requeue_dead_lettered re-queues only rows with an index_error', async () => {
+            const dead = await db_helper.seed_object({
+                is_updated: 0,
+                index_attempts: 5,
+                index_error: 'boom',
+            });
+            const healthy = await db_helper.seed_object({
+                is_updated: 0,
+                index_attempts: 0,
+                index_error: null,
+            });
+            const result = await model.requeue_dead_lettered();
+            expect(result.affected).toBe(1);
+            const d = await db()(tables.objects).where({ pid: dead.pid }).first();
+            expect(d.is_updated).toBe(1);
+            expect(d.index_attempts).toBe(0);
+            expect(d.index_error).toBeFalsy();
+            const h = await db()(tables.objects).where({ pid: healthy.pid }).first();
+            expect(h.is_updated).toBe(0); // untouched
+        });
+
+        it('an explicit reindex (mark_dirty_pid) clears a dead-lettered row', async () => {
+            const a = await db_helper.seed_object({
+                is_updated: 0,
+                index_attempts: 9,
+                index_error: 'boom',
+            });
+            await model.mark_dirty_pid(a.pid);
+            const row = await db()(tables.objects).where({ pid: a.pid }).first();
+            expect(row.is_updated).toBe(1);
+            expect(row.index_attempts).toBe(0);
+            expect(row.index_error).toBeFalsy();
+        });
     });
 });

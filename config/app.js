@@ -195,6 +195,14 @@ function build() {
             // metadata worker; staff actions that flip is_updated=1
             // become visible in public search within ~8s.
             poll_ms: integer('INDEXER_POLL_MS', 8000),
+            // Bounded retry for the (is_updated,is_indexed) queue. After
+            // a row fails to index this many consecutive times it's
+            // DEAD-LETTERED (index_error recorded, no longer auto-
+            // requeued) instead of re-failing every poll forever. The
+            // admin "Retry failed" button or any explicit reindex clears
+            // it. A whole-batch ES transport failure does NOT count
+            // toward this cap — an outage mustn't dead-letter every row.
+            max_attempts: integer('INDEXER_MAX_ATTEMPTS', 5),
         },
 
         // ArchivesSpace — the source of truth for descriptive metadata.

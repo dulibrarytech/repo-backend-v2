@@ -187,6 +187,8 @@
           "properties": {
             "begin": {
               "type": "date",
+              "format": "strict_date_optional_time||yyyy-M-d||yyyy-M||yyyy||epoch_millis",
+              "ignore_malformed": true,
               "fields": {
                 "keyword": {
                   "type": "keyword",
@@ -208,6 +210,8 @@
             },
             "date": {
               "type": "date",
+              "format": "strict_date_optional_time||yyyy-M-d||yyyy-M||yyyy||epoch_millis",
+              "ignore_malformed": true,
               "fields": {
                 "keyword": {
                   "type": "keyword",
@@ -235,6 +239,8 @@
             },
             "end": {
               "type": "date",
+              "format": "strict_date_optional_time||yyyy-M-d||yyyy-M||yyyy||epoch_millis",
+              "ignore_malformed": true,
               "fields": {
                 "keyword": {
                   "type": "keyword",

@@ -49,17 +49,22 @@ function build_op(row) {
 
 // Batch processing. One ES `_bulk` call per tick covering every row
 // claimed by claim_dirty. ES returns per-item results, so we can mark
-// successes and requeue failures with three UPDATEs total — no
-// per-row chatter against either ES or the DB.
+// successes and requeue/dead-letter failures with a few UPDATEs total —
+// no per-row chatter against either ES or the DB.
 //
-// Failure modes:
-//   - Bulk call throws (transport / auth / cluster red) → requeue ALL
-//     claimed pids and bail. The next tick retries.
-//   - Bulk returns with some items errored → mark the successes,
-//     requeue the failures. Mirrors the single-row behavior: a poison
-//     row gets retried indefinitely until its underlying data is fixed.
+// Failure modes (the distinction matters for the dead-letter cap):
+//   - Bulk call throws (transport / auth / cluster red) → the rows are
+//     blameless, so requeue ALL claimed pids WITHOUT penalty (no attempt
+//     increment) and bail. The next tick retries. An ES outage must not
+//     dead-letter the whole queue.
+//   - Bulk returns with some items errored → mark the successes, and hand
+//     the per-item failures to model.record_failures, which increments
+//     each row's attempt counter and, once it exhausts INDEXER_MAX_ATTEMPTS,
+//     DEAD-LETTERS the row (parks it with index_error set) instead of
+//     re-failing every poll forever. Dead-letters are logged ONCE here.
 async function process_batch(rows, es) {
     if (rows.length === 0) return;
+    const cfg = app_config().indexer;
     const ops = rows.map(build_op);
     let result;
     try {
@@ -73,11 +78,11 @@ async function process_batch(rows, es) {
     }
     const indexed_pids = [];
     const deindexed_pids = [];
-    const failed_pids = [];
+    const failed = [];
     for (const item of result.items) {
         if (!item.ok) {
             log.warn({ event: 'indexer_row_failed', pid: item.pid, err: item.err });
-            failed_pids.push(item.pid);
+            failed.push({ pid: item.pid, err: item.err });
         } else if (item.op === 'index') {
             indexed_pids.push(item.pid);
         } else {
@@ -88,14 +93,29 @@ async function process_batch(rows, es) {
         [
             indexed_pids.length ? model.mark_indexed_bulk(indexed_pids) : null,
             deindexed_pids.length ? model.mark_deindexed_bulk(deindexed_pids) : null,
-            failed_pids.length
-                ? model.requeue_bulk(failed_pids).catch((e) => {
-                      log.error({
-                          event: 'indexer_requeue_failed',
-                          count: failed_pids.length,
-                          err: e.message,
-                      });
-                  })
+            failed.length
+                ? model
+                      .record_failures(failed, { max_attempts: cfg.max_attempts })
+                      .then((r) => {
+                          if (r.dead_lettered.length) {
+                              // Logged once: a dead-lettered row isn't re-
+                              // claimed, so this won't repeat every poll the
+                              // way the old unbounded requeue did.
+                              log.error({
+                                  event: 'indexer_row_dead_lettered',
+                                  count: r.dead_lettered.length,
+                                  pids: r.dead_lettered,
+                                  max_attempts: cfg.max_attempts,
+                              });
+                          }
+                      })
+                      .catch((e) => {
+                          log.error({
+                              event: 'indexer_requeue_failed',
+                              count: failed.length,
+                              err: e.message,
+                          });
+                      })
                 : null,
         ].filter(Boolean)
     );

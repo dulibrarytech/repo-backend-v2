@@ -6,6 +6,8 @@ const os = require('node:os');
 const supertest = require('supertest');
 const { make_app } = require('../helpers/app');
 const db_helper = require('../helpers/db');
+const { db } = require('../../config/db');
+const tables = require('../../config/db_tables');
 const jwt = require('../../libs/jwt');
 const app_config = require('../../config/app');
 
@@ -920,9 +922,15 @@ describe('dashboard — e2e', () => {
                 .type('form')
                 .send({ delete_reason: 'will not be deleted' });
             expect(res.status).toBe(409);
-            // Row is unchanged — still active + published.
-            const after = await db_helper.seed_object;
-            // Spot check: confirm row is still active by hitting the row partial.
+            // The rejected delete must NOT have mutated the row: it's
+            // still active + published in the DB (a published object can't
+            // be soft-deleted; suppress it first).
+            const after = await db()(tables.objects).where({ pid: o.pid }).first();
+            expect(after).toBeDefined();
+            expect(after.is_active).toBe(1);
+            expect(after.is_published).toBe(1);
+            // Spot check: still surfaced in the listing partial (not hidden
+            // as if deleted).
             const list = await supertest(app)
                 .get('/repo/dashboard/objects/list')
                 .set('Cookie', cookie);
@@ -2432,6 +2440,52 @@ describe('dashboard — e2e', () => {
                 .post('/repo/dashboard/admin/indexer/reindex/not-a-uuid')
                 .set('Cookie', cookie);
             expect(res.status).toBe(400);
+        });
+
+        it('status partial surfaces dead-lettered rows + a Retry failed button', async () => {
+            const cookie = await cookie_for('idx-dl-status');
+            await db_helper.seed_object({ index_error: 'failed to parse field [dates.begin]' });
+            const res = await supertest(app)
+                .get('/repo/dashboard/admin/indexer/status')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toMatch(/dead-lettered/);
+            // The retry control posts to the new route.
+            expect(res.text).toMatch(
+                /hx-post="\/repo\/dashboard\/admin\/indexer\/reindex-failed"/
+            );
+            expect(res.text).toMatch(/Retry failed/);
+        });
+
+        it('status partial omits the dead-letter alert when none are parked', async () => {
+            const cookie = await cookie_for('idx-dl-none');
+            await db_helper.seed_object({ is_published: 1, is_active: 1 });
+            const res = await supertest(app)
+                .get('/repo/dashboard/admin/indexer/status')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).not.toMatch(/reindex-failed/);
+        });
+
+        it('POST /admin/indexer/reindex-failed re-queues dead-lettered rows', async () => {
+            const cookie = await cookie_for('idx-dl-retry');
+            await db_helper.seed_object({
+                is_updated: 0,
+                index_attempts: 5,
+                index_error: 'boom',
+            });
+            await db_helper.seed_object({ is_updated: 0, index_error: null }); // healthy
+            const res = await supertest(app)
+                .post('/repo/dashboard/admin/indexer/reindex-failed')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            const trigger = JSON.parse(res.headers['hx-trigger']);
+            expect(trigger.toast.level).toBe('success');
+            expect(trigger.toast.message).toMatch(/Re-queued 1 dead-lettered row/);
+            // Response IS the refreshed status partial: the row is no
+            // longer parked, so the dead-letter alert (and its button) are
+            // gone.
+            expect(res.text).not.toMatch(/reindex-failed/);
         });
 
         it('admin endpoints require auth', async () => {

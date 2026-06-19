@@ -177,6 +177,75 @@ describe('indexer/worker — integration', () => {
         expect(row.is_updated).toBe(1);
     });
 
+    it('dead-letters a row after INDEXER_MAX_ATTEMPTS consecutive item failures', async () => {
+        const orig = process.env.INDEXER_MAX_ATTEMPTS;
+        process.env.INDEXER_MAX_ATTEMPTS = '3';
+        app_config._reset();
+        try {
+            const a = await db_helper.seed_object({
+                is_published: 1,
+                is_active: 1,
+                is_updated: 1,
+            });
+            const es = make_fake_es();
+            es.fail('index', a.pid); // this row's index op always errors
+
+            const worker = create_worker({ es });
+
+            // Ticks 1 & 2: under the cap → requeued (is_updated back to 1).
+            await worker.tick();
+            let row = await db()(tables.objects).where({ pid: a.pid }).first();
+            expect(row.is_updated).toBe(1);
+            expect(row.index_attempts).toBe(1);
+            expect(row.index_error).toBeFalsy();
+
+            await worker.tick();
+            row = await db()(tables.objects).where({ pid: a.pid }).first();
+            expect(row.is_updated).toBe(1);
+            expect(row.index_attempts).toBe(2);
+
+            // Tick 3: hits the cap → dead-lettered (parked, not re-claimed).
+            await worker.tick();
+            row = await db()(tables.objects).where({ pid: a.pid }).first();
+            expect(row.index_attempts).toBe(3);
+            expect(row.is_updated).toBe(0); // no longer auto-claimed
+            expect(row.index_error).toBeTruthy(); // recorded for the admin page
+
+            // Tick 4: nothing left to claim → no new bulk call, no churn.
+            // This is the whole point of the fix: the poison row stops
+            // re-failing every poll.
+            const bulk_before = es.calls.bulk.length;
+            await worker.tick();
+            expect(es.calls.bulk.length).toBe(bulk_before);
+            row = await db()(tables.objects).where({ pid: a.pid }).first();
+            expect(row.index_attempts).toBe(3);
+        } finally {
+            if (orig === undefined) delete process.env.INDEXER_MAX_ATTEMPTS;
+            else process.env.INDEXER_MAX_ATTEMPTS = orig;
+            app_config._reset();
+        }
+    });
+
+    it('does NOT count a whole-batch transport failure toward the dead-letter cap', async () => {
+        // An ES outage (bulk call throws) requeues every claimed row, but
+        // the rows are blameless — their attempt counter must stay 0 so an
+        // outage can never dead-letter the entire queue.
+        const a = await db_helper.seed_object({
+            is_published: 1,
+            is_active: 1,
+            is_updated: 1,
+        });
+        const es = make_fake_es();
+        es.fail('bulk_all');
+        const worker = create_worker({ es });
+        await worker.tick();
+        await worker.tick();
+        const row = await db()(tables.objects).where({ pid: a.pid }).first();
+        expect(row.is_updated).toBe(1); // requeued for retry
+        expect(row.index_attempts).toBe(0); // but NOT penalized
+        expect(row.index_error).toBeFalsy();
+    });
+
     it('requeues every claimed row when the bulk call itself throws', async () => {
         // Bulk-level failure (transport/auth/cluster red) is distinct
         // from a per-item failure: NO rows made it to ES, so every

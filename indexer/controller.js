@@ -156,6 +156,23 @@ async function reindex_pid(req, res) {
     return status_partial(req, res);
 }
 
+// Retry every dead-lettered row (those that exhausted the retry cap and
+// were parked with index_error set). Clears their error + attempt counter
+// and re-dirties them so the worker re-attempts on its next tick. Run this
+// after fixing the underlying cause (e.g. an ES mapping or bad metadata).
+async function retry_dead_lettered(req, res) {
+    const result = await model.requeue_dead_lettered();
+    trigger_toast(
+        res,
+        'success',
+        result.affected === 0
+            ? 'No dead-lettered rows to retry.'
+            : `Re-queued ${result.affected} dead-lettered row${result.affected === 1 ? '' : 's'} ` +
+                  `for indexing. Watch the status panel for progress.`
+    );
+    return status_partial(req, res);
+}
+
 module.exports = {
     indexer_page,
     status_partial,
@@ -163,4 +180,5 @@ module.exports = {
     reindex_collection,
     reindex_pid,
     rebuild_index,
+    retry_dead_lettered,
 };

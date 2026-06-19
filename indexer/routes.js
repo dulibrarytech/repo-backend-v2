@@ -35,6 +35,17 @@ module.exports = function mount(app) {
         controller.reindex_pid
     );
 
+    // Retry dead-lettered rows: clears index_error + attempt counter and
+    // re-dirties every parked row. Same auth + rate limit as the other
+    // reindex actions. Surfaced only when dead-lettered > 0 in the status
+    // partial, after the operator has fixed the underlying cause.
+    app.post(
+        `${base}/reindex-failed`,
+        require_dashboard_auth,
+        write_limiter(),
+        controller.retry_dead_lettered
+    );
+
     // Destructive: drops the ES index and recreates it from current
     // mappings, then dirties every eligible row. Same auth + rate
     // limit as reindex-all — staff confirms via the data-confirm
