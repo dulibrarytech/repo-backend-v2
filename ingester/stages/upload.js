@@ -15,11 +15,15 @@
 //      Fire-and-forget on the wire — QA does the move asynchronously
 //      and we observe the result via subsequent calls.
 //   3. Tell QA to push the staged batch up to the AM SFTP source.
-//      Also fire-and-forget on the QA side; the long timeout is
-//      bounded by `cfg.upload_timeout_ms` here.
-//   4. Poll `sftp_upload_status` every `cfg.upload_poll_ms` until
-//      the uploaded file count matches the expected count, or until
-//      the total poll budget is exhausted (UPLOAD_TIMEOUT).
+//      QA runs the SFTP put in a BACKGROUND thread and returns
+//      immediately, so the poll below observes the transfer while it
+//      happens (the remote dir filling up) and the dashboard can show a
+//      live byte %. If that background put dies, QA's check_sftp reports
+//      `upload_failed` and we halt (INGEST_HALTED).
+//   4. Poll `sftp_upload_status` every `cfg.upload_poll_ms` until the
+//      uploaded file count matches the expected count, the curation side
+//      reports `upload_failed`, or the total poll budget is exhausted
+//      (UPLOAD_TIMEOUT).
 //
 // The worker passes a per-row AbortSignal so shutdown can cancel the
 // poll mid-flight; we resume from QA_COMPLETE on the next worker
@@ -94,9 +98,12 @@ async function run(row, deps = {}) {
         }
     );
 
-    // Step 2 — request the folder move + the SFTP push. Both are
-    // fire-and-forget at the QA layer; we don't gate on their
-    // success because the poll below is the real signal.
+    // Step 2 — request the folder move + the SFTP push. Both return
+    // immediately at the QA layer (the push runs in a background thread
+    // there); we don't gate on their success because the poll below is
+    // the real signal — including the `upload_failed` marker the push
+    // drops if it dies mid-transfer. A transport error reaching QA at
+    // all (curation down) is still fatal and handled by the catch.
     try {
         await qa.move_to_ingest(qa_uuid, folder, package_name);
         await qa.move_to_sftp(qa_uuid);
@@ -129,6 +136,15 @@ async function run(row, deps = {}) {
                     attempt,
                 });
                 return { done: false };
+            }
+
+            // Hard failure from the curation side: move_to_sftp runs the
+            // SFTP put in a background thread and drops an error marker if
+            // it dies; check_sftp surfaces that as `upload_failed`. Stop
+            // polling and halt — the same terminal outcome the old blocking
+            // move_to_sftp throw produced, just observed via the poll.
+            if (res.data.message === 'upload_failed') {
+                return { done: true, value: { upload_failed: true, error: res.data.error } };
             }
 
             // Byte-accurate progress for the dashboard. check_sftp returns
@@ -210,6 +226,18 @@ async function run(row, deps = {}) {
             expected_count,
         });
         return { ok: false, reason: 'upload_timeout' };
+    }
+    if (outcome.result && outcome.result.upload_failed) {
+        // The curation side's background SFTP put died (check_sftp returned
+        // `upload_failed`). Terminal — halt for staff to investigate/retry.
+        await halt(model, row, 'INGEST_HALTED', {
+            stage: 'upload',
+            reason: 'sftp_upload_failed',
+            error: outcome.result.error || 'sftp upload failed',
+            last_uploaded,
+            expected_count,
+        });
+        return { ok: false, reason: 'sftp_upload_failed' };
     }
 
     // Success.

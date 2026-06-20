@@ -437,15 +437,31 @@ async function _record_failure({
     }
     const prior_attempts = existing && Number.isFinite(existing.attempts) ? existing.attempts : 0;
     const next_attempts = prior_attempts + 1;
-    const max_attempts = cfg.max_attempts > 0 ? cfg.max_attempts : 5;
+    // "AIP not found in AM Storage Service" is AMBIGUOUS: a genuine orphan,
+    // OR a large/slow AIP that AM hasn't finished registering in the Storage
+    // Service yet when Stage 6 first queries. So it gets its own, more
+    // generous attempt budget and is RETRIED (spaced by the backoff below,
+    // now that the entry backoff-guard properly throttles re-claims) — and
+    // only declared a terminal orphan once it is STILL not found at the end
+    // of that budget. Previously the first 404 dead-lettered the row
+    // instantly, permanently stranding legitimate large AIPs (which the
+    // dashboard Retry then couldn't recover, because orphan rows
+    // short-circuit on entry).
+    const is_not_found = _is_am_not_found_error(truncated);
+    const max_attempts = is_not_found
+        ? cfg.not_found_max_attempts > 0
+            ? cfg.not_found_max_attempts
+            : 8
+        : cfg.max_attempts > 0
+          ? cfg.max_attempts
+          : 5;
 
-    // AM-404 → orphan. Dead-letter immediately + tag is_migrated=8
-    // so the backfill eligibility filter excludes it from future
-    // runs. No retry is going to recover an AIP AM doesn't know
-    // about. Bypasses the attempts-counter / backoff machinery
-    // entirely.
-    const is_orphan = _is_am_not_found_error(truncated);
-    if (is_orphan) {
+    // Terminal orphan — ONLY once a not-found has persisted through its full
+    // retry budget. Tag is_migrated=8 (AM_NOT_FOUND) so the backfill
+    // eligibility filter excludes it; dead-letter the queue row. A genuine
+    // orphan ends up here too, just later — the (bounded) cost of giving a
+    // real large AIP time to land.
+    if (is_not_found && next_attempts >= max_attempts) {
         try {
             await aip_store_model.upsert_by_uuid(pid, {
                 aip_uuid: row.sip_uuid,
@@ -478,6 +494,7 @@ async function _record_failure({
                     step: 'orphan',
                     pid,
                     attempts: next_attempts,
+                    max_attempts,
                     wire_status,
                     error: truncated,
                 },
@@ -488,6 +505,7 @@ async function _record_failure({
             pid,
             orphan: true,
             final_state: 'AIP_STORE_FAILED',
+            attempts: next_attempts,
             error: truncated,
         };
     }
@@ -509,6 +527,13 @@ async function _record_failure({
         final_state = 'AIP_STORE_FAILED';
     }
 
+    // Distinguish "not-found, still within its grace budget" from a generic
+    // transient failure in the audit trail + stored message. Both use the
+    // retry-eligible INGEST_COPY_FAILED status (NOT orphan), so the entry
+    // short-circuit lets the next attempt through.
+    const failure_message = is_not_found ? 'AM_NOT_FOUND_RETRY' : 'COPY_FAILED';
+    const failure_step = is_not_found ? 'am_not_found_retry' : 'failed';
+
     try {
         await aip_store_model.upsert_by_uuid(pid, {
             aip_uuid: row.sip_uuid,
@@ -517,7 +542,7 @@ async function _record_failure({
             attempts: next_attempts,
             next_attempt_at,
             error: truncated,
-            message: 'COPY_FAILED',
+            message: failure_message,
         });
     } catch (err) {
         log.warn({
@@ -545,13 +570,15 @@ async function _record_failure({
             actor: 'worker',
             payload: {
                 stage: 'aip_store',
-                step: 'failed',
+                step: failure_step,
                 pid,
                 attempts: next_attempts,
+                max_attempts,
                 next_attempt_at: next_attempt_at
                     ? next_attempt_at.toISOString()
                     : null,
                 wire_status,
+                not_found: is_not_found,
                 error: truncated,
             },
         }

@@ -92,7 +92,7 @@ const STATUS_METADATA = {
     AIP_STORE_FAILED: {
         severity: 'WARN',
         suggested_action:
-            'Preservation copy to Wasabi failed after multiple retries. Use the AIPs dashboard "Retry" action once Wasabi is reachable.',
+            'Preservation copy to Wasabi did not complete after its retry budget. Open the AIPs dashboard: if the row shows "Failed", retry once Wasabi/curation is reachable; if it shows "Orphan" (AIP not found in Archivematica), the AIP may have registered late — use "Re-check AM & retry".',
     },
 
     // --- Wait states (INFO, but explanatory) ------------------------------

@@ -273,20 +273,36 @@ describe('repository/aip_store_model', () => {
     });
 
     describe('reset_for_retry', () => {
-        it('clears attempts + next_attempt_at + error', async () => {
+        it('clears attempts + next_attempt_at + error + message, and resets is_migrated to INITIAL', async () => {
             const seeded = await db_helper.seed_aip_store({
                 is_migrated: 7,
                 attempts: 3,
                 next_attempt_at: new Date(Date.now() + 60_000),
                 error: 'wasabi timed out',
+                message: 'COPY_FAILED',
             });
             const after = await model.reset_for_retry(seeded.id);
             expect(after.attempts).toBe(0);
             expect(after.next_attempt_at).toBeNull();
             expect(after.error).toBeNull();
-            // is_migrated is intentionally NOT reset — Stage 6 will
-            // overwrite it on its next run.
-            expect(after.is_migrated).toBe(7);
+            expect(after.message).toBeNull();
+            // is_migrated reset to INITIAL so Stage 6 re-evaluates from
+            // scratch — and so an orphan tag can't short-circuit the retry.
+            expect(after.is_migrated).toBe(model.STATUS.INITIAL);
+        });
+
+        it('clears an orphan tag (AM_NOT_FOUND → INITIAL) so "Re-check AM & retry" actually re-runs Stage 6', async () => {
+            const seeded = await db_helper.seed_aip_store({
+                is_migrated: model.STATUS.AM_NOT_FOUND,
+                message: 'ORPHAN_AM_NOT_FOUND',
+                error: 'AIP x not found in AM Storage Service',
+            });
+            expect(model.is_orphan(seeded)).toBe(true);
+            const after = await model.reset_for_retry(seeded.id);
+            // No longer an orphan → the Stage 6 entry short-circuit won't
+            // fire, so the copy is actually attempted again.
+            expect(model.is_orphan(after)).toBe(false);
+            expect(after.is_migrated).toBe(model.STATUS.INITIAL);
         });
 
         it('throws NotFoundError on missing id', async () => {

@@ -706,6 +706,17 @@ function build() {
             // attempts to 0 and clears next_attempt_at, so staff
             // can always re-fire.
             max_attempts: integer('AIP_STORE_MAX_ATTEMPTS', 5),
+            // Separate, more generous attempt budget for the
+            // "AIP not found in AM Storage Service" failure. This is
+            // AMBIGUOUS: a genuine orphan, OR a large/slow AIP that
+            // Archivematica hasn't finished registering in the Storage
+            // Service yet when Stage 6 first queries. We retry it across
+            // this budget (spaced by the backoff above) and only declare
+            // an orphan once it's still not found at the end — so a slow
+            // big AIP gets time to land instead of being stranded on the
+            // first 404. With base 60s / cap 30min, 8 attempts ≈ 90 min
+            // of grace. Genuine orphans still dead-letter, just later.
+            not_found_max_attempts: integer('AIP_STORE_NOT_FOUND_MAX_ATTEMPTS', 8),
             // Chunk size for the admin backfill action (see
             // ingester/aip_backfill.js). Each "Start backfill" click
             // enqueues at most this many synthetic queue rows; the

@@ -353,9 +353,18 @@ async function increment_downloaded(id) {
 }
 
 // Reset a failed row for manual retry from the dashboard. Clears
-// attempts + next_attempt_at + error so Stage 6 picks it up again
-// on the next worker tick. Does NOT change is_migrated — Stage 6
-// will overwrite that on its next run.
+// attempts + next_attempt_at + error so Stage 6 picks it up again on the
+// next worker tick, and resets is_migrated to INITIAL.
+//
+// Why reset is_migrated (it didn't used to): a retry-eligible failure
+// (INGEST_COPY_FAILED) gets overwritten by Stage 6 on its next run
+// anyway — but an ORPHAN row (AM_NOT_FOUND) is short-circuited on Stage 6
+// entry and re-dead-lettered before curation is ever called, so leaving
+// the tag made a retry a silent no-op. Resetting to INITIAL clears that
+// short-circuit so a deliberate operator retry actually re-attempts the
+// copy — the recovery path for an AIP that was mis-orphaned because AM
+// was still registering it in the Storage Service when Stage 6 first
+// looked.
 //
 // Returns the updated row so the controller can re-render the table
 // row with the new state.
@@ -365,6 +374,8 @@ async function reset_for_retry(id) {
         attempts: 0,
         next_attempt_at: null,
         error: null,
+        message: null,
+        is_migrated: STATUS.INITIAL,
     });
     if (affected === 0) throw new NotFoundError(`AIP store row ${id} not found`);
     return get(id);

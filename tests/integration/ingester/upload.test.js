@@ -335,6 +335,40 @@ describe('ingester/stages/upload', () => {
         expect(fresh.pipeline_state).toBe('INGEST_HALTED');
     });
 
+    it("halts with INGEST_HALTED when check_sftp reports upload_failed (background put died)", async () => {
+        // move_to_sftp now runs the SFTP put in a background thread on the
+        // curation side and returns immediately; if that put dies it drops
+        // an error marker that check_sftp surfaces as `upload_failed`. The
+        // poll must stop and halt the row (terminal) rather than spinning to
+        // the timeout — preserving the failure surfacing the old blocking
+        // move_to_sftp throw used to give us.
+        const row = await seed_row();
+        const qa = make_qa({
+            get_package_file_count: { status: 200, data: { package_file_count: 5 } },
+            move_to_ingest: { status: 200, data: {} },
+            move_to_sftp: { status: 200, data: { message: 'upload_started' } },
+            sftp_upload_status: {
+                status: 200,
+                data: { message: 'upload_failed', error: 'sftp connection refused' },
+            },
+        });
+        const out = await stage.run(row, { qa, model });
+        expect(out.ok).toBe(false);
+        expect(out.reason).toBe('sftp_upload_failed');
+        const fresh = await db_queue()(tables.ingest_queue).where({ id: row.id }).first();
+        expect(fresh.pipeline_state).toBe('INGEST_HALTED');
+        // The poll should have bailed on the first failed status, not run
+        // out the clock.
+        expect(qa._calls.sftp_upload_status).toHaveLength(1);
+        // The curation error text is recorded for staff.
+        const events = await db_queue()(tables.ingest_events)
+            .where({ queue_id: row.id })
+            .orderBy('id', 'desc');
+        const payload = JSON.parse(events[0].payload);
+        expect(payload.reason).toBe('sftp_upload_failed');
+        expect(payload.error).toMatch(/refused/);
+    });
+
     it('aborts the poll when the signal fires and leaves the row in UPLOADING for resume', async () => {
         const row = await seed_row();
         const controller = new AbortController();

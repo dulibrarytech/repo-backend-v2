@@ -55,10 +55,16 @@ describe('ingest dashboard — e2e', () => {
             const res = await supertest(app).get('/repo/dashboard/ingest').set('Cookie', cookie);
             expect(res.status).toBe(200);
             expect(res.text).toContain('Ingest queue');
-            // Filter dropdowns are rendered.
-            expect(res.text).toContain('PROCESSING_METADATA');
-            expect(res.text).toContain('UPLOAD_TIMEOUT');
+            // Filter chrome is rendered: the batch search box + the "Show"
+            // (is_complete) dropdown. The per-state "State" dropdown was
+            // removed — staff filter by batch + open/closed, not by raw
+            // pipeline state.
+            expect(res.text).toContain('name="batch"');
+            expect(res.text).toContain('name="is_complete"');
+            expect(res.text).toContain('Open only');
             expect(res.text).toContain('hx-get');
+            // The State dropdown is gone.
+            expect(res.text).not.toContain('name="status"');
         });
 
         it('mutation kebab items use hx-indicator on the row for in-flight feedback', async () => {

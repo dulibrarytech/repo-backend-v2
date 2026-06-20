@@ -9,7 +9,6 @@
 
 const aip_store_stage = require('../../../ingester/stages/aip_store');
 const aip_store_model = require('../../../repository/aip_store_model');
-const ingest_model = require('../../../ingester/model');
 const db_helper = require('../../helpers/db');
 const { db_queue } = require('../../../config/db');
 const tables = require('../../../config/db_tables');
@@ -230,12 +229,52 @@ describe('ingester/stages/aip_store — Stage 6', () => {
         expect(stored.error).toMatch(/curation timeout/);
     });
 
-    it('AM 404 — flips row to AIP_STORE_FAILED immediately + tags as orphan', async () => {
-        // Regression: previously, an AM 404 burned all 5 retry
-        // attempts in ~20 seconds because the worker's claim cadence
-        // races faster than the configured backoff. Now AM 404
-        // dead-letters immediately + marks is_migrated=8
-        // (AM_NOT_FOUND) so future backfill runs skip it.
+    it('AM 404 with budget remaining — RETRIES (PENDING + backoff), not orphaned yet', async () => {
+        // "Not found in AM Storage Service" is ambiguous: a large/slow AIP
+        // may simply not be registered in AM yet when Stage 6 first queries.
+        // So the first 404 is RETRIED, not instantly orphaned. The row stays
+        // retry-eligible (INGEST_COPY_FAILED, not AM_NOT_FOUND) so the entry
+        // orphan short-circuit doesn't fire on the next tick. (The instant-
+        // orphan was a workaround for a since-fixed backoff-guard bug where
+        // the worker raced through retries in ~20s — the guard now spaces
+        // them by next_attempt_at, so retrying is safe again.)
+        const { queue_id, pid } = await seed_pipeline_at_stage_6();
+        const row = await db_queue()(QUEUE).where({ id: queue_id }).first();
+
+        const client = make_fake_client({
+            copy_to_wasabi: async () => ({
+                status: 200,
+                data: {
+                    ok: false,
+                    error: 'AIP aip-uuid-abc not found in AM Storage Service',
+                },
+            }),
+        });
+        const result = await aip_store_stage.run(row, { client });
+        expect(result.ok).toBe(false);
+        expect(result.orphan).toBeUndefined();
+        expect(result.final_state).toBe('AIP_STORE_PENDING');
+        expect(result.attempts).toBe(1);
+
+        const stored = await aip_store_model.get_by_uuid(pid);
+        // Retry-eligible, NOT orphan — so a re-claim re-attempts the copy.
+        expect(stored.is_migrated).toBe(aip_store_model.STATUS.INGEST_COPY_FAILED);
+        expect(aip_store_model.is_orphan(stored)).toBe(false);
+        expect(stored.message).toBe('AM_NOT_FOUND_RETRY');
+        expect(stored.next_attempt_at).toBeTruthy();
+
+        const after = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        expect(after.status).toBe('AIP_STORE_PENDING');
+        expect(after.is_complete).toBe(0);
+    });
+
+    it('AM 404 persisting through the not-found budget — THEN orphaned', async () => {
+        // Once a not-found has used up its (dedicated, generous) budget and
+        // the AIP STILL isn't in AM, declare a terminal orphan — a real
+        // large AIP would have landed by now. Set the budget to 1 so the
+        // first 404 is the last attempt.
+        process.env.AIP_STORE_NOT_FOUND_MAX_ATTEMPTS = '1';
+        require('../../../config/app')._reset();
         const { queue_id, pid } = await seed_pipeline_at_stage_6();
         const row = await db_queue()(QUEUE).where({ id: queue_id }).first();
 
@@ -260,10 +299,41 @@ describe('ingester/stages/aip_store — Stage 6', () => {
 
         const after = await db_queue()(QUEUE).where({ id: queue_id }).first();
         expect(after.status).toBe('AIP_STORE_FAILED');
-        // is_complete=1 means the row drops out of the default queue
-        // view. Orphans are terminal — no operator action is going
-        // to recover them.
+        // Terminal give-up → is_complete=1 drops it from the default queue
+        // view; it's recoverable from the AIPs page via "Re-check AM & retry"
+        // if AM later registers it.
         expect(after.is_complete).toBe(1);
+    });
+
+    it('not-found retry then success — a late-registered AIP recovers on a later tick', async () => {
+        // The whole point: a large AIP that wasn't in AM on the first poll
+        // but IS by a later attempt should COPY successfully, not strand.
+        const { queue_id, pid } = await seed_pipeline_at_stage_6();
+
+        // Attempt 1 — not found → retry (PENDING, retry-eligible).
+        let row = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        const not_found_client = make_fake_client({
+            copy_to_wasabi: async () => ({
+                status: 200,
+                data: { ok: false, error: 'AIP aip-uuid-abc not found in AM Storage Service' },
+            }),
+        });
+        await aip_store_stage.run(row, { client: not_found_client });
+        const after_1 = await aip_store_model.get_by_uuid(pid);
+        expect(after_1.is_migrated).toBe(aip_store_model.STATUS.INGEST_COPY_FAILED);
+
+        // Clear the backoff so the next claim proceeds (the wait elapsing).
+        await aip_store_model.upsert_by_uuid(pid, { next_attempt_at: null });
+
+        // Attempt 2 — AM now has the AIP → success.
+        row = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        const result = await aip_store_stage.run(row, { client: make_fake_client() });
+        expect(result.ok).toBe(true);
+
+        const after = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        expect(after.status).toBe('AIP_STORE_COMPLETE');
+        const stored = await aip_store_model.get_by_uuid(pid);
+        expect(stored.is_migrated).toBe(aip_store_model.STATUS.INGEST_COPIED_OK);
     });
 
     it('backoff guard — re-claim within next_attempt_at is a no-op (no curation call, no attempt burn)', async () => {

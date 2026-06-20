@@ -133,13 +133,14 @@
 
     <td class="actions-cell">
         <%/* Only render the kebab when there's at least one action
-             available. Orphans get neither Download (no file in
-             Wasabi) nor Retry (AM has no record); showing an empty
-             dropdown menu is worse UX than no kebab.
+             available. Copied rows get Download; failed rows get Retry;
+             orphan rows get a "Re-check AM & retry" (an AIP can be
+             mis-orphaned if AM was still registering it when Stage 6
+             looked) — that clears the orphan flag and re-runs the copy.
 
              kebab-btn + filled-circle SVG matches collection_row.ejs
              so the affordance reads identically across list pages. */%>
-        <% var has_action = item.display_status === 'copied' || item.display_status === 'failed'; %>
+        <% var has_action = item.display_status === 'copied' || item.display_status === 'failed' || item.display_status === 'orphan'; %>
         <% if (has_action) { %>
         <div class="dropdown">
             <button type="button" class="kebab-btn"
@@ -191,6 +192,33 @@
                                 <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/>
                             </svg>
                             Retry copy
+                        </button>
+                    </li>
+                <% } %>
+                <% if (item.display_status === 'orphan') { %>
+                    <li>
+                        <%/* Orphan = "not found in AM Storage Service" persisted
+                             through the whole not-found retry budget. Usually a
+                             genuine orphan, but if AM has since registered the
+                             AIP (a very large one that finished late, or AM was
+                             down) this re-checks: it clears the orphan tag and
+                             re-runs Stage 6 so the copy is attempted again. Posts
+                             to the same /retry endpoint as a normal retry. */%>
+                        <button type="button" class="dropdown-item"
+                                hx-post="<%= dashboard_base %>/aips/<%= item.id %>/retry"
+                                hx-target="#aip-row-<%= item.id %>"
+                                hx-swap="outerHTML"
+                                data-confirm="Re-check Archivematica and retry the copy? Use this if the AIP was reported missing only because it was still being stored. The orphan flag will be cleared and Stage 6 will run again."
+                                data-confirm-title="Re-check AM & retry?"
+                                data-confirm-label="Re-check & retry">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <polyline points="23 4 23 10 17 10"/>
+                                <polyline points="1 20 1 14 7 14"/>
+                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/>
+                                <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/>
+                            </svg>
+                            Re-check AM &amp; retry
                         </button>
                     </li>
                 <% } %>
