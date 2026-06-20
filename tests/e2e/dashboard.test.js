@@ -2530,6 +2530,9 @@ describe('dashboard — e2e', () => {
             // Form fields present, posting back to /users.
             expect(res.text).toMatch(/id="new-du-id"[^>]*name="du_id"/);
             expect(res.text).toMatch(/id="new-email"[^>]*name="email"/);
+            // RBAC role selector (defaults to staff).
+            expect(res.text).toMatch(/<select[^>]*name="role"/);
+            expect(res.text).toMatch(/value="admin"/);
             expect(res.text).toMatch(/hx-post="\/repo\/dashboard\/users"/);
             // Targets #modal-content so validation errors re-render
             // INSIDE the modal frame rather than replacing the page.
@@ -2544,8 +2547,8 @@ describe('dashboard — e2e', () => {
             // edit modal for consistency.
             const required_badges = (res.text.match(/class="required-badge">required</g) || [])
                 .length;
-            // 4 fields: du_id, email, first_name, last_name.
-            expect(required_badges).toBe(4);
+            // 5 fields: du_id, email, first_name, last_name, role.
+            expect(required_badges).toBe(5);
         });
 
         it('edit modal carries a "required" badge on every editable field', async () => {
@@ -2560,12 +2563,14 @@ describe('dashboard — e2e', () => {
                 .get(`/repo/dashboard/users/${target.id}/edit`)
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // 3 editable fields on the edit modal: email,
-            // first_name, last_name. du_id is NOT a field (shown
-            // only as muted header text).
+            // 4 editable fields on the edit modal: email, first_name,
+            // last_name, role. du_id is NOT a field (shown only as muted
+            // header text).
             const required_badges = (res.text.match(/class="required-badge">required</g) || [])
                 .length;
-            expect(required_badges).toBe(3);
+            expect(required_badges).toBe(4);
+            // Role selector pre-selects the user's current role.
+            expect(res.text).toMatch(/<select[^>]*name="role"/);
         });
 
         it('"Include deactivated" toggle uses CSP-safe form serialization (no hx-vals="js:...")', async () => {

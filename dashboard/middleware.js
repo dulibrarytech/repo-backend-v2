@@ -13,6 +13,8 @@
 
 const app_config = require('../config/app');
 const jwt = require('../libs/jwt');
+const { has_permission } = require('../auth/rbac');
+const user_model = require('../users/model');
 
 function is_htmx_request(req) {
     return req.get('hx-request') === 'true';
@@ -24,16 +26,44 @@ function login_url(cfg, return_to) {
     return `${base}?next=${encodeURIComponent(return_to)}`;
 }
 
-function require_dashboard_auth(req, res, next) {
+// Attach the authenticated user's role + a can(permission) helper to
+// res.locals so dashboard views can show/hide actions by capability.
+// DB-fresh (a role change reflects immediately); best-effort — a lookup
+// failure leaves role=null (admin actions hidden) and the page still
+// renders. Authorization itself is still enforced server-side by
+// require_permission on each gated route, so a hidden-but-clicked action
+// is denied regardless of what the UI showed.
+async function attach_role_context(req, res) {
+    let role = null;
+    try {
+        if (req.user && req.user.du_id) {
+            const row = await user_model.get_by_du_id(req.user.du_id);
+            role = (row && row.role) || null;
+        }
+    } catch {
+        role = null;
+    }
+    req.user.role = role;
+    res.locals.user = req.user;
+    res.locals.user_role = role;
+    res.locals.can = (permission) => has_permission(role, permission);
+}
+
+async function require_dashboard_auth(req, res, next) {
     const cfg = app_config();
     const token = jwt.extract(req);
 
     if (token) {
+        let decoded = null;
         try {
-            req.user = jwt.verify(token);
-            return next();
+            decoded = jwt.verify(token);
         } catch {
-            // fall through to the redirect path
+            decoded = null;
+        }
+        if (decoded) {
+            req.user = decoded;
+            await attach_role_context(req, res);
+            return next();
         }
     }
 

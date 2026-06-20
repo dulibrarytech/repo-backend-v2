@@ -4,7 +4,7 @@ const user_model = require('../../../users/model');
 const db_helper = require('../../helpers/db');
 const { db } = require('../../../config/db');
 const tables = require('../../../config/db_tables');
-const { NotFoundError, ConflictError } = require('../../../libs/errors');
+const { NotFoundError, ConflictError, ValidationError } = require('../../../libs/errors');
 
 describe('users/model — DB integration', () => {
     beforeAll(async () => {
@@ -201,6 +201,70 @@ describe('users/model — DB integration', () => {
         it('returns null for a missing principal', async () => {
             expect(await user_model.actor_label(null)).toBeNull();
             expect(await user_model.actor_label(undefined)).toBeNull();
+        });
+    });
+
+    describe('role (RBAC)', () => {
+        it('create persists a valid role', async () => {
+            const u = await user_model.create({
+                du_id: 'role-admin',
+                email: 'ra@du.edu',
+                first_name: 'R',
+                last_name: 'A',
+                role: 'admin',
+            });
+            expect(u.role).toBe('admin');
+            expect((await user_model.get_by_du_id('role-admin')).role).toBe('admin');
+        });
+
+        it('create defaults role to staff when omitted', async () => {
+            const u = await user_model.create({
+                du_id: 'role-default',
+                email: 'rd@du.edu',
+                first_name: 'R',
+                last_name: 'D',
+            });
+            expect(u.role).toBe('staff');
+        });
+
+        it('create rejects an unknown role', async () => {
+            await expect(
+                user_model.create({
+                    du_id: 'role-bad',
+                    email: 'rb@du.edu',
+                    first_name: 'R',
+                    last_name: 'B',
+                    role: 'superuser',
+                })
+            ).rejects.toBeInstanceOf(ValidationError);
+        });
+
+        it('update changes role; omitting role leaves it unchanged', async () => {
+            const u = await user_model.create({
+                du_id: 'role-upd',
+                email: 'ru@du.edu',
+                first_name: 'R',
+                last_name: 'U',
+                role: 'viewer',
+            });
+            const promoted = await user_model.update(u.id, { role: 'admin' });
+            expect(promoted.role).toBe('admin');
+            // A patch without role keeps the current role.
+            const renamed = await user_model.update(u.id, { first_name: 'Ray' });
+            expect(renamed.role).toBe('admin');
+            expect(renamed.first_name).toBe('Ray');
+        });
+
+        it('update rejects an unknown role', async () => {
+            const u = await user_model.create({
+                du_id: 'role-upd-bad',
+                email: 'rub@du.edu',
+                first_name: 'R',
+                last_name: 'U',
+            });
+            await expect(user_model.update(u.id, { role: 'root' })).rejects.toBeInstanceOf(
+                ValidationError
+            );
         });
     });
 });

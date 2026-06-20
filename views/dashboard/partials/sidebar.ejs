@@ -29,6 +29,12 @@
         // Every admin page sets `active: 'admin'` (Indexer / Metadata
         // Refresh / Services Health). Single source of truth.
         var in_admin = active === 'admin';
+        // RBAC nav-gating: res.locals.can is set by require_dashboard_auth.
+        // Guard defensively so a view rendered without it never throws —
+        // unknown capability defaults to hidden. (Server-side
+        // require_permission is the real enforcement; this just keeps the
+        // nav honest so staff don't see links they can't use.)
+        var allow = (typeof can === 'function') ? can : function () { return false; };
     %>
 
     <% if (in_workflow) { %>
@@ -291,6 +297,7 @@
              Clipboard-with-list-lines metaphor: jobs queued up for
              staff to process. Lands on the Make Digital Objects view
              and the in-workflow sidebar takes over. */%>
+        <% if (allow('manage_ingest')) { %>
         <a href="<%= dashboard_base %>/ingest/workspace"
            aria-label="Digital Preservation Jobs"
            title="Digital Preservation Jobs">
@@ -302,6 +309,7 @@
                 <line x1="9" y1="16" x2="13" y2="16"/>
             </svg>
         </a>
+        <% } %>
 
         <%/* AIPs — preservation storage browse + download.
              Archive-box icon. Sits directly under DPJ because the
@@ -323,7 +331,8 @@
             </svg>
         </a>
 
-        <%/* Users — people icon */%>
+        <%/* Users — people icon. Admin-only (manage_users). */%>
+        <% if (allow('manage_users')) { %>
         <a href="<%= dashboard_base %>/users"
            class="<%= active === 'users' ? 'active' : '' %>"
            <% if (active === 'users') { %>aria-current="page"<% } %>
@@ -337,12 +346,15 @@
                 <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
             </svg>
         </a>
+        <% } %>
 
         <%/* Admin Utils — single entry icon. Settings-gear metaphor.
              Mirrors DPJ: lands on the first admin tool (Indexer) and
              the in-admin sidebar takes over, showing Indexer / Metadata
              Refresh / Services Health in place of this nav. No `active`
-             class — by definition we're outside admin mode here. */%>
+             class — by definition we're outside admin mode here.
+             Admin-only — gated on manage_index (only admins hold it). */%>
+        <% if (allow('manage_index')) { %>
         <a href="<%= dashboard_base %>/admin/indexer"
            aria-label="Admin Utils"
            title="Admin Utils">
@@ -352,6 +364,7 @@
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
             </svg>
         </a>
+        <% } %>
 
     <% } %>
 

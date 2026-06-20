@@ -1,6 +1,6 @@
 {
   "name": "repo-backend-v2",
-  "version": "2.0.0-alpha.4",
+  "version": "2.0.0-alpha.5",
   "description": "Digital DU Repository back-end (ingest-service)",
   "main": "repo-backend-v2.js",
   "private": true,

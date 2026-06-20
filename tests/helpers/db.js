@@ -55,6 +55,9 @@ async function seed_user(overrides = {}) {
         email: overrides.email || 'tester@example.com',
         first_name: overrides.first_name || 'Test',
         last_name: overrides.last_name || 'User',
+        // Default test users to 'admin' so existing e2e tests that exercise
+        // admin routes keep passing; RBAC tests pass an explicit role.
+        role: overrides.role || 'admin',
         is_active: overrides.is_active === undefined ? 1 : overrides.is_active,
         token: overrides.token || '0',
     };

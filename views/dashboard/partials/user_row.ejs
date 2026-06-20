@@ -2,6 +2,7 @@
     <td class="font-monospace" style="font-size: 13px;"><%= item.du_id %></td>
     <td><%= [item.first_name, item.last_name].filter(Boolean).join(' ') || '—' %></td>
     <td class="text-muted" style="font-size: 13px;"><%= item.email || '—' %></td>
+    <td><span class="sev-badge sev-info text-uppercase" style="font-size: 11px;"><%= item.role || 'staff' %></span></td>
     <td>
         <% if (item.is_active === 1) { %>
             <span class="sev-badge sev-success">Active</span>

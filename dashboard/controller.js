@@ -927,6 +927,10 @@ async function users_update(req, res) {
         first_name: body.first_name,
         last_name: body.last_name,
         email: body.email,
+        // RBAC role (validated against ROLE_NAMES in the model). Omitted
+        // values fall through normalize() so an absent select keeps the
+        // current role rather than nulling it.
+        role: body.role,
     };
     try {
         const updated = await user_model.update(req.params.id, patch);

@@ -20,12 +20,17 @@
 
 const app_config = require('../config/app');
 const { require_dashboard_auth } = require('../dashboard/middleware');
+const { require_permission, PERMISSIONS } = require('../auth/rbac');
 const { write_limiter } = require('../auth/rate_limit');
 const controller = require('./dashboard');
 
 module.exports = function mount(app) {
     const cfg = app_config();
     const base = `${cfg.path}/dashboard/ingest`;
+    // The ingest workflow actions (MDO / QA / submit / rollback / reset /
+    // cancel) are all writes → manage_ingest. The pages + status partials
+    // are reads, open to any authenticated user.
+    const can_ingest = require_permission(PERMISSIONS.MANAGE_INGEST);
 
     // Queue page + partials.
     app.get(base, require_dashboard_auth, controller.ingest_page);
@@ -44,24 +49,28 @@ module.exports = function mount(app) {
     app.post(
         `${base}/workspace/:folder/make-digital-objects`,
         require_dashboard_auth,
+        can_ingest,
         write_limiter(),
         controller.make_digital_objects_action
     );
     app.post(
         `${base}/workspace/:folder/check-metadata`,
         require_dashboard_auth,
+        can_ingest,
         write_limiter(),
         controller.aspace_qa_check_action
     );
     app.post(
         `${base}/workspace/:folder/submit-ingest`,
         require_dashboard_auth,
+        can_ingest,
         write_limiter(),
         controller.submit_ingest_action
     );
     app.post(
         `${base}/workspace/:folder/revert-to-mdo`,
         require_dashboard_auth,
+        can_ingest,
         write_limiter(),
         controller.revert_to_mdo_action
     );
@@ -104,6 +113,7 @@ module.exports = function mount(app) {
     app.post(
         `${base}/:id/cancel`,
         require_dashboard_auth,
+        can_ingest,
         write_limiter(),
         controller.cancel_row_action
     );
@@ -116,24 +126,28 @@ module.exports = function mount(app) {
     app.post(
         `${base}/:id/rollback-pre`,
         require_dashboard_auth,
+        can_ingest,
         write_limiter(),
         controller.rollback_pre_ingest_action
     );
     app.post(
         `${base}/:id/rollback-am`,
         require_dashboard_auth,
+        can_ingest,
         write_limiter(),
         controller.rollback_archivematica_action
     );
     app.post(
         `${base}/:id/reset`,
         require_dashboard_auth,
+        can_ingest,
         write_limiter(),
         controller.reset_row_action
     );
     app.post(
         `${base}/:id/return-to-packaging`,
         require_dashboard_auth,
+        can_ingest,
         write_limiter(),
         controller.return_to_packaging_action
     );

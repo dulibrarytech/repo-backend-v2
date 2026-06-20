@@ -14,8 +14,9 @@ const validator = require('validator');
 const { db } = require('../config/db');
 const tables = require('../config/db_tables');
 const { NotFoundError, ValidationError, ConflictError } = require('../libs/errors');
+const { ROLE_NAMES, DEFAULT_ROLE } = require('../auth/rbac');
 
-const PUBLIC_FIELDS = ['id', 'du_id', 'email', 'first_name', 'last_name', 'is_active', 'created'];
+const PUBLIC_FIELDS = ['id', 'du_id', 'email', 'first_name', 'last_name', 'role', 'is_active', 'created'];
 
 function normalize(input) {
     const out = {};
@@ -23,8 +24,17 @@ function normalize(input) {
     if (input.email !== undefined) out.email = String(input.email).trim().toLowerCase();
     if (input.first_name !== undefined) out.first_name = String(input.first_name).trim();
     if (input.last_name !== undefined) out.last_name = String(input.last_name).trim();
+    if (input.role !== undefined) out.role = String(input.role).trim().toLowerCase();
     if (input.is_active !== undefined) out.is_active = input.is_active ? 1 : 0;
     return out;
+}
+
+// Role, when supplied, must be one of the known RBAC roles (auth/rbac.js).
+// Optional on create (defaults to DEFAULT_ROLE) and on update (omit to keep).
+function validate_role(role, errs) {
+    if (role !== undefined && role !== '' && !ROLE_NAMES.includes(String(role).toLowerCase())) {
+        errs.push({ field: 'role', error: 'invalid' });
+    }
 }
 
 function validate_create(input) {
@@ -34,6 +44,7 @@ function validate_create(input) {
     else if (!validator.isEmail(input.email)) errs.push({ field: 'email', error: 'invalid' });
     if (!input.first_name) errs.push({ field: 'first_name', error: 'required' });
     if (!input.last_name) errs.push({ field: 'last_name', error: 'required' });
+    validate_role(input.role, errs);
     if (errs.length > 0) throw new ValidationError('Invalid user payload', errs);
 }
 
@@ -42,6 +53,7 @@ function validate_update(input) {
     if (input.email !== undefined && input.email !== '' && !validator.isEmail(input.email)) {
         errs.push({ field: 'email', error: 'invalid' });
     }
+    validate_role(input.role, errs);
     if (Object.keys(input).length === 0) {
         errs.push({ error: 'empty patch' });
     }
@@ -99,6 +111,7 @@ async function create(input) {
     const existing = await db()(tables.users).where({ du_id: row.du_id }).first();
     if (existing) throw new ConflictError(`du_id "${row.du_id}" already in use`);
     if (row.is_active === undefined) row.is_active = 1;
+    if (row.role === undefined) row.role = DEFAULT_ROLE;
     const [id] = await db()(tables.users).insert({ ...row, token: '0' });
     return get(id);
 }

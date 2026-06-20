@@ -2,6 +2,7 @@
 
 const app_config = require('../config/app');
 const { require_dashboard_auth, redirect_if_authenticated } = require('./middleware');
+const { require_permission, PERMISSIONS } = require('../auth/rbac');
 const { login_limiter, write_limiter } = require('../auth/rate_limit');
 const controller = require('./controller');
 const aip_controller = require('./aip_controller');
@@ -12,6 +13,14 @@ const errors = require('../libs/errors');
 module.exports = function mount(app) {
     const cfg = app_config();
     const base = `${cfg.path}/dashboard`;
+
+    // RBAC capability gates for the staff dashboard. Reads (object/collection
+    // pages + thumbnail proxy) stay open to any authenticated user
+    // (view_repository); these gate the curation WRITES + their modals.
+    const can_publish = require_permission(PERMISSIONS.PUBLISH_OBJECT);
+    const can_edit = require_permission(PERMISSIONS.EDIT_OBJECT);
+    const can_delete = require_permission(PERMISSIONS.DELETE_OBJECT);
+    const can_ingest = require_permission(PERMISSIONS.MANAGE_INGEST);
 
     // Public: login.
     app.get(`${base}/login`, redirect_if_authenticated, controller.login_page);
@@ -69,23 +78,27 @@ module.exports = function mount(app) {
     app.post(
         `${base}/objects/bulk/publish`,
         require_dashboard_auth,
+        can_publish,
         write_limiter(),
         controller.objects_bulk_publish
     );
     app.post(
         `${base}/objects/bulk/suppress`,
         require_dashboard_auth,
+        can_publish,
         write_limiter(),
         controller.objects_bulk_suppress
     );
     app.post(
         `${base}/objects/bulk/delete/confirm`,
         require_dashboard_auth,
+        can_delete,
         controller.objects_bulk_delete_confirm
     );
     app.post(
         `${base}/objects/bulk/delete`,
         require_dashboard_auth,
+        can_delete,
         write_limiter(),
         controller.objects_bulk_delete
     );
@@ -93,6 +106,7 @@ module.exports = function mount(app) {
     app.get(
         `${base}/objects/:pid/metadata`,
         require_dashboard_auth,
+        can_edit,
         controller.object_metadata_modal
     );
     // Thumbnail form (renders modal body) + upload (multer-backed).
@@ -102,6 +116,7 @@ module.exports = function mount(app) {
     app.get(
         `${base}/objects/:pid/thumbnail/form`,
         require_dashboard_auth,
+        can_edit,
         controller.object_thumbnail_form
     );
     // DuraCloud-backed thumbnail proxy. Auth-gated like the rest of
@@ -116,6 +131,7 @@ module.exports = function mount(app) {
     app.post(
         `${base}/objects/:pid/thumbnail`,
         require_dashboard_auth,
+        can_edit,
         write_limiter(),
         // Multer error handler: translates its MulterError codes into
         // our HTTP error shape so the global error handler renders the
@@ -141,18 +157,21 @@ module.exports = function mount(app) {
     app.post(
         `${base}/objects/:pid/thumbnail/invalidate`,
         require_dashboard_auth,
+        can_edit,
         write_limiter(),
         controller.object_thumbnail_invalidate
     );
     app.post(
         `${base}/objects/:pid/publish`,
         require_dashboard_auth,
+        can_publish,
         write_limiter(),
         controller.objects_publish
     );
     app.post(
         `${base}/objects/:pid/suppress`,
         require_dashboard_auth,
+        can_publish,
         write_limiter(),
         controller.objects_suppress
     );
@@ -164,11 +183,13 @@ module.exports = function mount(app) {
     app.get(
         `${base}/objects/:pid/delete/confirm`,
         require_dashboard_auth,
+        can_delete,
         controller.objects_delete_confirm
     );
     app.delete(
         `${base}/objects/:pid`,
         require_dashboard_auth,
+        can_delete,
         write_limiter(),
         controller.objects_delete
     );
@@ -181,43 +202,50 @@ module.exports = function mount(app) {
     app.post(
         `${base}/collections/:pid/bulk/publish`,
         require_dashboard_auth,
+        can_publish,
         write_limiter(),
         controller.collection_bulk_publish
     );
     app.post(
         `${base}/collections/:pid/bulk/suppress`,
         require_dashboard_auth,
+        can_publish,
         write_limiter(),
         controller.collection_bulk_suppress
     );
 
-    app.get(`${base}/users`, require_dashboard_auth, controller.users_page);
-    app.get(`${base}/users/list`, require_dashboard_auth, controller.users_table_partial);
+    // User management — admin-only end-to-end (manage_users). Gating the
+    // GET page/list too so non-admins can't view the staff roster.
+    const can_manage_users = require_permission(PERMISSIONS.MANAGE_USERS);
+    app.get(`${base}/users`, require_dashboard_auth, can_manage_users, controller.users_page);
+    app.get(`${base}/users/list`, require_dashboard_auth, can_manage_users, controller.users_table_partial);
     // Add-user modal — empty form. Registered BEFORE /users/:id/edit
     // and /users/:id so Express matches the literal /users/new path
     // first (without ordering this, Express tries /users/:id with
     // id="new" and the controller fails at validation/parsing).
-    app.get(`${base}/users/new`, require_dashboard_auth, controller.users_create_modal);
-    app.post(`${base}/users`, require_dashboard_auth, write_limiter(), controller.users_create);
+    app.get(`${base}/users/new`, require_dashboard_auth, can_manage_users, controller.users_create_modal);
+    app.post(`${base}/users`, require_dashboard_auth, can_manage_users, write_limiter(), controller.users_create);
     // Edit modal — GET returns the partial that targets #modal-content
     // (which the layout shell auto-opens via dashboard.js section 4).
-    app.get(`${base}/users/:id/edit`, require_dashboard_auth, controller.users_edit_modal);
+    app.get(`${base}/users/:id/edit`, require_dashboard_auth, can_manage_users, controller.users_edit_modal);
     // Patch name / email. Dashboard intentionally doesn't expose du_id
     // changes — that route exists on the REST API (PUT /repo/users/:id)
     // for admin tooling, but for the staff UI we treat du_id as
     // immutable to avoid orphaning audit / job-history records.
-    app.post(`${base}/users/:id`, require_dashboard_auth, write_limiter(), controller.users_update);
+    app.post(`${base}/users/:id`, require_dashboard_auth, can_manage_users, write_limiter(), controller.users_update);
     // Reactivate. Inverse of DELETE — visible only on rows where
     // is_active=0 (i.e. when "Include deactivated" is toggled on).
     app.post(
         `${base}/users/:id/activate`,
         require_dashboard_auth,
+        can_manage_users,
         write_limiter(),
         controller.users_activate
     );
     app.delete(
         `${base}/users/:id`,
         require_dashboard_auth,
+        can_manage_users,
         write_limiter(),
         controller.users_delete
     );
@@ -241,33 +269,38 @@ module.exports = function mount(app) {
     app.post(
         `${base}/aips/:id/retry`,
         require_dashboard_auth,
+        can_ingest,
         write_limiter(),
         aip_controller.aip_retry
     );
 
     // AIP backfill — admin-initiated catch-up for AIPs that ingested
-    // under v2 BEFORE Stage 6 existed. See ingester/aip_backfill.js
-    // for the model + the dashboard/aip_backfill_controller.js
-    // docstring for the surface.
+    // under v2 BEFORE Stage 6 existed (preservation/ingest operation →
+    // manage_ingest). See ingester/aip_backfill.js for the model + the
+    // dashboard/aip_backfill_controller.js docstring for the surface.
     app.get(
         `${base}/admin/aip-backfill`,
         require_dashboard_auth,
+        can_ingest,
         aip_backfill_controller.backfill_page
     );
     app.get(
         `${base}/admin/aip-backfill/status`,
         require_dashboard_auth,
+        can_ingest,
         aip_backfill_controller.backfill_status_partial
     );
     app.post(
         `${base}/admin/aip-backfill/start`,
         require_dashboard_auth,
+        can_ingest,
         write_limiter(),
         aip_backfill_controller.backfill_start
     );
     app.post(
         `${base}/admin/aip-backfill/cancel`,
         require_dashboard_auth,
+        can_ingest,
         write_limiter(),
         aip_backfill_controller.backfill_cancel
     );
