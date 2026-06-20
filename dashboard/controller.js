@@ -246,7 +246,11 @@ async function collections_page(req, res) {
         title: 'Collections — Repository @ DU',
         filters: {
             q: req.query.q || '',
-            sort: req.query.sort || 'count',
+            // Default the staff collections view to title A–Z (the initial
+            // /collections/list load below carries no sort param, so the
+            // partial defaults to 'title' too). The API/model default stays
+            // 'count'; this is a dashboard-only default.
+            sort: req.query.sort || 'title',
         },
     });
 }
@@ -254,7 +258,7 @@ async function collections_page(req, res) {
 async function collections_list_partial(req, res) {
     const result = await collections_model.list_collections({
         q: req.query.q,
-        sort: req.query.sort,
+        sort: req.query.sort || 'title',
         page: req.query.page,
         page_size: req.query.page_size,
     });

@@ -2206,6 +2206,37 @@ describe('dashboard — e2e', () => {
         });
     });
 
+    describe('collections list — default sort A–Z', () => {
+        it('GET /collections/list (no sort param) sorts by title A–Z', async () => {
+            const cookie = await cookie_for('coll-sort-default');
+            await db_helper.seed_object({
+                object_type: 'collection',
+                display_record: JSON.stringify({ title: 'Zebra Papers' }),
+            });
+            await db_helper.seed_object({
+                object_type: 'collection',
+                display_record: JSON.stringify({ title: 'Apple Records' }),
+            });
+            const res = await supertest(app)
+                .get('/repo/dashboard/collections/list')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            const apple = res.text.indexOf('Apple Records');
+            const zebra = res.text.indexOf('Zebra Papers');
+            expect(apple).toBeGreaterThan(-1);
+            expect(zebra).toBeGreaterThan(-1);
+            expect(apple).toBeLessThan(zebra); // A before Z
+        });
+
+        it('GET /collections pre-selects the Title (A–Z) sort option', async () => {
+            const cookie = await cookie_for('coll-sort-page');
+            const res = await supertest(app).get('/repo/dashboard/collections').set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toMatch(/<option value="title"[^>]*selected/);
+            expect(res.text).not.toMatch(/<option value="count"[^>]*selected/);
+        });
+    });
+
     describe('collection detail page (header layout)', () => {
         // Subtitle convention: "<N> objects · <M> published · <handle-link>"
         // when a handle exists, falling back to "· PID <uuid>" when
