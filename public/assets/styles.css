@@ -860,6 +860,16 @@ h1 {
     min-width: 22px;
 }
 
+/* Kaltura entry id for a part — flex-basis:100% wraps it onto its own
+   line below the part's file name within the flex .metadata-item row. */
+.metadata-part-kaltura {
+    flex-basis: 100%;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 13px;
+}
+
 .metadata-tag {
     display: inline-flex;
     align-items: center;

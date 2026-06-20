@@ -623,9 +623,15 @@ async function object_metadata_modal(req, res) {
     const outer = projection.parse_display_record(row.display_record);
     const nested = outer && typeof outer.display_record === 'object' ? outer.display_record : null;
     const data = nested && Object.keys(nested).length > 0 ? nested : outer;
+    // Skip empty fields: only render display_record keys with a non-empty
+    // value (blank strings, empty/all-empty arrays + objects are dropped).
+    // Kaltura entry ids are rendered per-part by metadata_field.ejs (read
+    // straight off parts[].kaltura_id), so no extra computation here.
+    const fields = Object.keys(data || {}).filter((k) => !projection.is_empty_value(data[k]));
     render_partial(req, res, 'dashboard/partials/object_metadata_modal', {
         obj: enriched,
         display_record: data,
+        fields,
     });
 }
 

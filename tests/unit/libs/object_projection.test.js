@@ -166,4 +166,27 @@ describe('libs/object_projection', () => {
             expect(out.thumbnail_raw).toBeNull();
         });
     });
+
+    describe('is_empty_value', () => {
+        it('treats nullish + blank strings + empty/all-empty arrays & objects as empty', () => {
+            expect(projection.is_empty_value(null)).toBe(true);
+            expect(projection.is_empty_value(undefined)).toBe(true);
+            expect(projection.is_empty_value('')).toBe(true);
+            expect(projection.is_empty_value('   ')).toBe(true);
+            expect(projection.is_empty_value([])).toBe(true);
+            expect(projection.is_empty_value([null, '', '  '])).toBe(true);
+            expect(projection.is_empty_value({})).toBe(true);
+            expect(projection.is_empty_value({ a: '', b: null })).toBe(true);
+        });
+
+        it('treats real values (incl. 0 and false) as non-empty', () => {
+            expect(projection.is_empty_value('x')).toBe(false);
+            expect(projection.is_empty_value(0)).toBe(false);
+            expect(projection.is_empty_value(false)).toBe(false);
+            expect(projection.is_empty_value(['a'])).toBe(false);
+            expect(projection.is_empty_value({ a: 'b' })).toBe(false);
+            expect(projection.is_empty_value([{ k: 'v' }])).toBe(false);
+        });
+    });
+
 });

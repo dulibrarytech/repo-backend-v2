@@ -26,7 +26,11 @@ if (display_record && Array.isArray(display_record.identifiers)) {
         }
     }
 }
-var _keys = Object.keys(display_record || {});
+// Fields are pre-filtered by the controller to non-empty values (empty
+// fields are skipped). Fall back to all keys if rendered without them.
+// Kaltura entry ids are rendered per-part (below each file name) by
+// metadata_field.ejs's `parts` branch — not as a separate top row.
+var _fields = (typeof fields !== 'undefined' && fields) ? fields : Object.keys(display_record || {});
 %>
 <div class="modal-header metadata-modal-header">
     <div class="metadata-modal-header-content">
@@ -45,13 +49,13 @@ var _keys = Object.keys(display_record || {});
     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 </div>
 <div class="modal-body metadata-modal-body">
-    <% if (_keys.length === 0) { %>
+    <% if (_fields.length === 0) { %>
         <div class="empty-state">
             No <code>display_record</code> metadata recorded for this object.
         </div>
     <% } else { %>
         <dl class="metadata-dl mb-0">
-            <% _keys.forEach(function (k) { %>
+            <% _fields.forEach(function (k) { %>
                 <dt class="metadata-dt" title="<%= k %>">
                     <%= k.replace(/_/g, ' ') %>
                 </dt>

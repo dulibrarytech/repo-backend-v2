@@ -1016,6 +1016,12 @@ describe('dashboard — e2e', () => {
             // Values render with type-appropriate styling.
             expect(res.text).toMatch(/A Meta-Tagged Object/);
             expect(res.text).toMatch(/Once upon a metadata field/);
+            // Regression (uniform row spacing): a plain-string value sits
+            // FLUSH against its pre-wrap span. Leading indentation would be
+            // preserved by white-space: pre-wrap as a blank line above the
+            // value, inflating the row and misaligning it from the label.
+            expect(res.text).toMatch(/break-word;">Once upon a metadata field\./);
+            expect(res.text).not.toMatch(/break-word;">\s*\n/);
             // Array of strings → badge chips
             expect(res.text).toMatch(/sev-badge[^>]*>\s*Photography\s*</);
             expect(res.text).toMatch(/sev-badge[^>]*>\s*Archive science\s*</);
@@ -1089,6 +1095,74 @@ describe('dashboard — e2e', () => {
             expect(res.text).toMatch(/\(untitled\)/);
             // Friendly empty-state message instead of an empty <dl>.
             expect(res.text).toMatch(/No <code>display_record<\/code> metadata recorded/);
+        });
+
+        it('metadata modal skips empty fields', async () => {
+            const cookie = await cookie_for('o-meta-empty-fields');
+            const o = await db_helper.seed_object({
+                display_record: JSON.stringify({
+                    title: 'Has Some Empties',
+                    real_field: 'a real value',
+                    empty_string: '',
+                    empty_array: [],
+                    empty_object: {},
+                    zero_value: 0,
+                }),
+            });
+            const res = await supertest(app)
+                .get(`/repo/dashboard/objects/${o.pid}/metadata`)
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            // Non-empty fields render (incl. 0, which is NOT empty)...
+            expect(res.text).toMatch(/<dt[^>]*>\s*real field\s*</i);
+            expect(res.text).toMatch(/<dt[^>]*>\s*zero value\s*</i);
+            // ...empty ones are skipped entirely.
+            expect(res.text).not.toMatch(/<dt[^>]*>\s*empty string\s*</i);
+            expect(res.text).not.toMatch(/<dt[^>]*>\s*empty array\s*</i);
+            expect(res.text).not.toMatch(/<dt[^>]*>\s*empty object\s*</i);
+        });
+
+        it('metadata modal renders each part\'s Kaltura entry id below its file name', async () => {
+            const cookie = await cookie_for('o-meta-kaltura');
+            const audio = await db_helper.seed_object({
+                mime_type: 'audio/mp3',
+                display_record: JSON.stringify({
+                    title: 'An Audio Recording',
+                    display_record: {
+                        parts: [
+                            { order: '1', title: 'recording-001.mp3', type: 'audio/mp3', kaltura_id: '1_q4myck5q' },
+                        ],
+                    },
+                }),
+            });
+            const res = await supertest(app)
+                .get(`/repo/dashboard/objects/${audio.pid}/metadata`)
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            // The file name + its kaltura id both render, on the per-part line
+            // (not as a separate top-level row anymore).
+            expect(res.text).toMatch(/recording-001\.mp3/);
+            expect(res.text).toMatch(/metadata-part-kaltura/);
+            expect(res.text).toMatch(/1_q4myck5q/);
+            expect(res.text).not.toMatch(/<dt[^>]*>\s*Kaltura Entry ID\s*</);
+        });
+
+        it('metadata modal renders no kaltura line for a part without a kaltura id', async () => {
+            const cookie = await cookie_for('o-meta-no-kaltura');
+            const o = await db_helper.seed_object({
+                mime_type: 'image/tiff',
+                display_record: JSON.stringify({
+                    title: 'A Scan',
+                    display_record: { parts: [{ order: '1', title: 'scan-001.tif', type: 'image/tiff' }] },
+                }),
+            });
+            const res = await supertest(app)
+                .get(`/repo/dashboard/objects/${o.pid}/metadata`)
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toMatch(/scan-001\.tif/); // the part still renders
+            expect(res.text).not.toMatch(/metadata-part-kaltura/);
+            expect(res.text).not.toMatch(/kaltura id/);
         });
 
         it('metadata modal 404s on unknown pid', async () => {

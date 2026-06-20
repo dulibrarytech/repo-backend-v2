@@ -107,6 +107,19 @@ function enrich_all(rows) {
     return rows.map(enrich);
 }
 
+// Is a display_record value "empty" for display purposes? Used by the
+// metadata modal to skip blank fields. 0 and false are NOT empty (they're
+// meaningful values); only nullish/blank-string/empty-or-all-empty
+// arrays/objects are.
+function is_empty_value(v) {
+    if (v === null || v === undefined) return true;
+    if (typeof v === 'string') return v.trim().length === 0;
+    if (typeof v === 'number' || typeof v === 'boolean') return false;
+    if (Array.isArray(v)) return v.every(is_empty_value);
+    if (typeof v === 'object') return Object.keys(v).every((k) => is_empty_value(v[k]));
+    return false;
+}
+
 module.exports = {
     parse_display_record,
     first_string,
@@ -114,4 +127,5 @@ module.exports = {
     media_category,
     enrich,
     enrich_all,
+    is_empty_value,
 };
