@@ -257,6 +257,74 @@ function create_client(http = http_default) {
             }
         },
 
+        // List Storage Service packages, ONE page at a time. Mirrors
+        // get_dip_path's auth/transport but hits the COLLECTION endpoint
+        // (v2/file/) instead of a single package, so callers can paginate
+        // the whole inventory (used by the AM-orphan reconciliation in
+        // scripts/am_orphans.js). Read-only — no AM state is changed.
+        //
+        // Options { package_type, status, limit=100, offset=0 } map to the
+        // Storage Service query params. Returns { status, meta, objects }:
+        //   meta    — AM's paginator { limit, offset, total_count, next, previous }
+        //   objects — package records (uuid, package_type, status,
+        //             current_path, current_location, size, ...).
+        // A non-200 yields { status, meta: null, objects: [] }; a transport
+        // error throws UpstreamError so the caller can retry that page.
+        async list_packages({ package_type, status, limit = 100, offset = 0 } = {}) {
+            const cfg = app_config().archivematica;
+            const qs = new URLSearchParams();
+            if (package_type) qs.set('package_type', package_type);
+            if (status) qs.set('status', status);
+            qs.set('limit', String(limit));
+            qs.set('offset', String(offset));
+            const url = storage_url(`v2/file/?${qs.toString()}`);
+            try {
+                const res = await http.get(url, {
+                    timeout: cfg.timeout_ms,
+                    headers: { 'Content-Type': 'application/json' },
+                    validateStatus: () => true,
+                });
+                if (res.status !== 200 || !res.data) {
+                    return { status: res.status, meta: null, objects: [] };
+                }
+                return {
+                    status: res.status,
+                    meta: res.data.meta || null,
+                    objects: Array.isArray(res.data.objects) ? res.data.objects : [],
+                };
+            } catch (err) {
+                log.warn({ event: 'am_list_packages_failed', offset, err: err.message });
+                throw new UpstreamError(`Archivematica list_packages failed: ${err.message}`);
+            }
+        },
+
+        // Fetch an AIP's PREMIS pointer file (METS XML). The Storage Service
+        // package list does NOT carry an ingest date for legacy AIPs
+        // (stored_date is null), but the pointer file does — METS
+        // `CREATEDATE` + premis:eventDateTime. Used by the AM-orphan year
+        // report to recover each AIP's true ingest year. Read-only.
+        //
+        // Returns { status, xml } (xml = '' on a non-200). responseType
+        // 'text' so axios doesn't try to JSON-parse the XML body. Transport
+        // errors throw UpstreamError so the caller can retry/skip per AIP.
+        async get_pointer_file(uuid) {
+            const cfg = app_config().archivematica;
+            const url = storage_url(`v2/file/${encodeURIComponent(uuid)}/pointer_file/`);
+            try {
+                const res = await http.get(url, {
+                    timeout: cfg.timeout_ms,
+                    headers: { 'Content-Type': 'application/xml' },
+                    responseType: 'text',
+                    validateStatus: () => true,
+                });
+                const xml = typeof res.data === 'string' ? res.data : res.data ? String(res.data) : '';
+                return { status: res.status, xml: res.status === 200 ? xml : '' };
+            } catch (err) {
+                log.warn({ event: 'am_get_pointer_file_failed', uuid, err: err.message });
+                throw new UpstreamError(`Archivematica get_pointer_file failed: ${err.message}`);
+            }
+        },
+
         // POST a deletion request to the Storage Service. AM responds:
         //   - 202: request submitted, awaiting Storage Service admin
         //          approval in the AM UI. Returns the request id.

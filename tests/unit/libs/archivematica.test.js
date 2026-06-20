@@ -369,6 +369,98 @@ describe('libs/archivematica', () => {
         });
     });
 
+    describe('list_packages', () => {
+        it('GETs v2/file/ with package_type/limit/offset + storage auth, parses meta+objects', async () => {
+            const http = make_fake_http();
+            http.set_response({
+                status: 200,
+                data: {
+                    meta: { total_count: 2, limit: 100, offset: 0 },
+                    objects: [{ uuid: 'a' }, { uuid: 'b' }],
+                },
+            });
+            const client = am_module.create_client(http);
+            const res = await client.list_packages({ package_type: 'AIP', limit: 100, offset: 0 });
+            expect(res.status).toBe(200);
+            expect(res.meta.total_count).toBe(2);
+            expect(res.objects.map((o) => o.uuid)).toEqual(['a', 'b']);
+            const url = http.calls.get[0].url;
+            expect(url).toContain('v2/file/');
+            expect(url).toContain('package_type=AIP');
+            expect(url).toContain('limit=100');
+            expect(url).toContain('offset=0');
+            // storage_url appends the storage credentials as query string
+            expect(url).toContain('username=storage-svc');
+            expect(url).toContain('api_key=storage-key');
+        });
+
+        it('includes a status filter when provided', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 200, data: { meta: {}, objects: [] } });
+            const client = am_module.create_client(http);
+            await client.list_packages({ package_type: 'AIP', status: 'UPLOADED' });
+            expect(http.calls.get[0].url).toContain('status=UPLOADED');
+        });
+
+        it('returns empty objects + null meta on a non-200', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 503, data: null });
+            const client = am_module.create_client(http);
+            const res = await client.list_packages({ package_type: 'AIP' });
+            expect(res.status).toBe(503);
+            expect(res.meta).toBeNull();
+            expect(res.objects).toEqual([]);
+        });
+
+        it('tolerates a response missing the objects array', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 200, data: { meta: { total_count: 0 } } });
+            const client = am_module.create_client(http);
+            const res = await client.list_packages({ package_type: 'AIP' });
+            expect(res.objects).toEqual([]);
+        });
+
+        it('throws UpstreamError on a transport error (so the caller can retry the page)', async () => {
+            const http = make_fake_http();
+            http.set_response({ throw: new Error('ECONNREFUSED') });
+            const client = am_module.create_client(http);
+            await expect(client.list_packages({ package_type: 'AIP' })).rejects.toBeInstanceOf(
+                UpstreamError
+            );
+        });
+    });
+
+    describe('get_pointer_file', () => {
+        it('GETs v2/file/<uuid>/pointer_file/ and returns the XML body on 200', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 200, data: '<mets:mets>…</mets:mets>' });
+            const client = am_module.create_client(http);
+            const res = await client.get_pointer_file('uuid-1');
+            expect(res.status).toBe(200);
+            expect(res.xml).toContain('mets:mets');
+            const call = http.calls.get[0];
+            expect(call.url).toContain('v2/file/uuid-1/pointer_file/');
+            expect(call.url).toContain('username=storage-svc');
+            expect(call.opts.responseType).toBe('text');
+        });
+
+        it('returns empty xml on a non-200', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 404, data: 'not found' });
+            const client = am_module.create_client(http);
+            const res = await client.get_pointer_file('missing');
+            expect(res.status).toBe(404);
+            expect(res.xml).toBe('');
+        });
+
+        it('throws UpstreamError on a transport error', async () => {
+            const http = make_fake_http();
+            http.set_response({ throw: new Error('ETIMEDOUT') });
+            const client = am_module.create_client(http);
+            await expect(client.get_pointer_file('u')).rejects.toBeInstanceOf(UpstreamError);
+        });
+    });
+
     describe('default export', () => {
         it('exposes the factory + helpers alongside the bound client', () => {
             expect(typeof am_module.create_client).toBe('function');
