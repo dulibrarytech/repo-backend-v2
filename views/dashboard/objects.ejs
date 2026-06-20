@@ -5,6 +5,7 @@
     <div class="content-card-header">
         <div class="control-group" style="flex: 1;">
             <input type="search" name="q" class="form-control"
+                   aria-label="Search objects"
                    placeholder="Search PID, handle, file name, collection…"
                    value="<%= filters.q || '' %>"
                    autocomplete="off"
@@ -27,6 +28,7 @@
             </select>
 
             <input type="text" name="collection" class="form-control"
+                   aria-label="Filter by collection UUID"
                    placeholder="Collection UUID exact match…"
                    value="<%= filters.collection || '' %>"
                    style="width: 260px;"

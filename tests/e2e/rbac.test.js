@@ -60,6 +60,9 @@ describe('RBAC e2e — admin surfaces gated by role', () => {
                 .send({});
             expect(res.status).toBe(403);
             expect(res.headers['hx-trigger']).toMatch(/toast/);
+            // The fallback body is an alert region (announced even if it
+            // swaps into the page rather than the toast stack).
+            expect(res.text).toMatch(/role="alert"/);
         });
     });
 

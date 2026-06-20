@@ -463,6 +463,30 @@ describe('dashboard — e2e', () => {
                 /<span[^>]*class="spinner-border[^"]*"[^>]*role="status"[^>]*aria-label="Loading"/
             );
         });
+
+        it('search/filter inputs carry an aria-label, not just a placeholder (WCAG 3.3.2)', async () => {
+            const cookie = await cookie_for('a11y-search-labels');
+            // A placeholder is not an accessible name; every type="search"
+            // box on the list/queue pages must expose an aria-label.
+            const pages = [
+                '/repo/dashboard/objects',
+                '/repo/dashboard/collections',
+                '/repo/dashboard/aips',
+                '/repo/dashboard/ingest',
+            ];
+            for (const path of pages) {
+                const res = await supertest(app).get(path).set('Cookie', cookie);
+                expect(res.status).toBe(200);
+                const searches = res.text.match(/<input\b[^>]*type="search"[^>]*>/g) || [];
+                expect(searches.length).toBeGreaterThan(0);
+                for (const tag of searches) {
+                    expect(tag).toMatch(/aria-label="[^"]+"/);
+                }
+            }
+            // The objects page's collection-UUID text filter is labeled too.
+            const objs = await supertest(app).get('/repo/dashboard/objects').set('Cookie', cookie);
+            expect(objs.text).toMatch(/aria-label="Filter by collection UUID"/);
+        });
     });
 
     describe('home page', () => {

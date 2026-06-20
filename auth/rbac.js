@@ -76,7 +76,9 @@ function deny(req, res, next, permission) {
         return res
             .status(403)
             .type('text/html')
-            .send('<div class="alert alert-danger mb-0">Forbidden: your role lacks the required permission.</div>');
+            .send(
+                '<div class="alert alert-danger mb-0" role="alert">Forbidden: your role lacks the required permission.</div>'
+            );
     }
     return next(new ForbiddenError(`Missing required permission: ${permission}`));
 }
