@@ -124,7 +124,7 @@ describe('ingest workspace pages — e2e', () => {
                 expect(res.status).toBe(200);
                 // Hidden in focus mode.
                 expect(res.text).not.toContain('title="Collections"');
-                expect(res.text).not.toContain('title="Objects (flat browse)"');
+                expect(res.text).not.toContain('title="Objects"');
                 expect(res.text).not.toContain('title="Users"');
                 expect(res.text).not.toContain('title="Admin Utils"');
                 expect(res.text).not.toContain('title="Indexer (admin)"');
@@ -192,7 +192,7 @@ describe('ingest workspace pages — e2e', () => {
             expect(res.status).toBe(200);
             expect(res.text).toContain('title="Home"');
             expect(res.text).toContain('title="Collections"');
-            expect(res.text).toContain('title="Objects (flat browse)"');
+            expect(res.text).toContain('title="Objects"');
             expect(res.text).toContain('title="Users"');
             expect(res.text).toContain('title="Digital Preservation Jobs"');
             // Admin Utils is the single entry icon for the admin tools
@@ -210,7 +210,7 @@ describe('ingest workspace pages — e2e', () => {
             const expected = [
                 'title="Home"',
                 'title="Collections"',
-                'title="Objects (flat browse)"',
+                'title="Objects"',
                 'title="Digital Preservation Jobs"',
                 'title="Users"',
                 'title="Admin Utils"',
@@ -256,7 +256,7 @@ describe('ingest workspace pages — e2e', () => {
                 expect(res.text).toContain('title="Home"');
                 // Standard nav items are hidden (focus mode).
                 expect(res.text).not.toContain('title="Collections"');
-                expect(res.text).not.toContain('title="Objects (flat browse)"');
+                expect(res.text).not.toContain('title="Objects"');
                 expect(res.text).not.toContain('title="Users"');
                 expect(res.text).not.toContain('title="Digital Preservation Jobs"');
                 // Admin Utils single icon is replaced by the three tool icons.

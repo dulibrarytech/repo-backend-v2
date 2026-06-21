@@ -16,10 +16,12 @@
 
          A11y: every link carries both `aria-label` (the accessible
          name screen readers announce) and `title` (the hover tooltip
-         for sighted mouse users). Active items also get
-         `aria-current="page"` so SR users hear "current page" when
-         landing on the link — the visual `.active` class on its own
-         isn't perceivable to them. */%>
+         for sighted mouse users). The `title` is ALSO the content source
+         for the Bootstrap tooltips that dashboard.js initializes on the
+         rail (right-placed, quick, prominent — see `.sidebar-tooltip`);
+         don't drop it. Active items also get `aria-current="page"` so SR
+         users hear "current page" when landing on the link — the visual
+         `.active` class on its own isn't perceivable to them. */%>
     <%
         // History counts as part of the workflow set so the sidebar
         // stays in focus mode (4 workflow icons + History) when staff
@@ -285,8 +287,8 @@
         <a href="<%= dashboard_base %>/objects"
            class="<%= active === 'objects' ? 'active' : '' %>"
            <% if (active === 'objects') { %>aria-current="page"<% } %>
-           aria-label="Objects (flat browse)"
-           title="Objects (flat browse)">
+           aria-label="Objects"
+           title="Objects">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>

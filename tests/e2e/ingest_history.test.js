@@ -62,7 +62,7 @@ describe('ingest Job History — e2e', () => {
             // Home stays visible as the workflow's escape hatch (see
             // task #114).
             expect(res.text).not.toContain('title="Collections"');
-            expect(res.text).not.toContain('title="Objects (flat browse)"');
+            expect(res.text).not.toContain('title="Objects"');
             expect(res.text).not.toContain('title="Users"');
             expect(res.text).toContain('title="Home"');
             // All four other workflow icons render alongside History.

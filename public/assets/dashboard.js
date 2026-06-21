@@ -375,7 +375,7 @@
             // sync with views/dashboard/partials/thumb_placeholder.ejs.
             // Absent data-media (e.g. collection rows) → 'image', preserving
             // the prior image-off placeholder for those.
-            var THUMB_ICONS = {
+            const THUMB_ICONS = {
                 audio:
                     '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
                 video:
@@ -387,8 +387,8 @@
                 file:
                     '<path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/>',
             };
-            var media = (el.dataset && el.dataset.media) || 'image';
-            var icon = THUMB_ICONS[media] || THUMB_ICONS.image;
+            const media = (el.dataset && el.dataset.media) || 'image';
+            const icon = THUMB_ICONS[media] || THUMB_ICONS.image;
             const placeholder = document.createElement('span');
             placeholder.className = 'thumb-placeholder';
             placeholder.setAttribute('data-media', media);
@@ -566,4 +566,26 @@
             window.location.assign(target);
         }, delay);
     });
+
+    // ---- 5. Sidebar tooltips ----
+    // The icon-only nav rail relies on hover labels. Native `title`
+    // tooltips are slow to appear (~0.5s+, browser-controlled) and plainly
+    // styled, so upgrade the sidebar links to Bootstrap tooltips: placed to
+    // the right (clear of the rail), a short ~100ms show delay so they pop
+    // quickly, and a `.sidebar-tooltip` custom class for a more prominent
+    // bubble (see styles.css). Bootstrap consumes each link's `title` on
+    // init (clears the attribute) so the native tooltip doesn't also fire.
+    // Progressive enhancement: with JS off, the native `title` still works.
+    // The rail is server-rendered once (not htmx-swapped), so a one-time
+    // init on load covers every link; getOrCreateInstance is idempotent.
+    if (window.bootstrap && window.bootstrap.Tooltip) {
+        const nav_links = document.querySelectorAll('.app-sidebar a[title]');
+        nav_links.forEach(function (el) {
+            window.bootstrap.Tooltip.getOrCreateInstance(el, {
+                placement: 'right',
+                delay: { show: 100, hide: 50 },
+                customClass: 'sidebar-tooltip',
+            });
+        });
+    }
 })();

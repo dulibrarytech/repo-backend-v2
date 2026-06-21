@@ -393,6 +393,32 @@ h1 {
     stroke-width: 1.75;
 }
 
+/* --- Sidebar tooltips (Bootstrap; initialized in dashboard.js) ----------- */
+/*
+ * The icon rail's hover labels. Native `title` tooltips are slow + plain;
+ * these Bootstrap tooltips appear quickly (100ms show delay set in
+ * dashboard.js) and read more prominently than the browser default: a dark,
+ * fully-opaque bubble with semibold text and a strong shadow. Bootstrap 5.3
+ * theming via the --bs-tooltip-* custom properties — --bs-tooltip-bg also
+ * colors the arrow, so the whole tooltip stays consistent.
+ */
+.sidebar-tooltip {
+    --bs-tooltip-bg: var(--text-strong);
+    --bs-tooltip-color: #ffffff;
+    --bs-tooltip-font-size: 0.875rem;
+    --bs-tooltip-padding-x: 0.6rem;
+    --bs-tooltip-padding-y: 0.4rem;
+    --bs-tooltip-border-radius: var(--radius-md);
+    --bs-tooltip-opacity: 1;
+}
+
+.sidebar-tooltip .tooltip-inner {
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    max-width: 240px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
 /* --- Main content --------------------------------------------------------- */
 
 .app-main {

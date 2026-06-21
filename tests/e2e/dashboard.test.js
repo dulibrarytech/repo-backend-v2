@@ -190,13 +190,37 @@ describe('dashboard — e2e', () => {
                 'Home',
                 'Stats',
                 'Collections',
-                'Objects (flat browse)',
+                'Objects',
                 'Digital Preservation Jobs',
                 'Users',
                 'Admin Utils',
             ]) {
                 expect(res.text).toMatch(
                     new RegExp(`aria-label="${label.replace(/[()]/g, '\\$&')}"`)
+                );
+            }
+        });
+
+        it('every sidebar link carries a title (Bootstrap tooltip source)', async () => {
+            // dashboard.js upgrades these icon-rail `title` attributes to
+            // Bootstrap tooltips (right-placed, quick, prominent). The title
+            // is the tooltip content source — guard it so a future edit can't
+            // silently drop the hover labels.
+            const cookie = await cookie_for('sidebar-tooltips');
+            const res = await supertest(app)
+                .get('/repo/dashboard/')
+                .set('Cookie', cookie);
+            for (const label of [
+                'Home',
+                'Stats',
+                'Collections',
+                'Objects',
+                'Digital Preservation Jobs',
+                'Users',
+                'Admin Utils',
+            ]) {
+                expect(res.text).toMatch(
+                    new RegExp(`title="${label.replace(/[()]/g, '\\$&')}"`)
                 );
             }
         });
