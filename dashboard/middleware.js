@@ -35,15 +35,28 @@ function login_url(cfg, return_to) {
 // is denied regardless of what the UI showed.
 async function attach_role_context(req, res) {
     let role = null;
+    let profile = null;
     try {
         if (req.user && req.user.du_id) {
             const row = await user_model.get_by_du_id(req.user.du_id);
-            role = (row && row.role) || null;
+            if (row) {
+                role = row.role || null;
+                profile = row;
+            }
         }
     } catch {
         role = null;
     }
     req.user.role = role;
+    // The JWT carries only sub/du_id/email — NOT the user's name. Merge the
+    // name from tbl_users (already fetched above for the role) onto req.user
+    // so the header shows the full name in EVERY view, not just the ones
+    // (like the home page) that fetch the full record themselves. Falls back
+    // to the du_id in the header when the lookup fails (profile stays null).
+    if (profile) {
+        if (profile.first_name) req.user.first_name = profile.first_name;
+        if (profile.last_name) req.user.last_name = profile.last_name;
+    }
     res.locals.user = req.user;
     res.locals.user_role = role;
     res.locals.can = (permission) => has_permission(role, permission);

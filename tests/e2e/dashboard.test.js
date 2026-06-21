@@ -3001,6 +3001,24 @@ describe('dashboard — e2e', () => {
             expect(res.text).toMatch(/\/dashboard\/aips\/list/);
         });
 
+        it("header shows the user's full name (from tbl_users), not the DU ID", async () => {
+            // Regression: the identity next to the logout icon showed the raw
+            // du_id on non-home pages, because res.locals.user is the JWT
+            // (which carries no name). attach_role_context now merges the
+            // first/last name from tbl_users, so every view's header shows the
+            // full name. cookie_for seeds first_name 'Ada' / last_name 'User'
+            // but signs a NAME-LESS JWT — so a passing name proves the merge.
+            const cookie = await cookie_for('aip-hdr-871095226');
+            const res = await supertest(app)
+                .get('/repo/dashboard/aips')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            // The user-label shows the resolved full name…
+            expect(res.text).toMatch(/Ada User/);
+            // …not the bare du_id fallback.
+            expect(res.text).not.toMatch(/aip-hdr-871095226/);
+        });
+
         it('GET /aips/list returns table rows when data exists', async () => {
             const cookie = await cookie_for('aip-list');
             const seeded = await db_helper.seed_aip_store({
