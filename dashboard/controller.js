@@ -353,6 +353,20 @@ async function objects_table_partial(req, res) {
         is_active: is_active_filter,
     };
 
+    // Recent-ingests window: objects created in the last N days. Threaded
+    // from the Recent Ingests view (?recent_days=30) so it can reuse this
+    // table (object_row actions, RBAC, pagination) instead of a parallel
+    // implementation. Cutoff is the 'YYYY-MM-DD HH:MM:SS' UTC format the
+    // `created` TIMESTAMP stores (see repository/model.list); capped at a
+    // year. Only the list path honors it (the Recent view has no q box).
+    const recent_days = Number.parseInt(_last_string(req.query.recent_days), 10);
+    if (Number.isFinite(recent_days) && recent_days > 0) {
+        common.created_since = new Date(Date.now() - Math.min(recent_days, 365) * 86400000)
+            .toISOString()
+            .slice(0, 19)
+            .replace('T', ' ');
+    }
+
     // When `q` is set, route through the search model (LIKE across
     // indexed columns). Otherwise the plain repository.list — cheap
     // index scan, no text match.

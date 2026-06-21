@@ -754,6 +754,30 @@ describe('dashboard — e2e', () => {
             expect(res.text).not.toContain(`id="object-${noise.pid}"`);
         });
 
+        it('kebab shows "View public handle" only on PUBLISHED objects', async () => {
+            // The action links out to the public record, which only resolves
+            // once the object is published — so it's gated on is_published.
+            const cookie = await cookie_for('o-handle-unpub');
+            // Unpublished (but seeded with a handle) → no handle action.
+            await db_helper.seed_object({ is_published: 0, handle: 'https://hdl.example/unpub' });
+            const unpub = await supertest(app)
+                .get('/repo/dashboard/objects/list')
+                .set('Cookie', cookie);
+            expect(unpub.status).toBe(200);
+            expect(unpub.text).not.toContain('View public handle');
+        });
+
+        it('kebab shows "View public handle" + the handle URL for a published object', async () => {
+            const cookie = await cookie_for('o-handle-pub');
+            await db_helper.seed_object({ is_published: 1, handle: 'https://hdl.example/pub' });
+            const res = await supertest(app)
+                .get('/repo/dashboard/objects/list')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toContain('View public handle');
+            expect(res.text).toContain('href="https://hdl.example/pub"');
+        });
+
         it('GET /objects/list survives duplicated ?q= (last-wins coercion)', async () => {
             // Defense-in-depth: pagination URLs strip the filter
             // params to avoid colliding with hx-include, but a hand-

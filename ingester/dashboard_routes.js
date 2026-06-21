@@ -43,6 +43,7 @@ module.exports = function mount(app) {
     app.get(`${base}/aspace-qa/list`, require_dashboard_auth, controller.aspace_qa_list_partial);
     app.get(`${base}/packaging`, require_dashboard_auth, controller.packaging_page);
     app.get(`${base}/packaging/list`, require_dashboard_auth, controller.packaging_list_partial);
+    app.get(`${base}/recent`, require_dashboard_auth, controller.recent_ingests_page);
 
     // Workspace actions — folder name is URL-encoded by the row's
     // HTMX template.

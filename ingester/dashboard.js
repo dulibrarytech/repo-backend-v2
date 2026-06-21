@@ -286,15 +286,51 @@ async function packaging_page(req, res) {
     });
 }
 
+// Count of ingests actively moving through the pipeline. Any row in a
+// worker-claimable state (STAGE_BY_STATE — PENDING through upload, the
+// Archivematica transfer/ingest stages, and AIP-store) counts as "in
+// progress". Halted/terminal rows are NOT claimable, so they don't count —
+// staff can still submit when a prior ingest has halted awaiting action.
+// Used to surface the "Ingest in progress" banner and to block a second
+// simultaneous submit: Archivematica serializes transfers (one at a time),
+// so overlapping ingests confuse staff and strain SFTP. count_rows_in_states
+// already filters is_complete=0.
+async function active_ingest_count() {
+    return model.count_rows_in_states(Object.keys(worker_registry.STAGE_BY_STATE));
+}
+
 async function packaging_list_partial(req, res) {
     const data = await workspace.list_workspace({
         scope: 'processed',
         q: req.query.q,
     });
+    const in_progress = await active_ingest_count();
     render_partial(req, res, 'dashboard/partials/workspace_table', {
         ...data,
         view: 'packaging-and-ingesting',
         actions: ['submit_ingest', 'revert_to_mdo'],
+        // Drives the "Ingest in progress" banner + the disabled submit
+        // buttons in workspace_table.ejs. The list partial re-polls every
+        // 30s (+ on workspace:refresh), so both clear automatically once
+        // the active ingest finishes.
+        ingest_in_progress: in_progress > 0,
+        ingest_in_progress_count: in_progress,
+    });
+}
+
+// Standalone "Recent Ingests" page — repo objects ingested in the last 30
+// days. Reached from the home-page "Recent ingests" card ("Browse all →")
+// and the Digital Preservation Jobs (workflow) sidebar. The table itself is
+// the shared Objects table, loaded via HTMX from
+// /objects/list?recent_days=30 — so it reuses object_row.ejs (Metadata /
+// Refresh metadata / Publish / Suppress / Convert / Delete + bulk) with the
+// same RBAC, no duplication. This handler just renders the shell.
+async function recent_ingests_page(req, res) {
+    render_page(req, res, 'dashboard/ingest_recent', {
+        page: 'ingest_recent',
+        active: 'recent-ingests',
+        title: 'Recent Ingests — Ingest @ DU',
+        days: 30,
     });
 }
 
@@ -381,6 +417,23 @@ async function submit_ingest_action(req, res) {
     const folder = req.params.folder;
     if (!folder) throw new ValidationError('folder is required');
     const actor = actor_from_request(req);
+    // One ingest in the pipeline at a time. Archivematica serializes
+    // transfers, and overlapping ingests confuse staff + strain SFTP, so
+    // reject a second submit while one is active. The disabled submit
+    // button in the packaging list is UI-only — this is the authoritative
+    // guard. (TOCTOU: two truly-simultaneous submits could both pass; the
+    // worker still serializes the AM transfers, so this covers the common
+    // case without a heavy DB lock.)
+    if ((await active_ingest_count()) > 0) {
+        return render_action_result(req, res, {
+            ok: false,
+            severity: 'warn',
+            action: 'Submit to Ingest',
+            folder,
+            message:
+                'An ingest is already in progress. Wait until it completes before submitting another — Archivematica processes one ingest at a time.',
+        });
+    }
     const result = await workspace.submit_to_ingest(folder, actor);
     // Get the package list we actually queued. On failure we still
     // pull it (for the audit row) but tolerate any error.
@@ -950,6 +1003,7 @@ module.exports = {
     aspace_qa_list_partial,
     packaging_page,
     packaging_list_partial,
+    recent_ingests_page,
     // Workspace actions
     make_digital_objects_action,
     aspace_qa_check_action,

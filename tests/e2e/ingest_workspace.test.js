@@ -14,6 +14,8 @@ const supertest = require('supertest');
 const { make_app } = require('../helpers/app');
 const db_helper = require('../helpers/db');
 const jwt = require('../../libs/jwt');
+const { db_queue } = require('../../config/db');
+const tables = require('../../config/db_tables');
 
 let app;
 
@@ -397,6 +399,115 @@ describe('ingest workspace pages — e2e', () => {
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
             expect(res.text).toContain('No folders are ready to submit to the ingest pipeline');
+        });
+    });
+
+    describe('GET /dashboard/ingest/recent (Recent Ingests)', () => {
+        it('redirects unauthed users to login', async () => {
+            const res = await supertest(app).get('/repo/dashboard/ingest/recent');
+            expect(res.status).toBe(302);
+        });
+
+        it('renders a shell wired to the objects table, workflow sidebar marking it active', async () => {
+            const cookie = await cookie_for('recent-1');
+            const res = await supertest(app)
+                .get('/repo/dashboard/ingest/recent')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toContain('Recent Ingests');
+            expect(res.text).toContain('Objects ingested in the last 30 days');
+            // Reuses the Objects table, filtered to the recent window.
+            expect(res.text).toMatch(/id="objects-table"/);
+            expect(res.text).toMatch(/\/objects\/list\?recent_days=30/);
+            // Workflow focus mode: the Recent Ingests sidebar item is active…
+            expect(res.text).toMatch(
+                /<a[^>]*class="active"[^>]*aria-current="page"[^>]*aria-label="Recent Ingests"/
+            );
+            // …and the normal nav is hidden (focus mode).
+            expect(res.text).toContain('title="Make Digital Objects"');
+            expect(res.text).not.toContain('title="Collections"');
+        });
+
+        it('the objects table, scoped by recent_days, shows in-window objects with row actions', async () => {
+            await db_helper.seed_object({
+                pid: 'codu:recent-fresh',
+                display_record: JSON.stringify({ title: 'Carnival of the Animals' }),
+            });
+            await db_helper.seed_object({
+                pid: 'codu:recent-old',
+                created: '2020-01-01 00:00:00',
+                display_record: JSON.stringify({ title: 'Ancient Reel' }),
+            });
+            const cookie = await cookie_for('recent-2');
+            const res = await supertest(app)
+                .get('/repo/dashboard/objects/list?recent_days=30')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            // Fresh object is in the window; the old one is filtered out.
+            expect(res.text).toContain('Carnival of the Animals');
+            expect(res.text).not.toContain('Ancient Reel');
+            // The row carries the Objects actions (so metadata/publish work
+            // here) — the Metadata action endpoint is rendered for the row.
+            expect(res.text).toMatch(/\/objects\/codu:recent-fresh\/metadata/);
+        });
+
+        it('home page "Recent ingests" card links to the standalone view', async () => {
+            const cookie = await cookie_for('recent-home');
+            const res = await supertest(app).get('/repo/dashboard/').set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toMatch(/href="[^"]*\/ingest\/recent"[^>]*>\s*Browse all/);
+        });
+    });
+
+    describe('ingest-in-progress gate (packaging view)', () => {
+        // An ingest is "in progress" when any row sits in a worker-claimable
+        // state (STAGE_BY_STATE). Such a row → "Ingest in progress" banner on
+        // the packaging list + submit blocked. Halted/terminal rows are NOT
+        // claimable, so they don't gate (staff can still submit when a prior
+        // ingest has halted awaiting action).
+        async function seed_active_row(pipeline_state) {
+            await db_queue()(tables.ingest_queue).insert({
+                package: 'busy-pkg',
+                batch: 'busy-batch',
+                collection_uuid: 'c-busy',
+                status: pipeline_state,
+                pipeline_state,
+                is_complete: 0,
+            });
+        }
+
+        it('shows the "Ingest in progress" banner on /packaging/list while a claimable row exists', async () => {
+            await seed_active_row('TRANSFER_IN_PROGRESS');
+            const cookie = await cookie_for('gate-banner');
+            const res = await supertest(app)
+                .get('/repo/dashboard/ingest/packaging/list')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toContain('Ingest in progress');
+        });
+
+        it('does NOT show the banner when the only active row is halted (not claimable)', async () => {
+            await seed_active_row('INGEST_HALTED');
+            const cookie = await cookie_for('gate-halted');
+            const res = await supertest(app)
+                .get('/repo/dashboard/ingest/packaging/list')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).not.toContain('Ingest in progress');
+        });
+
+        it('rejects a second submit while an ingest is in progress (does not run submit_to_ingest)', async () => {
+            await seed_active_row('UPLOADING');
+            const cookie = await cookie_for('gate-submit');
+            const res = await supertest(app)
+                .post('/repo/dashboard/ingest/workspace/col-a/submit-ingest')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toMatch(/already in progress/i);
+            // The guard short-circuits before workspace.submit_to_ingest, so we
+            // DON'T see the curation-unconfigured "failed for" envelope that an
+            // actual submit attempt produces.
+            expect(res.text).not.toContain('failed for col-a');
         });
     });
 

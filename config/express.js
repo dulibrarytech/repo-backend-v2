@@ -2,7 +2,7 @@
 
 // Express 5 application factory.
 //
-// Phase 1: wires security middleware (helmet/CORS/body-limits/sanitize/
+// Wires security middleware (helmet/CORS/body-limits/sanitize/
 // request_id), cookie parser for JWT cookies, structured logging, the
 // /health and /version endpoints, and a central error handler. Domain
 // routes (auth, users, repository, indexer, dashboard, ingester, ...)

@@ -53,6 +53,23 @@ describe('repository/model — DB integration', () => {
         expect(cols.total).toBe(1);
     });
 
+    it('list filters by created_since (recent-ingests window)', async () => {
+        // Backs the Recent Ingests view: only objects created at/after the
+        // cutoff are returned. `created` defaults to now() on seed, so an
+        // explicit old created is excluded by a recent cutoff.
+        await db_helper.seed_object({ pid: 'codu:old', created: '2020-01-01 00:00:00' });
+        await db_helper.seed_object({ pid: 'codu:fresh' });
+        const cutoff = new Date(Date.now() - 30 * 86400000)
+            .toISOString()
+            .slice(0, 19)
+            .replace('T', ' ');
+        const r = await repo_model.list({ created_since: cutoff });
+        const pids = r.items.map((row) => row.pid);
+        expect(pids).toContain('codu:fresh');
+        expect(pids).not.toContain('codu:old');
+        expect(r.total).toBe(1);
+    });
+
     it('get by pid returns the public projection', async () => {
         const seeded = await db_helper.seed_object({ object_type: 'collection' });
         const found = await repo_model.get(seeded.pid);

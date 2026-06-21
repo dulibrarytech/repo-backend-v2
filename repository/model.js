@@ -57,7 +57,7 @@ function require_pid(pid) {
     }
 }
 
-// list({ collection, object_type, is_published, is_active, page, page_size })
+// list({ collection, object_type, is_published, is_active, created_since, page, page_size })
 async function list(filter = {}) {
     const page = Math.max(1, Number.parseInt(filter.page, 10) || 1);
     const page_size = Math.min(200, Math.max(1, Number.parseInt(filter.page_size, 10) || 25));
@@ -74,6 +74,12 @@ async function list(filter = {}) {
     }
     if (filter.is_published !== undefined) q.where({ is_published: filter.is_published ? 1 : 0 });
     if (filter.is_active !== undefined) q.where({ is_active: filter.is_active ? 1 : 0 });
+    // Objects created within a recent window — backs the "Recent Ingests"
+    // view. Caller passes a 'YYYY-MM-DD HH:MM:SS' (UTC) cutoff; `created` is
+    // a TIMESTAMP stored in that same format by both MariaDB now() and
+    // sqlite CURRENT_TIMESTAMP, so the string compares chronologically
+    // (fixed-width + zero-padded → lexicographic == chronological).
+    if (filter.created_since) q.where('created', '>=', filter.created_since);
 
     // Total before pagination (one extra count query — cheap with the
     // indexes we shipped in db/schema.js).

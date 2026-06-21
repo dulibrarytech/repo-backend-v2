@@ -165,7 +165,7 @@ describe('collections — e2e', () => {
                 .expect(200);
             expect(res.text).toMatch(/<table class="queue-table">/);
             expect(res.text).toMatch(/My Collection/);
-            expect(res.text).toMatch(/Open/); // the "Open" action
+            expect(res.text).toMatch(/Objects/); // the "Objects" (view objects) action
             // Fragment, not full page
             expect(res.text).not.toMatch(/<html/);
         });
