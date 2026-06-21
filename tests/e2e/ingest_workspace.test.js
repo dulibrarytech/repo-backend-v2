@@ -227,11 +227,11 @@ describe('ingest workspace pages — e2e', () => {
             expect(positions).toEqual(sorted);
         });
 
-        it('Admin Utils icon points at /admin/indexer (first tool, same shape as DPJ → workspace)', async () => {
+        it('Admin Utils icon points at /admin/services (the default admin view)', async () => {
             const cookie = await cookie_for('side-admin-link');
             const res = await supertest(app).get('/repo/dashboard/').set('Cookie', cookie);
             expect(res.text).toMatch(
-                /href="[^"]*\/dashboard\/admin\/indexer"[^>]*title="Admin Utils"/
+                /href="[^"]*\/dashboard\/admin\/services"[^>]*title="Admin Utils"/
             );
         });
     });
