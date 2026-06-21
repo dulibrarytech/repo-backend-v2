@@ -47,7 +47,7 @@
     <% if (total > page_size) { %>
         <%/* Pagination — same markup as collections_table for visual
              consistency. URL only carries page + page_size; the
-             filter params (q, source, status) flow in via the
+             filter params (q, status) flow in via the
              #aips-table div's hx-include attribute. Embedding them
              here would duplicate with hx-include and Express would
              parse req.query.q as ['','foo']. Be careful editing. */%>

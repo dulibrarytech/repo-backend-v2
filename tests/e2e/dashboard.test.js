@@ -2992,10 +2992,11 @@ describe('dashboard — e2e', () => {
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
             expect(res.text).toMatch(/AIPs/);
-            // Filter inputs render.
+            // Filter inputs render: search + status. The "source" dropdown was
+            // removed — all sources are shown by default.
             expect(res.text).toMatch(/name="q"/);
-            expect(res.text).toMatch(/name="source"/);
             expect(res.text).toMatch(/name="status"/);
+            expect(res.text).not.toMatch(/name="source"/);
             // The HTMX table target is present and points at /aips/list.
             expect(res.text).toMatch(/id="aips-table"/);
             expect(res.text).toMatch(/\/dashboard\/aips\/list/);
