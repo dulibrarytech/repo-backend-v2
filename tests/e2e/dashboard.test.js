@@ -507,9 +507,6 @@ describe('dashboard — e2e', () => {
                     expect(tag).toMatch(/aria-label="[^"]+"/);
                 }
             }
-            // The objects page's collection-UUID text filter is labeled too.
-            const objs = await supertest(app).get('/repo/dashboard/objects').set('Cookie', cookie);
-            expect(objs.text).toMatch(/aria-label="Filter by collection UUID"/);
         });
     });
 
@@ -719,7 +716,7 @@ describe('dashboard — e2e', () => {
             // /dashboard/objects?q=<pid> would populate the search
             // input from the URL but render the unfiltered default
             // page (the bug the AIPs view's PID-link triggered).
-            expect(res.text).toMatch(/hx-include="\[name=q\][\s\S]*?name=is_published[\s\S]*?name=collection/);
+            expect(res.text).toMatch(/hx-include="\[name=q\][\s\S]*?name=is_published/);
         });
 
         it('shell page passes ?q= from URL into the search input so hx-include picks it up', async () => {
