@@ -1,0 +1,119 @@
+<% if (!candidates || candidates.length === 0) { %>
+    <div class="empty-state">
+        <% if (q) { %>
+            No matching objects found for “<%= q %>”.
+        <% } else { %>
+            No objects are available to add.
+        <% } %>
+    </div>
+<% } else { %>
+    <div class="px-3 pt-2 text-muted small">
+        <%= total.toLocaleString() %> eligible object<%= total === 1 ? '' : 's' %>
+    </div>
+    <table class="queue-table">
+        <thead>
+            <tr>
+                <th style="width: 36px;">
+                    <%/* Select-all toggles the rows on THIS page (dashboard.js
+                         section 6). Selection persists across pages, so this
+                         only ever affects the 25 currently shown. */%>
+                    <input type="checkbox" class="form-check-input"
+                           id="add-objects-select-page"
+                           aria-label="Select all objects on this page">
+                </th>
+                <th class="thumb-cell" aria-label="Thumbnail"><span class="visually-hidden">Thumbnail</span></th>
+                <th>Title</th>
+                <th>Type</th>
+                <th>Current collection</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% candidates.forEach(function(o) { %>
+                <tr>
+                    <td>
+                        <%/* UI-only checkbox — no `name`. dashboard.js tracks the
+                             selected pids (across pages) and mirrors them into the
+                             form's hidden inputs, which is what actually submits. */%>
+                        <input type="checkbox" data-pid="<%= o.pid %>"
+                               class="form-check-input add-object-checkbox"
+                               aria-label="Select <%= o.title || o.file_name || o.pid %>">
+                    </td>
+                    <td class="thumb-cell">
+                        <% if (o.thumbnail) { %>
+                            <img class="thumb-img" src="<%= o.thumbnail %>" alt="" loading="lazy">
+                        <% } else { %>
+                            <div class="thumb-placeholder" aria-label="No thumbnail" title="No thumbnail">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                                    <circle cx="8.5" cy="8.5" r="1.5"/>
+                                    <polyline points="21 15 16 10 5 21"/>
+                                </svg>
+                            </div>
+                        <% } %>
+                    </td>
+                    <td class="package-cell">
+                        <div class="package-name"><%= o.title || '(untitled)' %></div>
+                        <div class="package-sub font-monospace text-muted"
+                             style="font-size: 12px; font-style: normal;"
+                             title="<%= o.pid %>">
+                            <%= o.file_name || o.pid %>
+                        </div>
+                    </td>
+                    <td><%= o.object_type || 'object' %></td>
+                    <td>
+                        <%/* The object's CURRENT collection, by name. */%>
+                        <% if (o.current_collection_title) { %>
+                            <%= o.current_collection_title %>
+                        <% } else if (o.is_member_of_collection) { %>
+                            <%/* In a collection we couldn't resolve to a title
+                                 (soft-deleted / legacy identifier) — show the raw
+                                 id so the column isn't blank. */%>
+                            <span class="font-monospace small text-muted"
+                                  title="<%= o.is_member_of_collection %>"><%= o.is_member_of_collection %></span>
+                        <% } else { %>
+                            <span class="text-muted">—</span>
+                        <% } %>
+                    </td>
+                </tr>
+            <% }); %>
+        </tbody>
+    </table>
+
+    <% if (total > page_size) { %>
+        <div class="app-pagination">
+            <div class="results-count">
+                Showing <%= (page - 1) * page_size + 1 %>–<%= Math.min(page * page_size, total) %>
+                of <%= total.toLocaleString() %>
+            </div>
+            <nav class="page-controls" aria-label="Pagination">
+                <%
+                    var prev = Math.max(1, page - 1);
+                    var next = page * page_size < total ? page + 1 : page;
+                    var qs = function (p) {
+                        var u = new URLSearchParams();
+                        u.set('page', String(p));
+                        if (q) u.set('q', q);
+                        return u.toString();
+                    };
+                    var list_url = dashboard_base + '/collections/' + collection.pid + '/add-objects/list';
+                %>
+                <button type="button"
+                        <%= page === 1 ? 'disabled' : '' %>
+                        hx-get="<%= list_url %>?<%= qs(prev) %>"
+                        hx-target="#add-objects-results"
+                        hx-swap="innerHTML">
+                    ← Previous
+                </button>
+                <span class="current">Page <%= page %></span>
+                <button type="button"
+                        <%= page * page_size >= total ? 'disabled' : '' %>
+                        hx-get="<%= list_url %>?<%= qs(next) %>"
+                        hx-target="#add-objects-results"
+                        hx-swap="innerHTML">
+                    Next →
+                </button>
+            </nav>
+        </div>
+    <% } %>
+<% } %>

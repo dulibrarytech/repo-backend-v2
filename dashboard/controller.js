@@ -17,6 +17,7 @@ const repo_model = require('../repository/model');
 const search_model = require('../search/model');
 const stats_model = require('../stats/model');
 const collections_model = require('../collections/model');
+const collection_provision = require('../repository/collection_provision');
 const projection = require('../libs/object_projection');
 const jwt = require('../libs/jwt');
 const thumbnails = require('./thumbnails');
@@ -273,16 +274,221 @@ async function collections_list_partial(req, res) {
 
 async function collection_detail_page(req, res) {
     const collection = await collections_model.get_collection(req.params.pid);
+    // Nested sub-collections (if any) render in their own section, separate
+    // from the member-object list.
+    const sub_collections = await collections_model.sub_collections(req.params.pid);
     render_page(req, res, 'dashboard/collection_detail', {
         page: 'collection_detail',
         active: 'collections',
         title: `${collection.title || collection.pid} — Repository @ DU`,
         collection,
+        sub_collections,
         filters: {
             q: req.query.q || '',
             is_published: req.query.is_published || '',
         },
     });
+}
+
+// "Add objects" page for a collection — shell only. Live HTMX search +
+// pagination (mirroring the Objects table) load into #add-objects-results via
+// collection_add_objects_list; selected pids POST to /collections/:pid/members.
+async function collection_add_objects_page(req, res) {
+    const collection = await collections_model.get_collection(req.params.pid);
+    const q = (_last_string(req.query.q) || '').trim();
+    render_page(req, res, 'dashboard/collections_add_objects', {
+        page: 'collections_add_objects',
+        active: 'collections',
+        title: `Add objects — ${collection.title || collection.pid}`,
+        collection,
+        q,
+    });
+}
+
+// Results partial for the Add-objects picker. Live search + pagination, same as
+// the objects table. Excludes collections AND objects already in this
+// collection at the SQL layer, so the total + page math are accurate (the
+// earlier post-fetch filter could under-count a page and capped results at 25).
+async function collection_add_objects_list(req, res) {
+    const collection = await collections_model.get_collection(req.params.pid);
+    const q = (_last_string(req.query.q) || '').trim();
+    const result = await search_model.search({
+        q: q || undefined,
+        is_active: true,
+        exclude_collections: true,
+        not_member_of_collection: collection.pid,
+        page: _last_string(req.query.page),
+        page_size: 25,
+    });
+    const candidates = projection.enrich_all(result.items);
+    // Resolve each candidate's CURRENT collection (is_member_of_collection holds
+    // a PID, not a name) so the picker can show it by title. One batch query.
+    const current_titles = await collections_model.titles_by_pids(
+        candidates.map((o) => o.is_member_of_collection)
+    );
+    candidates.forEach((o) => {
+        o.current_collection_title = current_titles.get(o.is_member_of_collection) || null;
+    });
+    render_partial(req, res, 'dashboard/partials/add_objects_results', {
+        collection,
+        q,
+        candidates,
+        page: result.page,
+        page_size: result.page_size,
+        total: result.total,
+    });
+}
+
+// Move the selected objects into the collection, then return to its detail.
+async function collection_add_members(req, res) {
+    const dashboard_base = `${app_config().path}/dashboard`;
+    const pid = req.params.pid;
+    let pids = req.body.pids;
+    if (typeof pids === 'string') pids = [pids];
+    if (!Array.isArray(pids)) pids = [];
+    if (pids.length === 0) {
+        // Nothing selected — back to the picker.
+        return res.redirect(303, `${dashboard_base}/collections/${pid}/add-objects`);
+    }
+    await collections_model.add_members(pid, pids);
+    return res.redirect(303, `${dashboard_base}/collections/${pid}`);
+}
+
+// Soft-delete an EMPTY (sub-)collection. The model refuses (409) if it still
+// has any active children. Removes the row from the Sub-collections section
+// (hx-target=#collection-<pid>, hx-swap=outerHTML on an empty body) + toasts.
+async function collection_delete(req, res) {
+    const actor = await user_model.actor_label(req.user);
+    await collections_model.delete_collection(req.params.pid, { actor });
+    res.set(
+        'HX-Trigger',
+        JSON.stringify({
+            toast: { level: 'success', message: 'Sub-collection deleted.' },
+        })
+    );
+    // Empty body so the targeted row is removed cleanly.
+    res.set('Content-Type', 'text/html').send('');
+}
+
+// Modal to move/re-parent a collection. Lists the collections it may be moved
+// under (excludes itself + its descendants → no cycles) plus a "top level"
+// option. Loaded into #modal-content via HTMX.
+async function collection_move_form(req, res) {
+    const collection = await collections_model.get_collection(req.params.pid);
+    const parents = await collections_model.eligible_parents(req.params.pid);
+    // Normalize the current parent: a real parent is a UUID pid; legacy
+    // top-level markers ('codu:root', '', null) collapse to '' so the modal
+    // pre-selects the "Top level" option.
+    const raw_parent = collection.is_member_of_collection || '';
+    const current_parent = validator.isUUID(raw_parent) ? raw_parent : '';
+    render_partial(req, res, 'dashboard/partials/collection_move_modal', {
+        collection,
+        parents,
+        current_parent,
+    });
+}
+
+// Apply a collection move. new_parent_pid='' → top-level. The model enforces the
+// active-collection + cycle guards (400/404 on violation). Toasts + refreshes.
+async function collection_move(req, res) {
+    const new_parent_pid = _last_string(req.body.new_parent_pid) || '';
+    const result = await collections_model.move_collection(req.params.pid, new_parent_pid);
+    const message = result.parent_pid
+        ? 'Collection moved.'
+        : 'Collection moved to the top level.';
+    res.set(
+        'HX-Trigger',
+        JSON.stringify({
+            'modal:close': {},
+            toast: { level: 'success', message },
+            'collections:refresh': {},
+        })
+    );
+    res.set('Content-Type', 'text/html').send('');
+}
+
+// Render the "New collection" / "Create sub-collection" form. `?parent=<pid>`
+// pre-binds a parent so the new collection becomes a sub-collection of it.
+async function collection_new_page(req, res) {
+    const parent_pid = _last_string(req.query.parent);
+    // Best-effort parent lookup for display ("under X"); null if absent/invalid.
+    const parent = parent_pid
+        ? await collections_model.get_collection(parent_pid).catch(() => null)
+        : null;
+    render_page(req, res, 'dashboard/collections_new', {
+        page: 'collections_new',
+        active: 'collections',
+        title: parent ? 'Create Sub-collection — Repository @ DU' : 'New Collection — Repository @ DU',
+        parent,
+        form: { uri: '' },
+        error: null,
+    });
+}
+
+// Create a collection (top-level or sub) bound to an ArchivesSpace RESOURCE
+// URI, via the same provisioning the ingest gate uses. On success → redirect
+// to the new collection's detail; on error / already-exists → re-render the
+// form with the message.
+async function collection_create(req, res) {
+    const dashboard_base = `${app_config().path}/dashboard`;
+    // The global body sanitizer (libs/sanitize.js) HTML-escapes '/', so a
+    // pasted URI arrives as "&#x2F;repositories&#x2F;…". Unescape before we
+    // match. We accept either form below (bare ID or full URI).
+    const raw = validator.unescape((_last_string(req.body.uri) || '').trim());
+    const parent_pid = _last_string(req.body.parent_collection_pid) || '';
+    const parent = parent_pid
+        ? await collections_model.get_collection(parent_pid).catch(() => null)
+        : null;
+
+    function reject(message) {
+        return render_page(req, res, 'dashboard/collections_new', {
+            page: 'collections_new',
+            active: 'collections',
+            title: parent
+                ? 'Create Sub-collection — Repository @ DU'
+                : 'New Collection — Repository @ DU',
+            parent,
+            form: { uri: raw },
+            error: message,
+        });
+    }
+
+    if (parent_pid && !parent) {
+        return reject('The parent collection could not be found.');
+    }
+    // Require a FULL ArchivesSpace URI. Staff bind collections to either a
+    // resource OR an archival_object (both are used as ASpace "collections"),
+    // so a bare numeric ID is ambiguous and no longer accepted — the URI's
+    // type segment is what disambiguates the two. provision_collection fetches
+    // the URI generically (get_record doesn't care which kind it is), and the
+    // ingest path already provisions collections from archival_object URIs.
+    let uri;
+    if (
+        /^\/repositories\/\d+\/resources\/\d+$/.test(raw) ||
+        /^\/repositories\/\d+\/archival_objects\/\d+$/.test(raw)
+    ) {
+        uri = raw;
+    } else {
+        return reject(
+            'Enter the full ArchivesSpace URI, e.g. /repositories/2/resources/1204 ' +
+                'or /repositories/2/archival_objects/426.'
+        );
+    }
+
+    const result = await collection_provision.provision_collection({
+        uri,
+        parent_collection_pid: parent_pid || undefined,
+    });
+    if (!result.ok) {
+        return reject(result.error);
+    }
+    if (!result.created) {
+        // One live collection per resource URI (unique index). It already exists.
+        return reject(
+            `A collection bound to ${uri} already exists — open it from the Collections list.`
+        );
+    }
+    return res.redirect(303, `${dashboard_base}/collections/${result.collection_pid}`);
 }
 
 // ----------------------------------------------------------------------------
@@ -365,6 +571,11 @@ async function objects_table_partial(req, res) {
             .toISOString()
             .slice(0, 19)
             .replace('T', ' ');
+    }
+    // Collection-detail member list passes this so nested sub-collections
+    // don't appear among the parent's member objects.
+    if (_last_string(req.query.exclude_collections) === '1') {
+        common.exclude_collections = true;
     }
 
     // When `q` is set, route through the search model (LIKE across
@@ -1009,6 +1220,14 @@ module.exports = {
     collections_page,
     collections_list_partial,
     collection_detail_page,
+    collection_new_page,
+    collection_create,
+    collection_add_objects_page,
+    collection_add_objects_list,
+    collection_add_members,
+    collection_delete,
+    collection_move_form,
+    collection_move,
     objects_page,
     objects_table_partial,
     objects_publish,

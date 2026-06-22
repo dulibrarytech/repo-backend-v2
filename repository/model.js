@@ -80,6 +80,10 @@ async function list(filter = {}) {
     // sqlite CURRENT_TIMESTAMP, so the string compares chronologically
     // (fixed-width + zero-padded → lexicographic == chronological).
     if (filter.created_since) q.where('created', '>=', filter.created_since);
+    // Exclude collection rows — used by the collection-detail member list so a
+    // nested sub-collection doesn't appear among the parent's member objects
+    // (sub-collections render in their own section).
+    if (filter.exclude_collections) q.whereNot({ object_type: 'collection' });
 
     // Total before pagination (one extra count query — cheap with the
     // indexes we shipped in db/schema.js).
@@ -548,15 +552,38 @@ async function find_collection_by_uri(uri) {
 //   }
 //
 // Sets is_active=1, is_published=0 (staff publishes via the
-// dashboard), is_member_of_collection='' (collections are their own
-// root). is_updated=1 so the indexer worker picks the new collection
+// dashboard), is_member_of_collection = parent_collection_pid || ''
+// ('' = top-level root; a PID = a sub-collection nested under that
+// parent). is_updated=1 so the indexer worker picks the new collection
 // up on its next tick.
-async function create_collection({ uri, mods, pid: caller_pid, display_record, handle }) {
+async function create_collection({
+    uri,
+    mods,
+    pid: caller_pid,
+    display_record,
+    handle,
+    parent_collection_pid,
+}) {
     if (!uri || typeof uri !== 'string') {
         throw new ValidationError('uri is required to create a collection');
     }
     if (!mods || typeof mods !== 'object') {
         throw new ValidationError('mods (AS record) is required to create a collection');
+    }
+    // Sub-collection: the new collection is a member of an existing parent
+    // collection (vs '' = top-level root). Validate the parent is a live
+    // collection so we never create an orphan-nested row pointing at a
+    // missing / soft-deleted / non-collection PID. Ingest passes no parent,
+    // so this is skipped on that path — behavior there is unchanged.
+    if (parent_collection_pid) {
+        const parent = await db()(tables.objects)
+            .where({ pid: parent_collection_pid, object_type: 'collection', is_active: 1 })
+            .first();
+        if (!parent) {
+            throw new ValidationError(
+                'parent_collection_pid must reference an active collection'
+            );
+        }
     }
     const pid = caller_pid || randomUUID();
     const mods_json = JSON.stringify(mods);
@@ -580,7 +607,7 @@ async function create_collection({ uri, mods, pid: caller_pid, display_record, h
         mods: mods_json,
         display_record: JSON.stringify(envelope),
         handle: handle || '',
-        is_member_of_collection: '',
+        is_member_of_collection: parent_collection_pid || '',
         is_active: 1,
         is_published: 0,
         is_compound: 0,

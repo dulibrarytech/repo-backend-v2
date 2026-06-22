@@ -108,6 +108,12 @@ function normalize(filter = {}) {
     if (filter.collection !== undefined && filter.collection !== '') {
         out.collection = String(filter.collection).trim();
     }
+    if (
+        filter.not_member_of_collection !== undefined &&
+        filter.not_member_of_collection !== ''
+    ) {
+        out.not_member_of_collection = String(filter.not_member_of_collection).trim();
+    }
     if (filter.object_type !== undefined && filter.object_type !== '') {
         const t = String(filter.object_type).trim();
         if (!ALLOWED_OBJECT_TYPES.has(t)) {
@@ -125,6 +131,7 @@ function normalize(filter = {}) {
     } else {
         out.is_active = true; // hide soft-deleted by default
     }
+    if (filter.exclude_collections) out.exclude_collections = true;
     out.page = clamp_int(filter.page, 1, 1, 10_000);
     out.page_size = clamp_int(filter.page_size, 25, 1, 200);
     return out;
@@ -194,6 +201,15 @@ function apply_filters(qb, f) {
     if (f.object_type) qb.where({ object_type: f.object_type });
     if (f.is_published !== undefined) qb.where({ is_published: f.is_published ? 1 : 0 });
     if (f.is_active !== undefined) qb.where({ is_active: f.is_active ? 1 : 0 });
+    // Used by the collection-detail member list so a nested sub-collection
+    // doesn't appear among the parent's member objects.
+    if (f.exclude_collections) qb.whereNot({ object_type: 'collection' });
+    // Used by the add-objects picker: exclude rows already in the target
+    // collection so its current members aren't offered again (and so the
+    // paginated total reflects only eligible candidates).
+    if (f.not_member_of_collection) {
+        qb.whereNot({ is_member_of_collection: f.not_member_of_collection });
+    }
 }
 
 async function search(filter = {}) {

@@ -1,5 +1,16 @@
-<h1 class="page-title">Collections</h1>
-<p class="page-subtitle">Browse repository collections. Click a title — or use the actions menu (<strong>⋮</strong>) — to drill into a collection's objects.</p>
+<div class="d-flex justify-content-between align-items-start" style="gap: 12px;">
+    <div>
+        <h1 class="page-title">Collections</h1>
+        <p class="page-subtitle">Browse repository collections. Click a title — or use the actions menu (<strong>⋮</strong>) — to drill into a collection's objects.</p>
+    </div>
+    <%/* Create a top-level collection bound to an ASpace resource. Gated on
+         edit_object (staff + admin); `can` comes from require_dashboard_auth. */%>
+    <% if (typeof can === 'function' && can('edit_object')) { %>
+        <a href="<%= dashboard_base %>/collections/new" class="btn btn-sm btn-outline-primary text-nowrap">
+            + New collection
+        </a>
+    <% } %>
+</div>
 
 <div class="content-card">
     <div class="content-card-header">

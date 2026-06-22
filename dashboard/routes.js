@@ -55,15 +55,74 @@ module.exports = function mount(app) {
         controller.stats_duracloud_partial
     );
 
-    // Collections — order matters: /collections/list must be registered
-    // BEFORE the :pid wildcard so Express matches the literal path first.
+    // Collections — order matters: /collections/list and /collections/new
+    // must be registered BEFORE the :pid wildcard so Express matches the
+    // literal paths first.
     app.get(`${base}/collections`, require_dashboard_auth, controller.collections_page);
     app.get(
         `${base}/collections/list`,
         require_dashboard_auth,
         controller.collections_list_partial
     );
+    // Create a collection (top-level or sub) bound to an ASpace resource URI.
+    // Gated on edit_object (staff + admin). The form GET is gated too so a
+    // viewer can't load it.
+    app.get(`${base}/collections/new`, require_dashboard_auth, can_edit, controller.collection_new_page);
+    app.post(
+        `${base}/collections`,
+        require_dashboard_auth,
+        can_edit,
+        write_limiter(),
+        controller.collection_create
+    );
     app.get(`${base}/collections/:pid`, require_dashboard_auth, controller.collection_detail_page);
+    // Move existing objects into a collection (single-membership reassign).
+    // The picker page + the POST are both gated on edit_object. 3-segment
+    // paths, so they don't collide with the :pid detail route above.
+    app.get(
+        `${base}/collections/:pid/add-objects`,
+        require_dashboard_auth,
+        can_edit,
+        controller.collection_add_objects_page
+    );
+    // Live-search results partial for the picker (HTMX-loaded, paginated).
+    app.get(
+        `${base}/collections/:pid/add-objects/list`,
+        require_dashboard_auth,
+        can_edit,
+        controller.collection_add_objects_list
+    );
+    app.post(
+        `${base}/collections/:pid/members`,
+        require_dashboard_auth,
+        can_edit,
+        write_limiter(),
+        controller.collection_add_members
+    );
+    // Soft-delete an EMPTY sub-collection. Gated on delete_object (staff +
+    // admin); the model returns 409 if the collection still has children.
+    app.post(
+        `${base}/collections/:pid/delete`,
+        require_dashboard_auth,
+        can_delete,
+        write_limiter(),
+        controller.collection_delete
+    );
+    // Re-parent a collection (nest under another collection or move to top level).
+    // Gated on edit_object; the model enforces the cycle guard.
+    app.get(
+        `${base}/collections/:pid/move/form`,
+        require_dashboard_auth,
+        can_edit,
+        controller.collection_move_form
+    );
+    app.post(
+        `${base}/collections/:pid/move`,
+        require_dashboard_auth,
+        can_edit,
+        write_limiter(),
+        controller.collection_move
+    );
 
     app.get(`${base}/objects`, require_dashboard_auth, controller.objects_page);
     app.get(`${base}/objects/list`, require_dashboard_auth, controller.objects_table_partial);

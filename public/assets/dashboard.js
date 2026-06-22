@@ -588,4 +588,111 @@
             });
         });
     }
+
+    // ---- 6. Add-objects picker: persistent multi-select ----
+    // The picker's results region is HTMX-swapped on every search + page, so a
+    // checkbox's state can't live in the row. We keep the selected pids in a
+    // Set, mirror it into hidden <input name="pids"> elements inside the form
+    // (so the POST submits the FULL selection, not just the visible page),
+    // re-apply checked state after each swap, and keep the count + submit button
+    // in sync. CSP-safe: all behavior lives here, no inline handlers. The
+    // visible checkboxes are UI-only (data-pid, no name); the hidden inputs are
+    // the submitted source of truth.
+    (function add_objects_selection() {
+        const form = document.getElementById('add-objects-form');
+        if (!form) return;
+        const hidden = document.getElementById('add-objects-selected');
+        const count_el = document.getElementById('add-objects-count');
+        const submit_btn = document.getElementById('add-objects-submit');
+        const selected = new Set();
+
+        // Mirror the server cap (collections.add_members allows ≤100 per add)
+        // so the header "select all" can't build a selection the POST would
+        // 400 on — we warn + block submit instead.
+        const MAX_ADD = 100;
+
+        function render() {
+            // Rebuild the hidden pids inputs from the Set.
+            hidden.textContent = '';
+            selected.forEach(function (pid) {
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'pids';
+                input.value = pid;
+                hidden.appendChild(input);
+            });
+            const n = selected.size;
+            const over = n > MAX_ADD;
+            if (count_el) {
+                count_el.textContent = n
+                    ? over
+                        ? n + ' selected — max ' + MAX_ADD + ' per add'
+                        : n + ' selected'
+                    : '';
+                count_el.classList.toggle('text-danger', over);
+                count_el.classList.toggle('text-muted', !over);
+            }
+            if (submit_btn) submit_btn.disabled = n === 0 || over;
+        }
+
+        // Reflect the visible page's state in the header "select all" checkbox:
+        // checked when every visible row is selected, indeterminate when some.
+        function sync_header() {
+            const header = document.getElementById('add-objects-select-page');
+            if (!header) return;
+            const boxes = form.querySelectorAll('.add-object-checkbox[data-pid]');
+            if (boxes.length === 0) {
+                header.checked = false;
+                header.indeterminate = false;
+                return;
+            }
+            let n = 0;
+            boxes.forEach(function (cb) {
+                if (selected.has(cb.getAttribute('data-pid'))) n++;
+            });
+            header.checked = n === boxes.length;
+            header.indeterminate = n > 0 && n < boxes.length;
+        }
+
+        function apply_to_visible() {
+            form.querySelectorAll('.add-object-checkbox[data-pid]').forEach(function (cb) {
+                cb.checked = selected.has(cb.getAttribute('data-pid'));
+            });
+            sync_header();
+        }
+
+        // Toggle via event delegation so it survives result swaps.
+        form.addEventListener('change', function (evt) {
+            const t = evt.target;
+            if (!t) return;
+            // Header "select all on this page" — toggle every visible row.
+            if (t.id === 'add-objects-select-page') {
+                form.querySelectorAll('.add-object-checkbox[data-pid]').forEach(function (cb) {
+                    cb.checked = t.checked;
+                    const pid = cb.getAttribute('data-pid');
+                    if (t.checked) selected.add(pid);
+                    else selected.delete(pid);
+                });
+                render();
+                sync_header();
+                return;
+            }
+            // Individual row toggle.
+            const cb = t.closest && t.closest('.add-object-checkbox[data-pid]');
+            if (!cb) return;
+            const pid = cb.getAttribute('data-pid');
+            if (cb.checked) selected.add(pid);
+            else selected.delete(pid);
+            render();
+            sync_header();
+        });
+
+        // After a results swap (search or page), re-check anything selected.
+        document.body.addEventListener('htmx:afterSwap', function (evt) {
+            const target = evt.detail && evt.detail.target;
+            if (target && target.id === 'add-objects-results') apply_to_visible();
+        });
+
+        render();
+    })();
 })();

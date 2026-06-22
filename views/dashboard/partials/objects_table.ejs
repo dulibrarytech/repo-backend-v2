@@ -12,14 +12,18 @@
         <span class="bulk-count">
             <span class="bulk-count-n">0</span> selected
         </span>
-        <%/* Hidden input populated by dashboard.js from the checked rows.
-             Four forms target four bulk endpoints; they all carry the
-             same pids value so the toolbar JS only has to update one
-             hidden input shared across them. */%>
-        <input type="hidden" id="bulk-pids" name="pids" value="" form="bulk-form-publish bulk-form-suppress bulk-form-delete bulk-form-refresh-metadata">
+        <%/* Hidden input populated by dashboard.js from the checked rows
+             (comma-joined pids). Each bulk form pulls it in via
+             hx-include="#bulk-pids" — NOT the `form` attribute, which only
+             accepts a single id (a space-separated list silently associates
+             with no form, so the pids never submit). (Bulk delete was
+             intentionally removed — delete one record at a time via its
+             kebab menu.) */%>
+        <input type="hidden" id="bulk-pids" name="pids" value="">
 
         <form id="bulk-form-publish"
               hx-post="<%= dashboard_base %>/objects/bulk/publish"
+              hx-include="#bulk-pids"
               hx-swap="none"
               class="d-inline">
             <button type="submit" class="btn btn-sm btn-outline-primary">
@@ -36,6 +40,7 @@
 
         <form id="bulk-form-suppress"
               hx-post="<%= dashboard_base %>/objects/bulk/suppress"
+              hx-include="#bulk-pids"
               hx-swap="none"
               class="d-inline">
             <button type="submit" class="btn btn-sm btn-outline-secondary">
@@ -52,6 +57,7 @@
 
         <form id="bulk-form-refresh-metadata"
               hx-post="<%= dashboard_base %>/objects/metadata/refresh-bulk"
+              hx-include="#bulk-pids"
               hx-target="#modal-content"
               hx-swap="innerHTML"
               class="d-inline">
@@ -65,21 +71,6 @@
                     <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/>
                 </svg>
                 Refresh metadata
-            </button>
-        </form>
-
-        <form id="bulk-form-delete"
-              hx-post="<%= dashboard_base %>/objects/bulk/delete/confirm"
-              hx-target="#modal-content"
-              hx-swap="innerHTML"
-              class="d-inline">
-            <button type="submit" class="btn btn-sm btn-outline-danger">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <polyline points="3 6 5 6 21 6"/>
-                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                </svg>
-                Delete
             </button>
         </form>
 

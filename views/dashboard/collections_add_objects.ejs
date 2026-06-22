@@ -1,0 +1,69 @@
+<nav class="small text-muted mb-2" aria-label="Breadcrumb">
+    <a href="<%= dashboard_base %>/collections/<%= collection.pid %>" style="color: inherit;">← <%= collection.title || collection.pid %></a>
+</nav>
+
+<h1 class="page-title">Add objects</h1>
+<p class="page-subtitle">
+    Search for existing objects and move them into
+    <strong><%= collection.title || collection.pid %></strong>.
+    An object belongs to one collection — adding it here moves it from its
+    current collection.
+</p>
+
+<%/* Live search — mirrors the Objects/Collections lists: results refresh as you
+     type (debounced), no Search button. Targets the #add-objects-results region.
+     The input lives OUTSIDE the form so Enter triggers a search (the type=search
+     "search" event), never a premature submit. */%>
+<div class="content-card mb-3">
+    <div class="control-group">
+        <input type="search" name="q" class="form-control"
+               aria-label="Search objects to add"
+               placeholder="Search by title, file name, handle, or PID…"
+               value="<%= q %>"
+               autocomplete="off" spellcheck="false"
+               style="max-width: 420px;"
+               hx-get="<%= dashboard_base %>/collections/<%= collection.pid %>/add-objects/list"
+               hx-target="#add-objects-results"
+               hx-trigger="keyup changed delay:300ms, search">
+        <a href="<%= dashboard_base %>/collections/<%= collection.pid %>"
+           class="btn btn-sm btn-link">Done</a>
+        <span class="htmx-indicator">
+            <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+        </span>
+    </div>
+</div>
+
+<%/* The form holds the SELECTED pids (hidden inputs, managed by dashboard.js so
+     a selection survives paging/searching) + the submit. The results region is
+     swapped on every search/page, so its checkboxes are UI-only (data-pid, no
+     name); dashboard.js mirrors them into #add-objects-selected. */%>
+<form id="add-objects-form" method="POST"
+      action="<%= dashboard_base %>/collections/<%= collection.pid %>/members">
+    <div id="add-objects-selected" hidden></div>
+    <div class="content-card">
+        <div class="content-card-header">
+            <h2 style="font-size: 18px; margin: 0;">Select objects to move here</h2>
+            <div class="control-group">
+                <span id="add-objects-count" class="text-muted small" aria-live="polite"></span>
+                <button id="add-objects-submit" type="submit"
+                        class="btn btn-sm btn-primary" disabled>
+                    Add selected to this collection
+                </button>
+            </div>
+        </div>
+
+        <%/* aria-live so screen readers hear result updates. Loads once on
+             insert; the search box + pagination drive subsequent loads. */%>
+        <div id="add-objects-results"
+             hx-get="<%= dashboard_base %>/collections/<%= collection.pid %>/add-objects/list"
+             hx-trigger="load"
+             hx-include="[name=q]"
+             aria-live="polite"
+             aria-atomic="false">
+            <div class="empty-state">
+                <span class="spinner-border spinner-border-sm text-muted me-2"></span>
+                Loading objects…
+            </div>
+        </div>
+    </div>
+</form>

@@ -628,6 +628,52 @@ describe('repository/model — DB integration', () => {
                 );
             });
 
+            it('nests under a parent (sub-collection) when parent_collection_pid is given', async () => {
+                const parent = await db_helper.seed_object({
+                    object_type: 'collection',
+                    uri: '/repositories/2/resources/3000',
+                });
+                const sub = await repo_model.create_collection({
+                    uri: '/repositories/2/resources/3001',
+                    mods: { title: 'Sub' },
+                    parent_collection_pid: parent.pid,
+                });
+                expect(sub.object_type).toBe('collection');
+                expect(sub.is_member_of_collection).toBe(parent.pid);
+            });
+
+            it('rejects a parent_collection_pid that is not an active collection', async () => {
+                // non-existent pid
+                await expect(
+                    repo_model.create_collection({
+                        uri: '/repositories/2/resources/3002',
+                        mods: { title: 'x' },
+                        parent_collection_pid: 'no-such-pid',
+                    })
+                ).rejects.toBeInstanceOf(ValidationError);
+                // a non-collection object
+                const obj = await db_helper.seed_object({ object_type: 'object' });
+                await expect(
+                    repo_model.create_collection({
+                        uri: '/repositories/2/resources/3003',
+                        mods: { title: 'x' },
+                        parent_collection_pid: obj.pid,
+                    })
+                ).rejects.toBeInstanceOf(ValidationError);
+                // a soft-deleted collection
+                const deleted = await db_helper.seed_object({
+                    object_type: 'collection',
+                    is_active: 0,
+                });
+                await expect(
+                    repo_model.create_collection({
+                        uri: '/repositories/2/resources/3004',
+                        mods: { title: 'x' },
+                        parent_collection_pid: deleted.pid,
+                    })
+                ).rejects.toBeInstanceOf(ValidationError);
+            });
+
             it('survives a concurrent-duplicate-insert race by returning the existing row', async () => {
                 // With the partial unique index in place (migration
                 // 20260524000001_unique_collection_uri), the SECOND

@@ -1,0 +1,40 @@
+<%/* Move / re-parent a collection. Loaded into #modal-content via HTMX (the
+     kebab "Move under collection…" item); dashboard.js auto-opens the modal.
+     The select lists every collection this one may move under — its own
+     descendants are omitted server-side (eligible_parents) so the choice can't
+     create a cycle; the model re-checks on submit. */%>
+<div class="modal-header">
+    <div>
+        <h5 class="modal-title" id="modal-content-title" style="margin: 0;">Move collection</h5>
+        <div class="text-muted small" style="margin-top: 4px;">
+            Re-parent <strong><%= collection.title || collection.pid %></strong> under another
+            collection, or move it to the top level.
+        </div>
+    </div>
+    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+</div>
+<div class="modal-body">
+    <form id="move-form"
+          hx-post="<%= dashboard_base %>/collections/<%= collection.pid %>/move"
+          hx-swap="none">
+        <div class="mb-1">
+            <label for="new_parent_pid" class="form-label small mb-1">Parent collection</label>
+            <select id="new_parent_pid" name="new_parent_pid" class="form-select form-select-sm">
+                <option value="" <%= current_parent === '' ? 'selected' : '' %>>(Top level — no parent)</option>
+                <% parents.forEach(function (p) { %>
+                    <option value="<%= p.pid %>" <%= p.pid === current_parent ? 'selected' : '' %>>
+                        <%= p.title %>
+                    </option>
+                <% }); %>
+            </select>
+            <div class="form-text small">
+                A collection can't be moved under one of its own sub-collections, so its
+                descendants aren't listed.
+            </div>
+        </div>
+    </form>
+</div>
+<div class="modal-footer">
+    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+    <button type="submit" form="move-form" class="btn btn-primary">Move</button>
+</div>

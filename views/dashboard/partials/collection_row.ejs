@@ -155,6 +155,57 @@
                         </a>
                     </li>
                 <% } %>
+                <%/* Move / re-parent — nest this collection under another, or move
+                     it to the top level. Gated on edit_object; opens a modal. */%>
+                <% if (typeof can === 'function' && can('edit_object')) { %>
+                    <li>
+                        <button type="button" class="dropdown-item"
+                                hx-get="<%= dashboard_base %>/collections/<%= item.pid %>/move/form"
+                                hx-target="#modal-content"
+                                hx-swap="innerHTML">
+                            <%/* folder-with-arrow icon — move into a collection */%>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M3 7V5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v3"/>
+                                <path d="M12 11v8"/>
+                                <polyline points="9 16 12 19 15 16"/>
+                            </svg>
+                            Move under collection…
+                        </button>
+                    </li>
+                <% } %>
+                <%/* Delete — only offered for EMPTY sub-collections. The
+                     Sub-collections section passes allow_delete=true and the
+                     row carries is_empty (set by collections.sub_collections);
+                     it's hidden on the main collections list (no allow_delete)
+                     and on non-empty subs. Gated on delete_object. The model
+                     re-checks emptiness server-side and returns 409 otherwise.
+                     On success the empty response + outerHTML swap drops the
+                     row. */%>
+                <% if (typeof allow_delete !== 'undefined' && allow_delete && item.is_empty
+                        && typeof can === 'function' && can('delete_object')) { %>
+                    <li><hr class="dropdown-divider"></li>
+                    <li>
+                        <button type="button" class="dropdown-item text-danger"
+                                hx-post="<%= dashboard_base %>/collections/<%= item.pid %>/delete"
+                                hx-target="#collection-<%= item.pid %>"
+                                hx-swap="outerHTML"
+                                data-confirm="Delete the empty sub-collection &ldquo;<%= item.title || item.pid %>&rdquo;? This removes the collection record and cannot be undone from the dashboard."
+                                data-confirm-title="Delete sub-collection?"
+                                data-confirm-label="Delete">
+                            <%/* trash icon — delete */%>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <polyline points="3 6 5 6 21 6"/>
+                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                                <path d="M10 11v6"/>
+                                <path d="M14 11v6"/>
+                                <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>
+                            </svg>
+                            Delete
+                        </button>
+                    </li>
+                <% } %>
             </ul>
         </div>
     </td>

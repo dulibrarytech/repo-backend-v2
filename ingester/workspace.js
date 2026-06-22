@@ -25,17 +25,14 @@
 //     (its newest job is now MDO, not QA — see
 //     jobs.get_qa_passed_folders for the semantics).
 
-const { randomUUID } = require('node:crypto');
-
 const astools_default = require('../ingester/libs/astools');
 const validator_default = require('./libs/aspace_validator');
 const aspace_default = require('../libs/archivesspace');
 const model_default = require('./model');
 const jobs_default = require('./jobs');
-const repo_model_default = require('../repository/model');
-const handles_default = require('../libs/handles');
 const app_config = require('../config/app');
 const log = require('../libs/log');
+const collection_provision = require('../repository/collection_provision');
 
 // --- Collection-resource gate (pre-flight for submit_to_ingest) -----
 //
@@ -79,146 +76,33 @@ function _parse_resource_uri(folder) {
     return `/repositories/${repo_id}/${kind}/${id}`;
 }
 
-// Resolve the local collection for a folder. Three outcomes:
+// Resolve the local collection for a folder. Outcomes:
+//   { ok: true,  collection_pid, created }  — existed (created:false) OR just created
+//   { ok: false, error }                    — folder unparseable OR AS fetch failed
 //
-//   { ok: true,  collection_pid }  — collection existed OR was just created
-//   { ok: false, error }           — AS fetch failed OR folder unparseable
-//
-// Order of operations matches v1's start_ingest():
-//   1. Parse folder → resource URI
-//   2. Look up local collection by URI; if present, return its pid
-//   3. Get an AS session token + fetch the resource
-//   4. On non-200 / transport error: HALT (staff fixes AS or folder name)
-//   5. Auto-create the local collection row from the AS record
-//
-// Step 2 happens BEFORE step 3 so subsequent submits for the same
-// folder skip the AS round-trip entirely once the collection is local.
+// Parses the folder's last "-" segment into the resource URI, then defers
+// the find-or-create (local lookup → AS fetch → handle mint → insert) to the
+// shared repository/collection_provision helper, which the dashboard "create
+// collection" flow also uses. Ingest collections are top-level (no parent).
 async function _ensure_collection_exists(folder, deps = {}) {
-    const aspace = deps.aspace || aspace_default;
-    const repo_model = deps.repo_model || repo_model_default;
-    const handles = deps.handles || handles_default;
-
     let uri;
     try {
         uri = _parse_resource_uri(folder);
     } catch (err) {
         return { ok: false, error: err.message };
     }
-
-    // Fast path — collection already mirrored locally.
-    const existing = await repo_model.find_collection_by_uri(uri);
-    if (existing) {
-        return { ok: true, collection_pid: existing.pid, uri, created: false };
-    }
-
-    // Slow path — fetch from AS and auto-create.
-    if (!aspace.is_configured()) {
-        return {
-            ok: false,
-            error: 'ArchivesSpace is not configured; cannot verify the collection resource',
-        };
-    }
-    let token;
-    try {
-        token = await aspace.get_session_token();
-    } catch (err) {
-        return {
-            ok: false,
-            error: `ArchivesSpace login failed: ${err.message}`,
-        };
-    }
-    let res;
-    try {
-        res = await aspace.get_record(uri, token);
-    } catch (err) {
-        return {
-            ok: false,
-            error: `ArchivesSpace fetch for ${uri} failed: ${err.message}`,
-        };
-    } finally {
-        // Best-effort logout; we don't block the gate on this.
-        aspace.destroy_session_token(token).catch(() => {});
-    }
-
-    if (res.status === 404) {
-        return {
-            ok: false,
-            error:
-                `Resource ${uri} does not exist in ArchivesSpace. ` +
-                `Confirm the folder name's last segment matches an active resource.`,
-        };
-    }
-    if (res.status !== 200 || !res.data) {
-        return {
-            ok: false,
-            error: `ArchivesSpace returned HTTP ${res.status} for ${uri}`,
-        };
-    }
-
-    // Generate the PID UP FRONT so we can mint a handle against it
-    // BEFORE the row insert. Handle service is best-effort — failure
-    // logs and falls through to handle=''. The collection still
-    // gets created; an admin can backfill the handle later.
-    const pid = randomUUID();
-    const handle_url = await _mint_collection_handle(handles, pid);
-
-    try {
-        const created = await repo_model.create_collection({
-            uri,
-            mods: res.data,
-            pid,
-            handle: handle_url,
-        });
+    const result = await collection_provision.provision_collection({ uri }, deps);
+    if (result.ok && result.created) {
+        // Preserve the ingest-specific audit event (carries the folder).
         log.info({
             event: 'collection_auto_created',
             folder,
             uri,
-            pid: created.pid,
-            handle: handle_url || null,
+            pid: result.collection_pid,
+            handle: result.handle || null,
         });
-        return {
-            ok: true,
-            collection_pid: created.pid,
-            uri,
-            created: true,
-            handle: handle_url || null,
-        };
-    } catch (err) {
-        return {
-            ok: false,
-            error: `Could not create local collection for ${uri}: ${err.message}`,
-        };
     }
-}
-
-// Best-effort handle mint for a freshly-generated collection PID.
-// Returns the resulting handle URL on success, or '' on any failure
-// path (service unconfigured, HTTP error, network down). NEVER
-// throws — collection creation must not be blocked by a flaky
-// handle service. An admin can sweep + backfill missing handles
-// later if needed.
-async function _mint_collection_handle(handles, pid) {
-    if (!handles || !handles.is_configured || !handles.is_configured()) {
-        log.info({ event: 'collection_handle_skipped', pid, reason: 'not_configured' });
-        return '';
-    }
-    try {
-        const result = await handles.create_handle(pid);
-        if (result && result.handle) {
-            return result.handle;
-        }
-        log.warn({
-            event: 'collection_handle_unexpected_status',
-            pid,
-            status: result && result.status,
-        });
-        return '';
-    } catch (err) {
-        // create_handle throws UpstreamError on transport failure.
-        // We swallow it here so the collection still gets created.
-        log.warn({ event: 'collection_handle_failed', pid, err: err.message });
-        return '';
-    }
+    return result;
 }
 
 // --- list_workspace --------------------------------------------------

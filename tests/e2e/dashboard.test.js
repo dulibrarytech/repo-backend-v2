@@ -1817,6 +1817,22 @@ describe('dashboard — e2e', () => {
                 expect(res.text).toMatch(
                     /<form id="bulk-form-publish"[^>]+hx-post="\/repo\/dashboard\/objects\/bulk\/publish"/
                 );
+                // Each bulk form must pull the selected pids in via hx-include —
+                // the `form` attribute approach was broken (multi-id is invalid
+                // HTML, so pids never submitted → "Select at least one object").
+                expect(res.text).toMatch(
+                    /<form id="bulk-form-publish"[^>]+hx-include="#bulk-pids"/
+                );
+                expect(res.text).toMatch(
+                    /<form id="bulk-form-suppress"[^>]+hx-include="#bulk-pids"/
+                );
+                expect(res.text).toMatch(
+                    /<form id="bulk-form-refresh-metadata"[^>]+hx-include="#bulk-pids"/
+                );
+                // The hidden input no longer relies on the invalid multi-id form attr.
+                expect(res.text).not.toMatch(/id="bulk-pids"[^>]*\bform=/);
+                // Bulk delete button stays removed (modified-75).
+                expect(res.text).not.toContain('bulk-form-delete');
             });
 
             it('list partial does not render a checkbox for soft-deleted rows', async () => {
