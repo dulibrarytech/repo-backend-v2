@@ -51,6 +51,10 @@ public/tn_cache/*
 *.sql
 *.sql.gz
 
+# Local docs and report exports
+docs/
+*.csv
+
 # Misc
 *.tgz
 *.tar.gz
@@ -59,4 +63,3 @@ public/tn_cache/*
 
 # Ignore files containing '.orig' in the name
 *.orig*
-
