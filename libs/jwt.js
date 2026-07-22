@@ -1,14 +1,16 @@
 'use strict';
 
-// JWT helpers — sign/verify, plus httpOnly cookie issuance/extraction.
-//
-// Authentication strategy (per MODERNIZATION_PLAN §1.6):
-//   - Browser/dashboard: SameSite=Lax, httpOnly, Secure cookie. JS can't
-//     read the token → reduced XSS blast radius.
-//   - Public API: Bearer header (Authorization: Bearer <token>).
-//
-// `extract(req)` prefers the cookie, falls back to the bearer header.
-// Anything else throws an UnauthorizedError-shaped failure upstream.
+/*
+ * JWT helpers — sign/verify, plus httpOnly cookie issuance/extraction.
+ * 
+ * Authentication strategy (per MODERNIZATION_PLAN §1.6):
+ *   - Browser/dashboard: SameSite=Lax, httpOnly, Secure cookie. JS can't
+ *     read the token → reduced XSS blast radius.
+ *   - Public API: Bearer header (Authorization: Bearer <token>).
+ * 
+ * `extract(req)` prefers the cookie, falls back to the bearer header.
+ * Anything else throws an UnauthorizedError-shaped failure upstream.
+ */
 
 const jwt = require('jsonwebtoken');
 

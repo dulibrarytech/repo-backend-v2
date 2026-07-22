@@ -1,41 +1,43 @@
 'use strict';
 
-// Live ArchivesSpace transformer parity test.
-//
-// SKIPPED by default — only runs when `INGEST_LIVE_E2E=1` is set
-// (matches the existing live-test convention in ingest_live.test.js).
-//
-// Purpose: confirm that libs/archivesspace_transform.js produces the
-// SAME flat shape per record as the legacy DU `/repository` plugin
-// endpoint, for a sample of real records pulled from the live AS
-// instance. This is the gate before flipping ASPACE_USE_TRANSFORMER=1
-// in dev (and eventually prod).
-//
-// How to run:
-//
-//   INGEST_LIVE_E2E=1 \
-//     ARCHIVESPACE_HOST=https://aspace.example/api \
-//     ARCHIVESPACE_USER=svc \
-//     ARCHIVESPACE_PASSWORD=*** \
-//     ASPACE_PARITY_URIS="/repositories/2/archival_objects/12345,/repositories/2/resources/42" \
-//     npx vitest run tests/e2e/aspace_transform_parity.test.js
-//
-// The ASPACE_PARITY_URIS env carries a comma-separated list of URIs
-// to compare. Operator picks records that exercise the long tail —
-// compound objects, resources with rich notes, records with multiple
-// linked agents, etc.
-//
-// What's compared: every key in the transformed shape EXCEPT:
-//   - `_transformer_version` (only the transformer path adds this)
-//   - `names[*].relator` (plugin runs I18n.t() to translate to a
-//     human-readable string; transformer emits raw enum keys until
-//     we add a translation table)
-//   - `parts[*].kaltura_id` (plugin fetches DigitalObjectComponent
-//     records per child to populate; transformer defers this)
-//
-// On mismatch the test prints a diff so the operator can decide if
-// the divergence is acceptable (e.g. the transformer correctly fixes
-// a plugin bug) or a transformer regression.
+/*
+ * Live ArchivesSpace transformer parity test.
+ * 
+ * SKIPPED by default — only runs when `INGEST_LIVE_E2E=1` is set
+ * (matches the existing live-test convention in ingest_live.test.js).
+ * 
+ * Purpose: confirm that libs/archivesspace_transform.js produces the
+ * SAME flat shape per record as the legacy DU `/repository` plugin
+ * endpoint, for a sample of real records pulled from the live AS
+ * instance. This is the gate before flipping ASPACE_USE_TRANSFORMER=1
+ * in dev (and eventually prod).
+ * 
+ * How to run:
+ * 
+ *   INGEST_LIVE_E2E=1 \
+ *     ARCHIVESPACE_HOST=https://aspace.example/api \
+ *     ARCHIVESPACE_USER=svc \
+ *     ARCHIVESPACE_PASSWORD=*** \
+ *     ASPACE_PARITY_URIS="/repositories/2/archival_objects/12345,/repositories/2/resources/42" \
+ *     npx vitest run tests/e2e/aspace_transform_parity.test.js
+ * 
+ * The ASPACE_PARITY_URIS env carries a comma-separated list of URIs
+ * to compare. Operator picks records that exercise the long tail —
+ * compound objects, resources with rich notes, records with multiple
+ * linked agents, etc.
+ * 
+ * What's compared: every key in the transformed shape EXCEPT:
+ *   - `_transformer_version` (only the transformer path adds this)
+ *   - `names[*].relator` (plugin runs I18n.t() to translate to a
+ *     human-readable string; transformer emits raw enum keys until
+ *     we add a translation table)
+ *   - `parts[*].kaltura_id` (plugin fetches DigitalObjectComponent
+ *     records per child to populate; transformer defers this)
+ * 
+ * On mismatch the test prints a diff so the operator can decide if
+ * the divergence is acceptable (e.g. the transformer correctly fixes
+ * a plugin bug) or a transformer regression.
+ */
 
 const should_run = process.env.INGEST_LIVE_E2E === '1';
 const describeOrSkip = should_run ? describe : describe.skip;
@@ -73,8 +75,10 @@ describeOrSkip('ArchivesSpace transformer parity (gated by INGEST_LIVE_E2E=1)', 
         expect(uris.length).toBeGreaterThan(0);
     });
 
-    // One test per URI so a single-record regression doesn't mask the
-    // others. vitest reports each as a separate pass/fail.
+    /*
+     * One test per URI so a single-record regression doesn't mask the
+     * others. vitest reports each as a separate pass/fail.
+     */
     for (const uri of uris) {
         it(`produces parity output for ${uri}`, async () => {
             // Plugin path: fetch with use_transformer=false.
@@ -94,15 +98,19 @@ describeOrSkip('ArchivesSpace transformer parity (gated by INGEST_LIVE_E2E=1)', 
             const plugin_shape = normalize(plugin_res.data);
             const xform_shape = normalize(xform_res.data);
 
-            // toEqual gives a structured diff on failure — easier to
-            // read than a giant JSON dump when one of 30 fields drifts.
+            /*
+             * toEqual gives a structured diff on failure — easier to
+             * read than a giant JSON dump when one of 30 fields drifts.
+             */
             expect(xform_shape).toEqual(plugin_shape);
         });
     }
 });
 
-// Drop the keys we KNOW differ between plugin and transformer
-// (see header docstring). Everything else must match exactly.
+/*
+ * Drop the keys we KNOW differ between plugin and transformer
+ * (see header docstring). Everything else must match exactly.
+ */
 function normalize(data) {
     if (!data || typeof data !== 'object') return data;
     const clone = JSON.parse(JSON.stringify(data));

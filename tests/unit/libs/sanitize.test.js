@@ -10,11 +10,13 @@ function run_middleware(mw, req) {
 
 describe('libs/sanitize', () => {
     describe('clean_string', () => {
-        // Security property under test:
-        //   After sanitization, no raw `<` or `>` survives. Any payload
-        //   that would have executed JS in a browser parser is now inert
-        //   text. We do NOT assert the *words* are gone — `alert`,
-        //   `onerror` etc. survive as harmless characters.
+        /*
+         * Security property under test:
+         *   After sanitization, no raw `<` or `>` survives. Any payload
+         *   that would have executed JS in a browser parser is now inert
+         *   text. We do NOT assert the *words* are gone — `alert`,
+         *   `onerror` etc. survive as harmless characters.
+         */
         it('renders <script> tags inert by entity-encoding angle brackets', () => {
             const out = sanitize.clean_string('<script>alert(1)</script>hello');
             expect(out).not.toMatch(/<script/i);
@@ -42,8 +44,10 @@ describe('libs/sanitize', () => {
 
         it('neutralizes onerror payloads by encoding angle brackets', () => {
             const out = sanitize.clean_string('<img src=x onerror=alert(1)>');
-            // Once `<` is entity-encoded, no element is constructed, so the
-            // surviving "onerror" text is just inert characters.
+            /*
+             * Once `<` is entity-encoded, no element is constructed, so the
+             * surviving "onerror" text is just inert characters.
+             */
             expect(out).not.toContain('<');
             expect(out).not.toContain('>');
             expect(out.startsWith('&lt;')).toBe(true);

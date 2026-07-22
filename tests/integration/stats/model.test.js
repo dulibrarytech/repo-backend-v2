@@ -50,8 +50,10 @@ describe('stats/model — DB integration', () => {
         it('caches its result within the TTL', async () => {
             await db_helper.seed_object();
             const a = await stats_model.summary();
-            // Mutate the underlying table — without cache invalidation
-            // the cached result should still be returned.
+            /*
+             * Mutate the underlying table — without cache invalidation
+             * the cached result should still be returned.
+             */
             await db_helper.seed_object();
             const b = await stats_model.summary();
             expect(b.total).toBe(a.total);
@@ -108,9 +110,11 @@ describe('stats/model — DB integration', () => {
         });
 
         it('resolves the collection title from display_record', async () => {
-            // Seed two child rows pointing at codu:Alpha + one
-            // collection row for codu:Alpha carrying its title in
-            // display_record.
+            /*
+             * Seed two child rows pointing at codu:Alpha + one
+             * collection row for codu:Alpha carrying its title in
+             * display_record.
+             */
             await db_helper.seed_object({ is_member_of_collection: 'codu:Alpha' });
             await db_helper.seed_object({ is_member_of_collection: 'codu:Alpha' });
             await db_helper.seed_object({
@@ -122,9 +126,11 @@ describe('stats/model — DB integration', () => {
             const alpha = r.find((c) => c.collection === 'codu:Alpha');
             expect(alpha).toBeTruthy();
             expect(alpha.title).toBe('Alpha Papers');
-            // Count still reflects only the children, not the
-            // collection row itself (the GROUP BY filter is
-            // on is_member_of_collection != '').
+            /*
+             * Count still reflects only the children, not the
+             * collection row itself (the GROUP BY filter is
+             * on is_member_of_collection != '').
+             */
             expect(alpha.count).toBe(2);
         });
 
@@ -161,9 +167,11 @@ describe('stats/model — DB integration', () => {
         });
 
         it('resolves titles even when the collection row is soft-deleted', async () => {
-            // Counts include children regardless of the collection's
-            // own active flag, so the title should also resolve. Lets
-            // the panel stay readable mid-curation.
+            /*
+             * Counts include children regardless of the collection's
+             * own active flag, so the title should also resolve. Lets
+             * the panel stay readable mid-curation.
+             */
             await db_helper.seed_object({ is_member_of_collection: 'codu:Soft' });
             await db_helper.seed_object({
                 pid: 'codu:Soft',
@@ -177,10 +185,12 @@ describe('stats/model — DB integration', () => {
         });
 
         it('ignores titles from non-collection rows that happen to share a pid', async () => {
-            // Defense in depth: if a non-collection row was accidentally
-            // assigned the same PID as a collection membership target,
-            // its title MUST NOT be borrowed. The lookup is gated on
-            // object_type='collection'.
+            /*
+             * Defense in depth: if a non-collection row was accidentally
+             * assigned the same PID as a collection membership target,
+             * its title MUST NOT be borrowed. The lookup is gated on
+             * object_type='collection'.
+             */
             await db_helper.seed_object({ is_member_of_collection: 'codu:Mix' });
             await db_helper.seed_object({
                 pid: 'codu:Mix',
@@ -195,23 +205,27 @@ describe('stats/model — DB integration', () => {
 
     describe('recent_ingests()', () => {
         it('returns the latest N active objects, newest first', async () => {
-            // sqlite created timestamp granularity may collide, so we
-            // rely on id-order tie-breaking too.
-            const seeded = [];
+            /*
+             * sqlite created timestamp granularity may collide, so we
+             * rely on id-order tie-breaking too.
+             */
             for (let i = 0; i < 6; i++) {
-                seeded.push(await db_helper.seed_object({ file_name: `f-${i}.dat` }));
+                await db_helper.seed_object({ pid: `codu:recent-${i}` });
             }
             const r = await stats_model.recent_ingests({ limit: 3 });
             expect(r).toHaveLength(3);
-            // Last inserted should be first
-            expect(r[0].file_name).toBe('f-5.dat');
+            /*
+             * Last inserted should be first. Order asserted via pid —
+             * file_name is no longer returned (the card is title-only).
+             */
+            expect(r[0].pid).toBe('codu:recent-5');
         });
 
         it('skips soft-deleted rows', async () => {
-            await db_helper.seed_object({ file_name: 'kept.dat' });
-            await db_helper.seed_object({ file_name: 'gone.dat', is_active: 0 });
+            await db_helper.seed_object({ pid: 'codu:kept' });
+            await db_helper.seed_object({ pid: 'codu:gone', is_active: 0 });
             const r = await stats_model.recent_ingests();
-            expect(r.every((row) => row.file_name !== 'gone.dat')).toBe(true);
+            expect(r.every((row) => row.pid !== 'codu:gone')).toBe(true);
         });
 
         it('extracts title from display_record', async () => {
@@ -223,21 +237,6 @@ describe('stats/model — DB integration', () => {
             expect(r[0].title).toBe('Beautiful Photograph');
         });
 
-        it('extracts call_number from display_record.identifiers (type=local)', async () => {
-            await db_helper.seed_object({
-                file_name: 'obj.tif',
-                display_record: JSON.stringify({
-                    title: 'Photo',
-                    identifiers: [
-                        { type: 'pid', identifier: 'codu:xyz' },
-                        { type: 'local', identifier: 'B002.05.01.0387.0009.00003' },
-                    ],
-                }),
-            });
-            const r = await stats_model.recent_ingests({ limit: 1 });
-            expect(r[0].call_number).toBe('B002.05.01.0387.0009.00003');
-        });
-
         it('returns null title when display_record has no title key', async () => {
             await db_helper.seed_object({
                 file_name: 'obj.tif',
@@ -247,23 +246,10 @@ describe('stats/model — DB integration', () => {
             expect(r[0].title).toBeNull();
         });
 
-        it('returns null call_number when no local identifier is present', async () => {
-            await db_helper.seed_object({
-                file_name: 'obj.tif',
-                display_record: JSON.stringify({
-                    title: 'Photo',
-                    identifiers: [{ type: 'pid', identifier: 'codu:xyz' }],
-                }),
-            });
-            const r = await stats_model.recent_ingests({ limit: 1 });
-            expect(r[0].call_number).toBeNull();
-        });
-
-        it('returns null title + call_number when display_record is absent', async () => {
-            await db_helper.seed_object({ file_name: 'obj.tif' });
+        it('returns null title when display_record is absent', async () => {
+            await db_helper.seed_object({});
             const r = await stats_model.recent_ingests({ limit: 1 });
             expect(r[0].title).toBeNull();
-            expect(r[0].call_number).toBeNull();
         });
 
         it('treats whitespace-only title as missing', async () => {
@@ -275,37 +261,29 @@ describe('stats/model — DB integration', () => {
             expect(r[0].title).toBeNull();
         });
 
-        it('treats whitespace-only call_number as missing', async () => {
-            await db_helper.seed_object({
-                file_name: 'obj.tif',
-                display_record: JSON.stringify({
-                    identifiers: [{ type: 'local', identifier: '   ' }],
-                }),
-            });
-            const r = await stats_model.recent_ingests({ limit: 1 });
-            expect(r[0].call_number).toBeNull();
-        });
-
         it('does not include the raw display_record blob in the response', async () => {
-            // 3KB per row of unused payload is wasted bandwidth on the
-            // home page poll. The partial only consumes the derived
-            // fields, so the raw blob is stripped before returning.
+            /*
+             * 3KB per row of unused payload is wasted bandwidth on the
+             * home page poll. The partial only consumes the derived
+             * fields, so the raw blob is stripped before returning.
+             */
             await db_helper.seed_object({
                 file_name: 'obj.tif',
                 display_record: JSON.stringify({ title: 'Photo', big_payload: 'x'.repeat(2000) }),
             });
             const r = await stats_model.recent_ingests({ limit: 1 });
             expect(r[0]).not.toHaveProperty('display_record');
+            // Cleanup: the title-only card no longer surfaces these.
+            expect(r[0]).not.toHaveProperty('file_name');
+            expect(r[0]).not.toHaveProperty('call_number');
         });
 
         it('handles malformed display_record JSON gracefully', async () => {
             await db_helper.seed_object({
-                file_name: 'obj.tif',
                 display_record: '{not valid json',
             });
             const r = await stats_model.recent_ingests({ limit: 1 });
             expect(r[0].title).toBeNull();
-            expect(r[0].call_number).toBeNull();
         });
     });
 
@@ -319,8 +297,10 @@ describe('stats/model — DB integration', () => {
     });
 
     describe('extended_summary()', () => {
-        // The v1-dashboard parity stats. Tests each field independently
-        // so a regression on one bucket doesn't mask others.
+        /*
+         * The v1-dashboard parity stats. Tests each field independently
+         * so a regression on one bucket doesn't mask others.
+         */
 
         it('returns zeros on an empty table', async () => {
             const s = await stats_model.extended_summary();
@@ -424,16 +404,20 @@ describe('stats/model — DB integration', () => {
             const by_year = Object.fromEntries(r.map((x) => [x.year, x.count]));
             expect(by_year[2020]).toBe(2);
             expect(by_year[2023]).toBe(1);
-            // Years with no data MUST appear as zero rather than be
-            // missing — the chart relies on contiguous x-axis.
+            /*
+             * Years with no data MUST appear as zero rather than be
+             * missing — the chart relies on contiguous x-axis.
+             */
             expect(by_year[2021]).toBe(0);
             expect(by_year[2022]).toBe(0);
         });
 
         it('counts every row regardless of object_type or is_active (matches v1)', async () => {
-            // v1's chart shows throughput, not just published / leaf
-            // objects. Pin that behavior — deleted + collection rows
-            // count too.
+            /*
+             * v1's chart shows throughput, not just published / leaf
+             * objects. Pin that behavior — deleted + collection rows
+             * count too.
+             */
             await db_helper.seed_object({
                 created: '2025-01-01 00:00:00',
                 object_type: 'collection',

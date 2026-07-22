@@ -10,7 +10,53 @@
  * the two stylesheets collapse into this file.
  */
 
+/* Self-hosted Open Sans (weights 300/400/600/700) — matches exhibits-backend
+ * WITHOUT a third-party CDN, so the dashboard's CSP stays 'self'-only (font-src
+ * 'self') and the sign-in page never blocks on a font request. Latin subset;
+ * glyphs outside it fall back to the system stack in --font-sans.
+ * font-display:swap paints fallback text immediately, then swaps to Open Sans.
+ * Files live in public/assets/fonts/open-sans/ (served from /static). */
+@font-face {
+    font-family: 'Open Sans';
+    font-style: normal;
+    font-weight: 300;
+    font-display: swap;
+    src: url('fonts/open-sans/open-sans-latin-300-normal.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Open Sans';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('fonts/open-sans/open-sans-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Open Sans';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('fonts/open-sans/open-sans-latin-600-normal.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Open Sans';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('fonts/open-sans/open-sans-latin-700-normal.woff2') format('woff2');
+}
+
 :root {
+    /* Typography — Open Sans (self-hosted above) with a graceful system
+       fallback, matching exhibits-backend. Bootstrap reads
+       --bs-body-font-family, so its components inherit the same family.
+       --font-sans / --font-mono are also referenced by inline styles in
+       a few EJS partials (stats, metadata_refresh_status). */
+    --font-sans: 'Open Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+        'Helvetica Neue', Arial, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+        'Liberation Mono', monospace;
+    --bs-body-font-family: var(--font-sans);
+
     /* DU brand colors */
     --du-crimson: #a6192e;
     --du-crimson-700: #8a1426;
@@ -170,12 +216,12 @@ body {
 }
 
 body {
-    font-family:
-        -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, 'Helvetica Neue', Arial,
-        sans-serif;
+    font-family: var(--font-sans);
     color: var(--text);
     background: var(--surface-alt);
-    font-size: 15px;
+    /* 16px base matches exhibits-backend (was 15px). line-height 1.5 = 24px,
+       matching exhibits' body/paragraph line-height. */
+    font-size: 16px;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
 }
@@ -345,6 +391,32 @@ h1 {
     width: 22px;
     height: 22px;
     stroke-width: 1.75;
+}
+
+/* --- Sidebar tooltips (Bootstrap; initialized in dashboard.js) ----------- */
+/*
+ * The icon rail's hover labels. Native `title` tooltips are slow + plain;
+ * these Bootstrap tooltips appear quickly (100ms show delay set in
+ * dashboard.js) and read more prominently than the browser default: a dark,
+ * fully-opaque bubble with semibold text and a strong shadow. Bootstrap 5.3
+ * theming via the --bs-tooltip-* custom properties — --bs-tooltip-bg also
+ * colors the arrow, so the whole tooltip stays consistent.
+ */
+.sidebar-tooltip {
+    --bs-tooltip-bg: var(--text-strong);
+    --bs-tooltip-color: #ffffff;
+    --bs-tooltip-font-size: 0.875rem;
+    --bs-tooltip-padding-x: 0.6rem;
+    --bs-tooltip-padding-y: 0.4rem;
+    --bs-tooltip-border-radius: var(--radius-md);
+    --bs-tooltip-opacity: 1;
+}
+
+.sidebar-tooltip .tooltip-inner {
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    max-width: 240px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
 
 /* --- Main content --------------------------------------------------------- */
@@ -812,6 +884,16 @@ h1 {
 
 .metadata-part-order {
     min-width: 22px;
+}
+
+/* Kaltura entry id for a part — flex-basis:100% wraps it onto its own
+   line below the part's file name within the flex .metadata-item row. */
+.metadata-part-kaltura {
+    flex-basis: 100%;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 13px;
 }
 
 .metadata-tag {

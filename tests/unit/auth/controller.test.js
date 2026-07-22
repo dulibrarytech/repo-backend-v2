@@ -1,7 +1,9 @@
 'use strict';
 
-// Pure-validation unit tests for the auth controllers. DB-backed
-// behavior (login round trip etc.) lives in tests/integration/auth/.
+/*
+ * Pure-validation unit tests for the auth controllers. DB-backed
+ * behavior (login round trip etc.) lives in tests/integration/auth/.
+ */
 
 const controller = require('../../../auth/controller');
 const { ValidationError, UnauthorizedError } = require('../../../libs/errors');
@@ -72,9 +74,11 @@ describe('auth/controller — refresh validation', () => {
 });
 
 describe('auth/controller — me requires fresh user', () => {
-    // This test does not hit the DB — it confirms that when the model
-    // returns nothing (e.g. user deactivated), the controller raises 401.
-    // We monkey-patch the model for this single case.
+    /*
+     * This test does not hit the DB — it confirms that when the model
+     * returns nothing (e.g. user deactivated), the controller raises 401.
+     * We monkey-patch the model for this single case.
+     */
     it('throws UnauthorizedError when user is inactive', async () => {
         const auth_model = require('../../../auth/model');
         const original = auth_model.find_by_id;

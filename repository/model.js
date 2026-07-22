@@ -1,17 +1,19 @@
 'use strict';
 
-// CRUD against tbl_objects.
-//
-// Public surface is intentionally narrow for Phase 3:
-//   list(filter)          paginated listing
-//   get(pid)              fetch one by pid (the UUID, not the autoinc id)
-//   publish(pid)          is_published = 1
-//   suppress(pid)         is_published = 0
-//   soft_delete(pid)      is_active = 0, delete_id stamped
-//
-// Thumbnail / image / viewer / transcript routes from the legacy code
-// depend on external services (TN_SERVICE, ARCHIVESSPACE, DURACLOUD)
-// that haven't been ported yet. Those endpoints land later.
+/*
+ * CRUD against tbl_objects.
+ * 
+ * Public surface is intentionally narrow for Phase 3:
+ *   list(filter)          paginated listing
+ *   get(pid)              fetch one by pid (the UUID, not the autoinc id)
+ *   publish(pid)          is_published = 1
+ *   suppress(pid)         is_published = 0
+ *   soft_delete(pid)      is_active = 0, delete_id stamped
+ * 
+ * Thumbnail / image / viewer / transcript routes from the legacy code
+ * depend on external services (TN_SERVICE, ARCHIVESSPACE, DURACLOUD)
+ * that haven't been ported yet. Those endpoints land later.
+ */
 
 const { randomUUID } = require('node:crypto');
 const validator = require('validator');
@@ -39,10 +41,12 @@ const PUBLIC_FIELDS = [
     'is_indexed',
     'sip_uuid',
     'created',
-    // display_record is a longtext JSON snapshot the legacy indexer
-    // populates with title/abstract/handle/subjects. The dashboard
-    // enriches each row via libs/object_projection at render time so
-    // the table can show titles, not just PIDs.
+    /*
+     * display_record is a longtext JSON snapshot the legacy indexer
+     * populates with title/abstract/handle/subjects. The dashboard
+     * enriches each row via libs/object_projection at render time so
+     * the table can show titles, not just PIDs.
+     */
     'display_record',
 ];
 
@@ -57,7 +61,7 @@ function require_pid(pid) {
     }
 }
 
-// list({ collection, object_type, is_published, is_active, page, page_size })
+// list({ collection, object_type, is_published, is_active, created_since, page, page_size })
 async function list(filter = {}) {
     const page = Math.max(1, Number.parseInt(filter.page, 10) || 1);
     const page_size = Math.min(200, Math.max(1, Number.parseInt(filter.page_size, 10) || 25));
@@ -74,9 +78,25 @@ async function list(filter = {}) {
     }
     if (filter.is_published !== undefined) q.where({ is_published: filter.is_published ? 1 : 0 });
     if (filter.is_active !== undefined) q.where({ is_active: filter.is_active ? 1 : 0 });
+    /*
+     * Objects created within a recent window — backs the "Recent Ingests"
+     * view. Caller passes a 'YYYY-MM-DD HH:MM:SS' (UTC) cutoff; `created` is
+     * a TIMESTAMP stored in that same format by both MariaDB now() and
+     * sqlite CURRENT_TIMESTAMP, so the string compares chronologically
+     * (fixed-width + zero-padded → lexicographic == chronological).
+     */
+    if (filter.created_since) q.where('created', '>=', filter.created_since);
+    /*
+     * Exclude collection rows — used by the collection-detail member list so a
+     * nested sub-collection doesn't appear among the parent's member objects
+     * (sub-collections render in their own section).
+     */
+    if (filter.exclude_collections) q.whereNot({ object_type: 'collection' });
 
-    // Total before pagination (one extra count query — cheap with the
-    // indexes we shipped in db/schema.js).
+    /*
+     * Total before pagination (one extra count query — cheap with the
+     * indexes we shipped in db/schema.js).
+     */
     const count_q = q.clone().clearSelect().clearOrder().count({ total: '*' }).first();
 
     q.orderBy('id', 'desc')
@@ -99,26 +119,30 @@ async function get(pid) {
     return row;
 }
 
-// Batch-read by an explicit pid list. Returns the rows that exist
-// in any order (caller indexes by pid). Empty input → empty output;
-// missing pids are silently omitted (callers that need a hard error
-// should `get()` per-pid). Used by the AIPs dashboard to attach
-// object titles to tbl_aip_store rows without an N+1 query.
+/*
+ * Batch-read by an explicit pid list. Returns the rows that exist
+ * in any order (caller indexes by pid). Empty input → empty output;
+ * missing pids are silently omitted (callers that need a hard error
+ * should `get()` per-pid). Used by the AIPs dashboard to attach
+ * object titles to tbl_aip_store rows without an N+1 query.
+ */
 async function list_by_pids(pids) {
     if (!Array.isArray(pids) || pids.length === 0) return [];
     return db()(tables.objects).select(PUBLIC_FIELDS).whereIn('pid', pids);
 }
 
-// Publish and suppress BOTH dirty the row so the indexer reflects the
-// new state in ES on its next tick. This keeps the staff workflow
-// single-click: publish → public; suppress → not public. Without
-// is_updated=1, staff would have to chain "publish + refresh
-// metadata" to make a record actually appear in public search.
-//
-// The worker's eligibility check (is_published=1 AND is_active=1)
-// decides INDEX vs DELETE per row at claim time:
-//   - publish → eligible → INDEX with current display_record content
-//   - suppress → ineligible → DELETE from ES
+/*
+ * Publish and suppress BOTH dirty the row so the indexer reflects the
+ * new state in ES on its next tick. This keeps the staff workflow
+ * single-click: publish → public; suppress → not public. Without
+ * is_updated=1, staff would have to chain "publish + refresh
+ * metadata" to make a record actually appear in public search.
+ * 
+ * The worker's eligibility check (is_published=1 AND is_active=1)
+ * decides INDEX vs DELETE per row at claim time:
+ *   - publish → eligible → INDEX with current display_record content
+ *   - suppress → ineligible → DELETE from ES
+ */
 async function set_publish_state(pid, value) {
     require_pid(pid);
     const affected = await db()(tables.objects)
@@ -136,36 +160,40 @@ async function suppress(pid) {
     return set_publish_state(pid, false);
 }
 
-// Soft-delete a single object.
-//
-// Three-step flow matching v1's contract:
-//   1. Read the row. Refuse if it's published — staff must suppress
-//      first. No --force override; this is intentional.
-//   2. Submit an AIP deletion request to Archivematica (best-effort —
-//      AM hiccups must not block the user-visible soft-delete).
-//   3. Flip is_active=0 with is_updated=1 so the indexer picks it up
-//      and removes the row from Elasticsearch on its next tick.
-//
-// `delete_reason` is required and gets forwarded to AM as the
-// event_reason on the deletion request, so the AM admin reviewing
-// the request in the Storage Service UI sees why.
-//
-// `actor` is the JWT principal (du_id / email). Prepended to the
-// AM reason text so the audit record names a human, and logged
-// for cross-reference with this service's log stream.
-//
-// Returns { ok: true, delete_id, am }. `delete_id` is AM's deletion-
-// request id when the AM call succeeded; otherwise a fresh UUID
-// (so the row still has a unique audit token). Inspect `am.ok` to
-// distinguish.
+/*
+ * Soft-delete a single object.
+ * 
+ * Three-step flow matching v1's contract:
+ *   1. Read the row. Refuse if it's published — staff must suppress
+ *      first. No --force override; this is intentional.
+ *   2. Submit an AIP deletion request to Archivematica (best-effort —
+ *      AM hiccups must not block the user-visible soft-delete).
+ *   3. Flip is_active=0 with is_updated=1 so the indexer picks it up
+ *      and removes the row from Elasticsearch on its next tick.
+ * 
+ * `delete_reason` is required and gets forwarded to AM as the
+ * event_reason on the deletion request, so the AM admin reviewing
+ * the request in the Storage Service UI sees why.
+ * 
+ * `actor` is the JWT principal (du_id / email). Prepended to the
+ * AM reason text so the audit record names a human, and logged
+ * for cross-reference with this service's log stream.
+ * 
+ * Returns { ok: true, delete_id, am }. `delete_id` is AM's deletion-
+ * request id when the AM call succeeded; otherwise a fresh UUID
+ * (so the row still has a unique audit token). Inspect `am.ok` to
+ * distinguish.
+ */
 async function soft_delete(pid, { delete_reason, actor } = {}) {
     require_pid(pid);
     _validate_delete_reason(delete_reason);
 
-    // Read first so the published guard runs BEFORE we touch AM. v1
-    // had this backwards — it submitted the AM deletion request even
-    // when it then refused to soft-delete the published row, leaving
-    // orphaned AM requests behind. We fix that here.
+    /*
+     * Read first so the published guard runs BEFORE we touch AM. v1
+     * had this backwards — it submitted the AM deletion request even
+     * when it then refused to soft-delete the published row, leaving
+     * orphaned AM requests behind. We fix that here.
+     */
     const row = await db()(tables.objects)
         .where({ pid, is_active: 1 })
         .select('pid', 'sip_uuid', 'is_published')
@@ -181,34 +209,42 @@ async function soft_delete(pid, { delete_reason, actor } = {}) {
     // Best-effort AM AIP deletion request.
     const am = await _request_aip_delete_safely(row, delete_reason, actor);
 
-    // is_updated=1: the row was active (possibly indexed); after this
-    // it's no longer eligible (is_active=0), so the indexer needs to
-    // claim and DELETE from ES. Same rationale as suppress.
+    /*
+     * is_updated=1: the row was active (possibly indexed); after this
+     * it's no longer eligible (is_active=0), so the indexer needs to
+     * claim and DELETE from ES. Same rationale as suppress.
+     */
     const affected = await db()(tables.objects)
         .where({ pid, is_active: 1 })
         .update({ is_active: 0, delete_id: am.delete_id, is_updated: 1 });
     if (affected === 0) {
-        // Race: a concurrent delete won between our SELECT and UPDATE.
-        // Surface as NotFound so the caller sees an idempotent result.
+        /*
+         * Race: a concurrent delete won between our SELECT and UPDATE.
+         * Surface as NotFound so the caller sees an idempotent result.
+         */
         throw new NotFoundError(`Active object ${pid} not found`);
     }
     return { ok: true, delete_id: am.delete_id, am };
 }
 
-// Submit an AM deletion request for one row. NEVER throws — returns
-// a structured outcome the caller folds into the delete result.
-//
-// Shape:
-//   { ok: true,  delete_id, status, skipped? }
-//   { ok: false, delete_id, error, status? }
-//
-// `delete_id` is always populated so the caller can stamp the
-// audit column unconditionally — AM's request id when the call
-// succeeded, otherwise a fresh UUID.
+/*
+ * Submit an AM deletion request for one row. NEVER throws — returns
+ * a structured outcome the caller folds into the delete result.
+ * 
+ * Shape:
+ *   { ok: true,  delete_id, status, skipped? }
+ *   { ok: false, delete_id, error, status? }
+ * 
+ * `delete_id` is always populated so the caller can stamp the
+ * audit column unconditionally — AM's request id when the call
+ * succeeded, otherwise a fresh UUID.
+ */
 async function _request_aip_delete_safely(row, delete_reason, actor) {
-    // Legacy / hand-imported rows that never went through Stage 3
-    // have no AM SIP to delete. Skip the call but still produce a
-    // delete_id so the row gets the same audit treatment.
+    /*
+     * Legacy / hand-imported rows that never went through Stage 3
+     * have no AM SIP to delete. Skip the call but still produce a
+     * delete_id so the row gets the same audit treatment.
+     */
     if (!row.sip_uuid || row.sip_uuid === 'PENDING') {
         return {
             ok: true,
@@ -235,10 +271,12 @@ async function _request_aip_delete_safely(row, delete_reason, actor) {
             delete_reason: reason,
         });
         if (r.status >= 200 && r.status < 300) {
-            // AM's 202 carries the deletion-request id in data.id
-            // (sometimes data.uuid). Either works as our delete_id;
-            // if neither is present, fall back to a fresh UUID so
-            // the column is always populated.
+            /*
+             * AM's 202 carries the deletion-request id in data.id
+             * (sometimes data.uuid). Either works as our delete_id;
+             * if neither is present, fall back to a fresh UUID so
+             * the column is always populated.
+             */
             const id =
                 (r.data && (r.data.id || r.data.uuid)) || randomUUID();
             return { ok: true, delete_id: String(id), status: r.status };
@@ -268,9 +306,11 @@ async function _request_aip_delete_safely(row, delete_reason, actor) {
     }
 }
 
-// Compose the event_reason text AM stores against the deletion
-// request. Prepends the actor so the AM admin reviewing the queue
-// can identify who initiated it without cross-referencing logs.
+/*
+ * Compose the event_reason text AM stores against the deletion
+ * request. Prepends the actor so the AM admin reviewing the queue
+ * can identify who initiated it without cross-referencing logs.
+ */
 function _format_delete_reason(reason, actor) {
     const actor_text = actor ? `Deleted by ${actor}` : 'Deletion requested';
     const date = new Date().toISOString().slice(0, 10);
@@ -287,22 +327,24 @@ function _validate_delete_reason(reason) {
     }
 }
 
-// ----- Bulk operations ----------------------------------------------------
-//
-// Each bulk function takes an array of pids, validates them all up front,
-// and applies the change in a single SQL UPDATE for atomicity + speed.
-// All three:
-//   - Cap at MAX_BULK_PIDS (100). Above that the controller chunks.
-//   - De-duplicate the input — repeats in the array would otherwise inflate
-//     the affected count.
-//   - Return `{ affected, pids }` where pids is the validated/deduped list
-//     so the controller can re-render exactly the rows the user selected.
-//   - Skip is_active=0 rows for publish/suppress so a stale UI checking a
-//     soft-deleted row doesn't accidentally bring it back to life.
-//
-// We don't throw NotFoundError on partial misses here — bulk is a
-// best-effort fan-out, and the affected count tells the caller what
-// actually happened.
+/*
+ * ----- Bulk operations ----------------------------------------------------
+ * 
+ * Each bulk function takes an array of pids, validates them all up front,
+ * and applies the change in a single SQL UPDATE for atomicity + speed.
+ * All three:
+ *   - Cap at MAX_BULK_PIDS (100). Above that the controller chunks.
+ *   - De-duplicate the input — repeats in the array would otherwise inflate
+ *     the affected count.
+ *   - Return `{ affected, pids }` where pids is the validated/deduped list
+ *     so the controller can re-render exactly the rows the user selected.
+ *   - Skip is_active=0 rows for publish/suppress so a stale UI checking a
+ *     soft-deleted row doesn't accidentally bring it back to life.
+ * 
+ * We don't throw NotFoundError on partial misses here — bulk is a
+ * best-effort fan-out, and the affected count tells the caller what
+ * actually happened.
+ */
 
 const MAX_BULK_PIDS = 100;
 
@@ -325,8 +367,10 @@ function require_pid_array(pids) {
 
 async function set_publish_state_bulk(pids, value) {
     const unique = require_pid_array(pids);
-    // Both publish and suppress dirty: keep the staff workflow
-    // single-click. See set_publish_state above for the rationale.
+    /*
+     * Both publish and suppress dirty: keep the staff workflow
+     * single-click. See set_publish_state above for the rationale.
+     */
     const affected = await db()(tables.objects)
         .whereIn('pid', unique)
         .andWhere('is_active', 1)
@@ -342,21 +386,23 @@ async function bulk_suppress(pids) {
     return set_publish_state_bulk(pids, false);
 }
 
-// Bulk soft-delete. Three-phase, mirroring the single-row path:
-//
-//   1. Validate input + look up every row up front. If ANY row is
-//      published, reject the WHOLE batch — same strictness as the
-//      single delete. Staff suppress + retry.
-//   2. Fire one AM deletion request per row, serially (AM may not
-//      love a fan-out of 100 concurrent delete_aip calls).
-//      Best-effort: failures are recorded but don't abort the
-//      transaction.
-//   3. Soft-delete each row inside one transaction, using AM's
-//      returned request id as the delete_id when available.
-//
-// Returns { affected, pids, am_failed, am_outcomes }. The
-// am_outcomes array carries the per-row AM result so the caller
-// can surface which rows had AM-side problems.
+/*
+ * Bulk soft-delete. Three-phase, mirroring the single-row path:
+ * 
+ *   1. Validate input + look up every row up front. If ANY row is
+ *      published, reject the WHOLE batch — same strictness as the
+ *      single delete. Staff suppress + retry.
+ *   2. Fire one AM deletion request per row, serially (AM may not
+ *      love a fan-out of 100 concurrent delete_aip calls).
+ *      Best-effort: failures are recorded but don't abort the
+ *      transaction.
+ *   3. Soft-delete each row inside one transaction, using AM's
+ *      returned request id as the delete_id when available.
+ * 
+ * Returns { affected, pids, am_failed, am_outcomes }. The
+ * am_outcomes array carries the per-row AM result so the caller
+ * can surface which rows had AM-side problems.
+ */
 async function bulk_soft_delete(pids, { delete_reason, actor } = {}) {
     const unique = require_pid_array(pids);
     _validate_delete_reason(delete_reason);
@@ -380,8 +426,10 @@ async function bulk_soft_delete(pids, { delete_reason, actor } = {}) {
         );
     }
 
-    // Per-row AM delete requests. Serial so AM doesn't see a thundering
-    // herd. Total time bounded by MAX_BULK_PIDS × per-call timeout.
+    /*
+     * Per-row AM delete requests. Serial so AM doesn't see a thundering
+     * herd. Total time bounded by MAX_BULK_PIDS × per-call timeout.
+     */
     const am_outcomes = [];
     for (const row of rows) {
         const outcome = await _request_aip_delete_safely(row, delete_reason, actor);
@@ -407,21 +455,23 @@ async function bulk_soft_delete(pids, { delete_reason, actor } = {}) {
     return { affected, pids: unique, am_failed, am_outcomes };
 }
 
-// Update an object's metadata payload from a fresh ArchivesSpace
-// fetch. Writes the four columns the metadata worker cares about in
-// one statement so the indexer can pick the row up via `is_updated=1`
-// on its next cycle. Returns the affected count.
-//
-// The shape of `payload` mirrors what v1's worker wrote:
-//   mods             — full ASpace JSON, stringified
-//   display_record   — denormalized envelope, stringified
-//   compound_parts   — '[]' for simple objects, parts array stringified
-//                      for compound objects
-//   is_compound      — 0 | 1
-//
-// We do NOT touch is_indexed here. That flag belongs to the indexer
-// (which runs separately in v2 today); flipping it here would lie to
-// the indexer about the row's state.
+/*
+ * Update an object's metadata payload from a fresh ArchivesSpace
+ * fetch. Writes the four columns the metadata worker cares about in
+ * one statement so the indexer can pick the row up via `is_updated=1`
+ * on its next cycle. Returns the affected count.
+ * 
+ * The shape of `payload` mirrors what v1's worker wrote:
+ *   mods             — full ASpace JSON, stringified
+ *   display_record   — denormalized envelope, stringified
+ *   compound_parts   — '[]' for simple objects, parts array stringified
+ *                      for compound objects
+ *   is_compound      — 0 | 1
+ * 
+ * We do NOT touch is_indexed here. That flag belongs to the indexer
+ * (which runs separately in v2 today); flipping it here would lie to
+ * the indexer about the row's state.
+ */
 async function update_metadata_payload(pid, payload) {
     require_pid(pid);
     const allowed = ['mods', 'display_record', 'compound_parts', 'is_compound'];
@@ -438,22 +488,26 @@ async function update_metadata_payload(pid, payload) {
     return { affected };
 }
 
-// Update an object's thumbnail URL. Writes the column AND mirrors the
-// URL into the JSON `display_record` blob so the two stay in sync — the
-// indexer reads from display_record, the dashboard reads either, and
-// drift between them is a long-standing source of bug reports against
-// v1. Done in a single transaction so a crash between the two writes
-// can't leave them divergent.
-//
-// Returns the refreshed row (post-update) for the caller to render.
+/*
+ * Update an object's thumbnail URL. Writes the column AND mirrors the
+ * URL into the JSON `display_record` blob so the two stay in sync — the
+ * indexer reads from display_record, the dashboard reads either, and
+ * drift between them is a long-standing source of bug reports against
+ * v1. Done in a single transaction so a crash between the two writes
+ * can't leave them divergent.
+ * 
+ * Returns the refreshed row (post-update) for the caller to render.
+ */
 async function set_thumbnail(pid, url) {
     require_pid(pid);
     if (typeof url !== 'string' || url.length === 0) {
         throw new ValidationError('thumbnail url is required');
     }
-    // Defense in depth: only allow http(s) URLs to land in the DB. The
-    // caller already builds these from PUBLIC_BASE_URL + a constant
-    // suffix; this guards against future callers passing user input.
+    /*
+     * Defense in depth: only allow http(s) URLs to land in the DB. The
+     * caller already builds these from PUBLIC_BASE_URL + a constant
+     * suffix; this guards against future callers passing user input.
+     */
     if (!/^https?:\/\//i.test(url)) {
         throw new ValidationError('thumbnail url must be http(s)');
     }
@@ -464,10 +518,12 @@ async function set_thumbnail(pid, url) {
             .where({ pid })
             .first()
             .forUpdate()
-            // sqlite (our test driver) doesn't support FOR UPDATE; knex
-            // throws if we ask for it there. Skip the lock when it's
-            // unsupported — the transaction itself still serializes us
-            // against other writers via sqlite's BEGIN IMMEDIATE.
+            /*
+             * sqlite (our test driver) doesn't support FOR UPDATE; knex
+             * throws if we ask for it there. Skip the lock when it's
+             * unsupported — the transaction itself still serializes us
+             * against other writers via sqlite's BEGIN IMMEDIATE.
+             */
             .catch(async (err) => {
                 if (/forUpdate|FOR UPDATE/i.test(String(err && err.message))) {
                     return trx(tables.objects).select(PUBLIC_FIELDS).where({ pid }).first();
@@ -476,27 +532,33 @@ async function set_thumbnail(pid, url) {
             });
         if (!row) throw new NotFoundError(`Object ${pid} not found`);
 
-        // Parse + patch display_record. Use the same defensive parser
-        // libs/object_projection uses so a malformed blob doesn't
-        // upgrade to a 500 here.
+        /*
+         * Parse + patch display_record. Use the same defensive parser
+         * libs/object_projection uses so a malformed blob doesn't
+         * upgrade to a 500 here.
+         */
         let parsed = {};
         if (row.display_record) {
             try {
                 const candidate = JSON.parse(row.display_record);
                 if (candidate && typeof candidate === 'object') parsed = candidate;
             } catch {
-                // Leave parsed = {} — we'll overwrite the blob with a
-                // minimal {thumbnail} object. Better than losing the
-                // edit because a corrupt JSON value is sitting in there.
+                /*
+                 * Leave parsed = {} — we'll overwrite the blob with a
+                 * minimal {thumbnail} object. Better than losing the
+                 * edit because a corrupt JSON value is sitting in there.
+                 */
             }
         }
         parsed.thumbnail = url;
 
-        // Dirty the row so the indexer re-pushes the doc with the
-        // new thumbnail value (the thumbnail is part of the indexed
-        // projection). Same single-click principle as publish: a
-        // visible change to a published record should reach public
-        // search without requiring a follow-up metadata refresh.
+        /*
+         * Dirty the row so the indexer re-pushes the doc with the
+         * new thumbnail value (the thumbnail is part of the indexed
+         * projection). Same single-click principle as publish: a
+         * visible change to a published record should reach public
+         * search without requiring a follow-up metadata refresh.
+         */
         await trx(tables.objects)
             .where({ pid })
             .update({
@@ -509,11 +571,13 @@ async function set_thumbnail(pid, url) {
     });
 }
 
-// Look up a collection row by its ArchivesSpace URI. Used by the
-// submit-to-ingest pre-flight gate to decide whether to auto-create
-// the local collection mirror. Returns the full row (or undefined),
-// constrained to object_type='collection' so a stray archival_object
-// row with a matching URI can never satisfy the lookup.
+/*
+ * Look up a collection row by its ArchivesSpace URI. Used by the
+ * submit-to-ingest pre-flight gate to decide whether to auto-create
+ * the local collection mirror. Returns the full row (or undefined),
+ * constrained to object_type='collection' so a stray archival_object
+ * row with a matching URI can never satisfy the lookup.
+ */
 async function find_collection_by_uri(uri) {
     if (!uri || typeof uri !== 'string') return undefined;
     return db()(tables.objects)
@@ -522,45 +586,74 @@ async function find_collection_by_uri(uri) {
         .first();
 }
 
-// Auto-create a collection row from an ArchivesSpace resource record.
-// Called by the ingest pre-flight gate when no local mirror exists
-// for the resource URI.
-//
-// Required input:
-//   {
-//     uri:    '/repositories/2/resources/1204'
-//     mods:   the raw AS record JSON (object — we stringify here)
-//     pid:    optional — caller-supplied UUID. The handle-minting
-//             flow generates the PID up front (so it can mint
-//             against the same UUID that ends up in the row),
-//             then passes it here. When absent we generate one.
-//     display_record: optional pre-built envelope; if absent we wrap
-//                     `mods` in the canonical envelope shape so the
-//                     dashboard projection finds title/abstract/etc.
-//     handle: optional persistent identifier URL (best-effort —
-//             pass '' if the handle service is unreachable)
-//   }
-//
-// Sets is_active=1, is_published=0 (staff publishes via the
-// dashboard), is_member_of_collection='' (collections are their own
-// root). is_updated=1 so the indexer worker picks the new collection
-// up on its next tick.
-async function create_collection({ uri, mods, pid: caller_pid, display_record, handle }) {
+/*
+ * Auto-create a collection row from an ArchivesSpace resource record.
+ * Called by the ingest pre-flight gate when no local mirror exists
+ * for the resource URI.
+ * 
+ * Required input:
+ *   {
+ *     uri:    '/repositories/2/resources/1204'
+ *     mods:   the raw AS record JSON (object — we stringify here)
+ *     pid:    optional — caller-supplied UUID. The handle-minting
+ *             flow generates the PID up front (so it can mint
+ *             against the same UUID that ends up in the row),
+ *             then passes it here. When absent we generate one.
+ *     display_record: optional pre-built envelope; if absent we wrap
+ *                     `mods` in the canonical envelope shape so the
+ *                     dashboard projection finds title/abstract/etc.
+ *     handle: optional persistent identifier URL (best-effort —
+ *             pass '' if the handle service is unreachable)
+ *   }
+ * 
+ * Sets is_active=1, is_published=0 (staff publishes via the
+ * dashboard), is_member_of_collection = parent_collection_pid || ''
+ * ('' = top-level root; a PID = a sub-collection nested under that
+ * parent). is_updated=1 so the indexer worker picks the new collection
+ * up on its next tick.
+ */
+async function create_collection({
+    uri,
+    mods,
+    pid: caller_pid,
+    display_record,
+    handle,
+    parent_collection_pid,
+}) {
     if (!uri || typeof uri !== 'string') {
         throw new ValidationError('uri is required to create a collection');
     }
     if (!mods || typeof mods !== 'object') {
         throw new ValidationError('mods (AS record) is required to create a collection');
     }
+    /*
+     * Sub-collection: the new collection is a member of an existing parent
+     * collection (vs '' = top-level root). Validate the parent is a live
+     * collection so we never create an orphan-nested row pointing at a
+     * missing / soft-deleted / non-collection PID. Ingest passes no parent,
+     * so this is skipped on that path — behavior there is unchanged.
+     */
+    if (parent_collection_pid) {
+        const parent = await db()(tables.objects)
+            .where({ pid: parent_collection_pid, object_type: 'collection', is_active: 1 })
+            .first();
+        if (!parent) {
+            throw new ValidationError(
+                'parent_collection_pid must reference an active collection'
+            );
+        }
+    }
     const pid = caller_pid || randomUUID();
     const mods_json = JSON.stringify(mods);
-    // If the caller didn't pre-build display_record, wrap the bare
-    // metadata in the same envelope shape the metadata-refresh
-    // worker writes — `{ display_record: <metadata> }`. The dashboard
-    // projection (libs/object_projection.js) reads from the outer
-    // envelope's top-level keys (title, abstract, ...), so we hoist
-    // those when present so the row renders correctly without a
-    // separate metadata refresh.
+    /*
+     * If the caller didn't pre-build display_record, wrap the bare
+     * metadata in the same envelope shape the metadata-refresh
+     * worker writes — `{ display_record: <metadata> }`. The dashboard
+     * projection (libs/object_projection.js) reads from the outer
+     * envelope's top-level keys (title, abstract, ...), so we hoist
+     * those when present so the row renders correctly without a
+     * separate metadata refresh.
+     */
     const envelope = display_record || {
         display_record: mods,
         title: mods.title || null,
@@ -574,7 +667,7 @@ async function create_collection({ uri, mods, pid: caller_pid, display_record, h
         mods: mods_json,
         display_record: JSON.stringify(envelope),
         handle: handle || '',
-        is_member_of_collection: '',
+        is_member_of_collection: parent_collection_pid || '',
         is_active: 1,
         is_published: 0,
         is_compound: 0,
@@ -585,13 +678,15 @@ async function create_collection({ uri, mods, pid: caller_pid, display_record, h
     try {
         await db()(tables.objects).insert(row);
     } catch (err) {
-        // Race: a concurrent submit already inserted the same URI.
-        // Re-fetch the now-existing row and return it instead of
-        // surfacing the constraint error. The unique-on-(uri,
-        // object_type) index is the DB-level guard; this branch is
-        // the application-level recovery. Match by error-message
-        // substring because the wire format differs across drivers
-        // (MariaDB: "Duplicate entry"; sqlite: "UNIQUE constraint").
+        /*
+         * Race: a concurrent submit already inserted the same URI.
+         * Re-fetch the now-existing row and return it instead of
+         * surfacing the constraint error. The unique-on-(uri,
+         * object_type) index is the DB-level guard; this branch is
+         * the application-level recovery. Match by error-message
+         * substring because the wire format differs across drivers
+         * (MariaDB: "Duplicate entry"; sqlite: "UNIQUE constraint").
+         */
         if (/duplicate|unique/i.test(err.message)) {
             const existing = await find_collection_by_uri(uri);
             if (existing) return existing;
@@ -601,17 +696,21 @@ async function create_collection({ uri, mods, pid: caller_pid, display_record, h
     return get(pid);
 }
 
-// Test/bootstrap helper. Not exposed via routes — production ingest
-// path lands in Phase 8 (ingester merge). Keeps the model self-contained
-// so integration tests can seed without reaching into knex directly.
+/*
+ * Test/bootstrap helper. Not exposed via routes — production ingest
+ * path lands in Phase 8 (ingester merge). Keeps the model self-contained
+ * so integration tests can seed without reaching into knex directly.
+ */
 async function _insert(row) {
     if (!row.pid || !validator.isUUID(row.pid)) {
         throw new ValidationError('pid must be a UUID');
     }
     const [id] = await db()(tables.objects).insert(row);
     return get(row.pid).catch(async () => {
-        // sqlite returns the autoinc id; mysql does too. Fall back to
-        // by-id lookup if pid lookup somehow misses (e.g. test races).
+        /*
+         * sqlite returns the autoinc id; mysql does too. Fall back to
+         * by-id lookup if pid lookup somehow misses (e.g. test races).
+         */
         const fallback = await db()(tables.objects).select(PUBLIC_FIELDS).where({ id }).first();
         return fallback;
     });

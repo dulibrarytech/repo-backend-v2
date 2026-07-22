@@ -85,8 +85,10 @@ describe('repository — e2e', () => {
     });
 
     it('DELETE /objects/:pid soft-deletes and stamps delete_id', async () => {
-        // Must be unpublished — the model rejects published deletions
-        // with 409 (v1 parity).
+        /*
+         * Must be unpublished — the model rejects published deletions
+         * with 409 (v1 parity).
+         */
         const o = await db_helper.seed_object({ is_active: 1, is_published: 0 });
         const res = await agent
             .delete(`/repo/objects/${o.pid}`)

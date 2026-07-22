@@ -1,38 +1,42 @@
 'use strict';
 
-// ArchivesSpace → flat-metadata transformer.
-//
-// Replicates the JSON shape the legacy `archivesspace-repository-sync-plugin`
-// emits from `<host>/repositories/:n/archival_objects/:m/repository` — the
-// shape every downstream consumer in v2 expects (`title`, `uri`,
-// `identifiers`, `dates`, `extents`, `subjects`, `notes`, `names`, `parts`,
-// `is_compound`, `resource_type`).
-//
-// Source of truth for this implementation:
-//   - dulibrarytech/archivesspace-repository-sync-plugin
-//   - backend/model/repository_model.rb (population)
-//   - backend/model/repository_exporter.rb (serialization)
-//
-// Input expectation:
-//   The caller must hit AS's native record endpoint with the right
-//   ?resolve[]= params so referenced records are inlined under
-//   `_resolved` keys:
-//
-//     ?resolve[]=subjects
-//     ?resolve[]=linked_agents
-//     ?resolve[]=instances::digital_object
-//     ?resolve[]=instances::digital_object::tree
-//
-//   Without those params, this transformer will produce empty subjects /
-//   names / parts because there's nothing to read. The library's HTTP
-//   wrapper (libs/archivesspace.js, Phase B) attaches those params.
-//
-// The module is pure — no I/O, no module-level state. Every helper is
+/*
+ * ArchivesSpace → flat-metadata transformer.
+ * 
+ * Replicates the JSON shape the legacy `archivesspace-repository-sync-plugin`
+ * emits from `<host>/repositories/:n/archival_objects/:m/repository` — the
+ * shape every downstream consumer in v2 expects (`title`, `uri`,
+ * `identifiers`, `dates`, `extents`, `subjects`, `notes`, `names`, `parts`,
+ * `is_compound`, `resource_type`).
+ * 
+ * Source of truth for this implementation:
+ *   - dulibrarytech/archivesspace-repository-sync-plugin
+ *   - backend/model/repository_model.rb (population)
+ *   - backend/model/repository_exporter.rb (serialization)
+ * 
+ * Input expectation:
+ *   The caller must hit AS's native record endpoint with the right
+ *   ?resolve[]= params so referenced records are inlined under
+ *   `_resolved` keys:
+ * 
+ *     ?resolve[]=subjects
+ *     ?resolve[]=linked_agents
+ *     ?resolve[]=instances::digital_object
+ *     ?resolve[]=instances::digital_object::tree
+ * 
+ *   Without those params, this transformer will produce empty subjects /
+ *   names / parts because there's nothing to read. The library's HTTP
+ *   wrapper (libs/archivesspace.js, Phase B) attaches those params.
+ * 
+ * The module is pure — no I/O, no module-level state. Every helper is
+ */
 // exported (with a `_` prefix on internals) so tests can pin each
 // transformation rule independently.
 
-// MIME-type lookup, lifted verbatim from the plugin's
-// `@mime_type_map` (repository_model.rb:56-67).
+/*
+ * MIME-type lookup, lifted verbatim from the plugin's
+ * `@mime_type_map` (repository_model.rb:56-67).
+ */
 const MIME_MAP = Object.freeze({
     aiff: 'audio/x-aiff',
     avi: 'video/x-msvideo',
@@ -46,21 +50,25 @@ const MIME_MAP = Object.freeze({
     wav: 'audio/x-wav',
 });
 
-// Top-level transform. Accepts the resolved AS record (archival_object
-// or resource shape) and returns the flat object the validator expects.
-//
-// Defensive on every field — AS records vary wildly in completeness.
-// Anything missing or null is treated as "not present" rather than
-// producing an exception.
+/*
+ * Top-level transform. Accepts the resolved AS record (archival_object
+ * or resource shape) and returns the flat object the validator expects.
+ * 
+ * Defensive on every field — AS records vary wildly in completeness.
+ * Anything missing or null is treated as "not present" rather than
+ * producing an exception.
+ */
 function transform(record) {
     if (!record || typeof record !== 'object') {
         return _empty_shape();
     }
 
-    // extent_notes is gathered as a side effect of _build_extents
-    // (the plugin lifts physical_details/dimensions out of extents
-    // into the notes block). We pass an array in so the helper can
-    // push into it; we read it out afterwards.
+    /*
+     * extent_notes is gathered as a side effect of _build_extents
+     * (the plugin lifts physical_details/dimensions out of extents
+     * into the notes block). We pass an array in so the helper can
+     * push into it; we read it out afterwards.
+     */
     const extent_notes_collected = [];
 
     const dates = Array.isArray(record.dates) ? record.dates : [];
@@ -73,8 +81,10 @@ function transform(record) {
         ...extent_notes_from_record,
     ];
 
-    // Walk instances ONCE — _build_parts handles part assembly AND
-    // captures `digital_object_type` for the resource_type field.
+    /*
+     * Walk instances ONCE — _build_parts handles part assembly AND
+     * captures `digital_object_type` for the resource_type field.
+     */
     const parts_result = _build_parts(record.instances);
 
     const out = {
@@ -116,10 +126,12 @@ function _empty_shape() {
     };
 }
 
-// Title gets the creation date's `expression` appended (plugin's
-// `handle_title` mutates the title with ", <expression>"). This is
-// where the "Parents Newsletter, 1970 June" shape comes from — the AS
-// title would just be "Parents Newsletter".
+/*
+ * Title gets the creation date's `expression` appended (plugin's
+ * `handle_title` mutates the title with ", <expression>"). This is
+ * where the "Parents Newsletter, 1970 June" shape comes from — the AS
+ * title would just be "Parents Newsletter".
+ */
 function _build_title(title, dates) {
     if (!title || typeof title !== 'string') return '';
     if (!Array.isArray(dates)) return title;
@@ -129,12 +141,14 @@ function _build_title(title, dates) {
     return creation ? `${title}, ${creation.expression}` : title;
 }
 
-// Identifiers normalization. Plugin always emits at least one entry —
-// `{type: 'local', identifier: <local_id or null>}`. The validator
-// only checks the array is non-empty, so this satisfies it.
-//
-//   - archival_object → `component_id`
-//   - resource        → `id_0.id_1.id_2.id_3` (joined with `.`, blanks dropped)
+/*
+ * Identifiers normalization. Plugin always emits at least one entry —
+ * `{type: 'local', identifier: <local_id or null>}`. The validator
+ * only checks the array is non-empty, so this satisfies it.
+ * 
+ *   - archival_object → `component_id`
+ *   - resource        → `id_0.id_1.id_2.id_3` (joined with `.`, blanks dropped)
+ */
 function _build_identifiers(record) {
     if (!record || typeof record !== 'object') return [];
     let id;
@@ -151,10 +165,12 @@ function _build_identifiers(record) {
     return [{ type: 'local', identifier: id }];
 }
 
-// Map each AS date through the plugin's serializer rules
-// (handle_date in repository_exporter.rb). Synthesizes `expression`
-// from begin[-end] when AS didn't supply one; carries begin/end as
-// separate keys so the indexer can sort by them later.
+/*
+ * Map each AS date through the plugin's serializer rules
+ * (handle_date in repository_exporter.rb). Synthesizes `expression`
+ * from begin[-end] when AS didn't supply one; carries begin/end as
+ * separate keys so the indexer can sort by them later.
+ */
 function _build_dates(dates) {
     if (!Array.isArray(dates)) return [];
     const out = [];
@@ -196,10 +212,12 @@ function _build_date(date) {
     return out;
 }
 
-// Each AS extent becomes a single string `"<number> <extent_type> (<portion>)"`.
-// Side effect: any `physical_details` / `dimensions` keys nested in the
-// extent get pushed into the `extent_notes_collector` argument as
-// pseudo-notes ({type: phystech|dimensions, content}).
+/*
+ * Each AS extent becomes a single string `"<number> <extent_type> (<portion>)"`.
+ * Side effect: any `physical_details` / `dimensions` keys nested in the
+ * extent get pushed into the `extent_notes_collector` argument as
+ * pseudo-notes ({type: phystech|dimensions, content}).
+ */
 function _build_extents(extents, extent_notes_collector) {
     if (!Array.isArray(extents)) return [];
     const out = [];
@@ -230,15 +248,17 @@ function _build_extents(extents, extent_notes_collector) {
     return out;
 }
 
-// AS notes come in two flavors:
-//   - note_singlepart   — has `content` (usually a string or array of strings)
-//   - note_multipart    — has `subnotes[]`, each with its own `content`
-//
-// Plugin uses `ASpaceExport::Utils.extract_note_text(note)` to flatten
-// either shape into a single string. We do the same here.
-//
-// physdesc + dimensions notes are SKIPPED from the main notes array —
-// they get rolled into extent_notes via _build_extent_notes.
+/*
+ * AS notes come in two flavors:
+ *   - note_singlepart   — has `content` (usually a string or array of strings)
+ *   - note_multipart    — has `subnotes[]`, each with its own `content`
+ * 
+ * Plugin uses `ASpaceExport::Utils.extract_note_text(note)` to flatten
+ * either shape into a single string. We do the same here.
+ * 
+ * physdesc + dimensions notes are SKIPPED from the main notes array —
+ * they get rolled into extent_notes via _build_extent_notes.
+ */
 function _build_notes(notes) {
     if (!Array.isArray(notes)) return [];
     const out = [];
@@ -267,9 +287,11 @@ function _build_extent_notes(notes) {
     return out;
 }
 
-// Walk an AS note (singlepart or multipart) and yield a single string.
-// Defensive — content may be a string, array of strings, missing, or
-// nested under subnotes[].content / subnotes[].items / etc.
+/*
+ * Walk an AS note (singlepart or multipart) and yield a single string.
+ * Defensive — content may be a string, array of strings, missing, or
+ * nested under subnotes[].content / subnotes[].items / etc.
+ */
 function extract_note_text(note) {
     if (!note || typeof note !== 'object') return '';
     if (typeof note.content === 'string') return note.content;
@@ -297,18 +319,20 @@ function extract_note_text(note) {
     return '';
 }
 
-// Subjects are sourced from TWO places:
-//   1. record.subjects[] (each with _resolved subject record)
-//   2. record.linked_agents[] with role='subject' (plugin reuses the
-//      subjects bucket for agent-as-subject entries — see
-//      handle_agents in repository_model.rb)
-//
-// Both end up serialized through the same exporter rule:
-//   - authority — subject.source / agent.display_name.source
-//   - title     — terms.map(term).join(' -- ') for subjects, agent.title
-//                 for agent-subjects
-//   - terms     — only when present (subjects only)
-//   - authority_id — when present
+/*
+ * Subjects are sourced from TWO places:
+ *   1. record.subjects[] (each with _resolved subject record)
+ *   2. record.linked_agents[] with role='subject' (plugin reuses the
+ *      subjects bucket for agent-as-subject entries — see
+ *      handle_agents in repository_model.rb)
+ * 
+ * Both end up serialized through the same exporter rule:
+ *   - authority — subject.source / agent.display_name.source
+ *   - title     — terms.map(term).join(' -- ') for subjects, agent.title
+ *                 for agent-subjects
+ *   - terms     — only when present (subjects only)
+ *   - authority_id — when present
+ */
 function _build_subjects(subjects, linked_agents) {
     const out = [];
 
@@ -353,8 +377,10 @@ function _build_subjects(subjects, linked_agents) {
     return out;
 }
 
-// Names = linked_agents with role !== 'subject'. Carries role + relator
-// (raw key — the plugin I18n-translates it, we defer that).
+/*
+ * Names = linked_agents with role !== 'subject'. Carries role + relator
+ * (raw key — the plugin I18n-translates it, we defer that).
+ */
 function _build_names(linked_agents) {
     if (!Array.isArray(linked_agents)) return [];
     const out = [];
@@ -369,32 +395,36 @@ function _build_names(linked_agents) {
         };
         if (dn.authority_id) name.authority_id = dn.authority_id;
         if (link.role) name.role = link.role;
-        // Plugin runs `I18n.t("enumerations.linked_agent_archival_record_relators." + relator)`
-        // here. We emit the raw relator key; a follow-up can attach a
-        // translation table if the dashboard needs human-readable labels.
+        /*
+         * Plugin runs `I18n.t("enumerations.linked_agent_archival_record_relators." + relator)`
+         * here. We emit the raw relator key; a follow-up can attach a
+         * translation table if the dashboard needs human-readable labels.
+         */
         if (link.relator) name.relator = link.relator;
         out.push(name);
     }
     return out;
 }
 
-// Parts come from `instances[]` where:
-//   - instance_type === 'digital_object'
-//   - is_representative === true
-//   - the linked digital_object has a `tree._resolved.children[]` array
-//
-// We walk children ONE LEVEL deep (matching the plugin's "we should
-// only be going one level deep" comment at repository_model.rb:203).
-//
-// Side return: `resource_type` — captured from the DO's
-// `digital_object_type` if present (plugin's `self.type_of_resource`
-// — exporter line 13 turns `text` → `text`, `still_image` → `still
-// image`).
-//
-// `kaltura_id` is DEFERRED — the plugin reads it via a per-child
-// `DigitalObjectComponent.to_jsonmodel(child['id'])` DB call. From
-// outside AS that's an extra HTTP call per child; we'll add it in a
-// follow-up if a Kaltura workflow needs it.
+/*
+ * Parts come from `instances[]` where:
+ *   - instance_type === 'digital_object'
+ *   - is_representative === true
+ *   - the linked digital_object has a `tree._resolved.children[]` array
+ * 
+ * We walk children ONE LEVEL deep (matching the plugin's "we should
+ * only be going one level deep" comment at repository_model.rb:203).
+ * 
+ * Side return: `resource_type` — captured from the DO's
+ * `digital_object_type` if present (plugin's `self.type_of_resource`
+ * — exporter line 13 turns `text` → `text`, `still_image` → `still
+ * image`).
+ * 
+ * `kaltura_id` is DEFERRED — the plugin reads it via a per-child
+ * `DigitalObjectComponent.to_jsonmodel(child['id'])` DB call. From
+ * outside AS that's an extra HTTP call per child; we'll add it in a
+ * follow-up if a Kaltura workflow needs it.
+ */
 function _build_parts(instances) {
     const result = { parts: [], resource_type: null };
     if (!Array.isArray(instances)) return result;
@@ -426,8 +456,10 @@ function _build_parts(instances) {
             if (file_versions.length > 0) {
                 const file = file_versions[0] || {};
                 if (file.file_format_name) {
-                    // MIME_MAP miss falls back to the raw key so a new
-                    // file format doesn't silently emit `undefined`.
+                    /*
+                     * MIME_MAP miss falls back to the raw key so a new
+                     * file format doesn't silently emit `undefined`.
+                     */
                     part.type = MIME_MAP[file.file_format_name] || file.file_format_name;
                 }
                 part.caption = file.caption !== undefined ? file.caption : null;
@@ -445,9 +477,11 @@ module.exports = {
     transform,
     extract_note_text,
     MIME_MAP,
-    // Helpers exported with `_` prefix so tests can pin each rule
-    // independently. Not part of the public surface — call `transform`
-    // from production code.
+    /*
+     * Helpers exported with `_` prefix so tests can pin each rule
+     * independently. Not part of the public surface — call `transform`
+     * from production code.
+     */
     _build_title,
     _build_identifiers,
     _build_dates,

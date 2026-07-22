@@ -1,27 +1,29 @@
 'use strict';
 
-// Kaltura service — Promise-based wrapper around the `kaltura-client`
-// SDK. The legacy ingest-service's service module mixes callback and
-// Promise APIs and uses `setInterval` for batch polling; v2 returns
-// awaitable Promises everywhere so the controller can use a plain
-// for-loop and the worker can apply normal cancellation semantics.
-//
-// Responsibilities:
-//   - start_session()              — mint a Kaltura session (KS)
-//   - search_metadata(term, ks)    — eSearch by EXACT_MATCH on filename
-//   - get_public_video_data(...)   — list custom-metadata XML for an
-//                                     entry id (used by the legacy
-//                                     export path; parsed via xml2js)
-//   - get_video_search_data(...)   — eSearch by entry id (tags, desc)
-//   - get_file_format(entry_id)    — list flavor assets to find source
-//   - get_categories(category_id)  — resolve category metadata
-//   - list_entry_categories(...)   — list categories assigned to entry
-//
-// Each call has a wall-clock timeout independent of the SDK's built-in
-// HTTP timeout — the SDK's internal retry policy can extend a single
-// call past 60s, which the v2 ingest worker won't tolerate. We race
-// against a fresh setTimeout per call and surface UpstreamError when
-// the timeout wins.
+/*
+ * Kaltura service — Promise-based wrapper around the `kaltura-client`
+ * SDK. The legacy ingest-service's service module mixes callback and
+ * Promise APIs and uses `setInterval` for batch polling; v2 returns
+ * awaitable Promises everywhere so the controller can use a plain
+ * for-loop and the worker can apply normal cancellation semantics.
+ * 
+ * Responsibilities:
+ *   - start_session()              — mint a Kaltura session (KS)
+ *   - search_metadata(term, ks)    — eSearch by EXACT_MATCH on filename
+ *   - get_public_video_data(...)   — list custom-metadata XML for an
+ *                                     entry id (used by the legacy
+ *                                     export path; parsed via xml2js)
+ *   - get_video_search_data(...)   — eSearch by entry id (tags, desc)
+ *   - get_file_format(entry_id)    — list flavor assets to find source
+ *   - get_categories(category_id)  — resolve category metadata
+ *   - list_entry_categories(...)   — list categories assigned to entry
+ * 
+ * Each call has a wall-clock timeout independent of the SDK's built-in
+ * HTTP timeout — the SDK's internal retry policy can extend a single
+ * call past 60s, which the v2 ingest worker won't tolerate. We race
+ * against a fresh setTimeout per call and surface UpstreamError when
+ * the timeout wins.
+ */
 
 const kaltura = require('kaltura-client');
 const XML_PARSER = require('xml2js');
@@ -34,18 +36,22 @@ const DEFAULT_SESSION_EXPIRY_S = 24 * 60 * 60;
 const DEFAULT_SESSION_TIMEOUT_MS = 10_000;
 const DEFAULT_SEARCH_TIMEOUT_MS = 15_000;
 
-// Build a fresh SDK client per call. The SDK's Configuration object
-// carries per-call state (notably the KS), so reusing one across
-// requests is a footgun — different callers would clobber each other's
-// `setKs` value. The SDK object construction is cheap (no network).
+/*
+ * Build a fresh SDK client per call. The SDK's Configuration object
+ * carries per-call state (notably the KS), so reusing one across
+ * requests is a footgun — different callers would clobber each other's
+ * `setKs` value. The SDK object construction is cheap (no network).
+ */
 function _make_client() {
     const cfg = new kaltura.Configuration();
     return new kaltura.Client(cfg);
 }
 
-// Wrap an SDK `.execute()` promise with a wall-clock timeout. The SDK's
-// own timeout is configurable but messy to plumb through every call —
-// this is the unified guard so all upstream calls are time-bounded.
+/*
+ * Wrap an SDK `.execute()` promise with a wall-clock timeout. The SDK's
+ * own timeout is configurable but messy to plumb through every call —
+ * this is the unified guard so all upstream calls are time-bounded.
+ */
 function _with_timeout(promise, ms, op) {
     const timeout = new Promise((_, reject) => {
         const t = setTimeout(
@@ -57,11 +63,13 @@ function _with_timeout(promise, ms, op) {
     return Promise.race([promise, timeout]);
 }
 
-// Sanitize a free-form search term before sending it to Kaltura's
-// eSearch. Strips ASCII control chars and the punctuation that
-// Kaltura's query parser treats as special; caps length so a runaway
-// caller can't push a 1MB string upstream. Whitespace is preserved
-// — Kaltura tokenizes on it.
+/*
+ * Sanitize a free-form search term before sending it to Kaltura's
+ * eSearch. Strips ASCII control chars and the punctuation that
+ * Kaltura's query parser treats as special; caps length so a runaway
+ * caller can't push a 1MB string upstream. Whitespace is preserved
+ * — Kaltura tokenizes on it.
+ */
 function _sanitize_term(term) {
     if (typeof term !== 'string') {
         throw new ValidationError('Search term must be a string');
@@ -79,9 +87,11 @@ function _sanitize_term(term) {
 
 // --- Session minting -------------------------------------------------
 
-// Start a Kaltura admin session and return the KS string. The
-// controller calls this once per request and threads it into the
-// per-package metadata lookups.
+/*
+ * Start a Kaltura admin session and return the KS string. The
+ * controller calls this once per request and threads it into the
+ * per-package metadata lookups.
+ */
 async function start_session() {
     if (!config.is_configured()) {
         throw new UpstreamError('Kaltura is not configured');
@@ -89,13 +99,15 @@ async function start_session() {
     const cfg = config.get();
     const client = _make_client();
     const type = kaltura.enums.SessionType.USER;
-    // Empty privileges string maps to the SDK's default privilege set.
-    // The legacy code passed SessionType.ADMIN here, which is wrong —
-    // the privileges param is a comma-separated string, not an enum.
-    // The wrong arg works on the upstream because Kaltura treats any
-    // unrecognized privilege as "no extra grants", but we'd rather
-    // pass the API-correct empty string and rely on `type=USER` +
-    // user_id=admin to grant the actual permissions.
+    /*
+     * Empty privileges string maps to the SDK's default privilege set.
+     * The legacy code passed SessionType.ADMIN here, which is wrong —
+     * the privileges param is a comma-separated string, not an enum.
+     * The wrong arg works on the upstream because Kaltura treats any
+     * unrecognized privilege as "no extra grants", but we'd rather
+     * pass the API-correct empty string and rely on `type=USER` +
+     * user_id=admin to grant the actual permissions.
+     */
     const privileges = '';
     const promise = kaltura.services.session
         .start(
@@ -120,14 +132,16 @@ async function start_session() {
 
 // --- Metadata lookups ------------------------------------------------
 
-// eSearch by EXACT_MATCH against the supplied term. The term is
-// typically a filename ("X123.mp4"); the controller also retries
-// against the filename minus its extension if the first call returns
-// totalCount=0.
-//
-// Returns the SDK's parsed response object — callers extract
-// `result.totalCount` and `result.objects[*].object.id` themselves
-// (see controller._extract_entry_ids).
+/*
+ * eSearch by EXACT_MATCH against the supplied term. The term is
+ * typically a filename ("X123.mp4"); the controller also retries
+ * against the filename minus its extension if the first call returns
+ * totalCount=0.
+ * 
+ * Returns the SDK's parsed response object — callers extract
+ * `result.totalCount` and `result.objects[*].object.id` themselves
+ * (see controller._extract_entry_ids).
+ */
 async function search_metadata(term, ks) {
     if (!ks || typeof ks !== 'string') {
         throw new ValidationError('Kaltura session (ks) is required');
@@ -162,15 +176,17 @@ async function search_metadata(term, ks) {
     }
 }
 
-// --- Legacy export-path helpers --------------------------------------
-//
-// The functions below back the legacy /api/v1/kaltura/export flow that
-// drains tbl_exports row-by-row, hydrates each row with metadata, and
-// writes back. The new package-queue flow (queue_kaltura_packages,
-// process_queue in controller.js) does NOT use these — they're kept
-// because the legacy export endpoint is still exposed and may have
-// admin scripts pointed at it. New callers should prefer the queue
-// flow.
+/*
+ * --- Legacy export-path helpers --------------------------------------
+ * 
+ * The functions below back the legacy /api/v1/kaltura/export flow that
+ * drains tbl_exports row-by-row, hydrates each row with metadata, and
+ * writes back. The new package-queue flow (queue_kaltura_packages,
+ * process_queue in controller.js) does NOT use these — they're kept
+ * because the legacy export endpoint is still exposed and may have
+ * admin scripts pointed at it. New callers should prefer the queue
+ * flow.
+ */
 
 async function get_public_video_data(entry_id, ks) {
     if (!ks || typeof ks !== 'string') {
@@ -275,9 +291,11 @@ async function list_entry_categories(entry_id, ks) {
     }
 }
 
-// Parse the XML payload returned by metadata.listAction. The schema
-// is fixed by the configured profile; we extract just the two fields
-// the legacy code persisted (ReferenceID, OriginalFileName).
+/*
+ * Parse the XML payload returned by metadata.listAction. The schema
+ * is fixed by the configured profile; we extract just the two fields
+ * the legacy code persisted (ReferenceID, OriginalFileName).
+ */
 async function parse_public_video_xml(xml) {
     if (!xml || typeof xml !== 'string') return null;
     const parser = new XML_PARSER.Parser({ explicitArray: false });
@@ -304,7 +322,9 @@ module.exports = {
     get_category,
     list_entry_categories,
     parse_public_video_xml,
-    // Exposed for tests so they can exercise sanitization without
-    // touching the SDK.
+    /*
+     * Exposed for tests so they can exercise sanitization without
+     * touching the SDK.
+     */
     _sanitize_term,
 };

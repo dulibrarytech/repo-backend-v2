@@ -2,9 +2,11 @@
 
 const app_config = require('../../../config/app');
 
-// Synchronous callers are safe with this form; async callers should
-// switch to `return await fn()` (see the equivalent helper under
-// tests/unit/auth/sso for why).
+/*
+ * Synchronous callers are safe with this form; async callers should
+ * switch to `return await fn()` (see the equivalent helper under
+ * tests/unit/auth/sso for why).
+ */
 function with_env(overrides, fn) {
     const saved = {};
     for (const k of Object.keys(overrides)) {

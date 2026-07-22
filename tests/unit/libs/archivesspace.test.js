@@ -1,15 +1,19 @@
 'use strict';
 
-// Unit tests for libs/archivesspace. The default export is a real
-// client bound to axios; we test via the create_client factory so we
-// can pass in a fake HTTP that captures requests + scripts responses.
+/*
+ * Unit tests for libs/archivesspace. The default export is a real
+ * client bound to axios; we test via the create_client factory so we
+ * can pass in a fake HTTP that captures requests + scripts responses.
+ */
 
 const aspace_module = require('../../../libs/archivesspace');
 const app_config = require('../../../config/app');
 const { UpstreamError, UnauthorizedError } = require('../../../libs/errors');
 
-// Tiny axios-shaped fake. Each method records its calls and returns
-// whatever the test sets next via `set_response`.
+/*
+ * Tiny axios-shaped fake. Each method records its calls and returns
+ * whatever the test sets next via `set_response`.
+ */
 function make_fake_http() {
     const calls = { get: [], post: [] };
     let next = { status: 200, data: {}, headers: {} };
@@ -105,11 +109,13 @@ describe('libs/archivesspace', () => {
 
     describe('get_record (default — plugin path, use_transformer=false)', () => {
         it('GETs <base>/<uri>/repository (DU plugin endpoint) with the session header', async () => {
-            // The `/repository` suffix is a DU custom AS plugin
-            // endpoint — see libs/archivesspace.js for context. The
-            // bare native AS endpoint returns a shape missing
-            // `identifiers`, `parts`, and `is_compound`, which would
-            // make the QA validator flag every record as broken.
+            /*
+             * The `/repository` suffix is a DU custom AS plugin
+             * endpoint — see libs/archivesspace.js for context. The
+             * bare native AS endpoint returns a shape missing
+             * `identifiers`, `parts`, and `is_compound`, which would
+             * make the QA validator flag every record as broken.
+             */
             const http = make_fake_http();
             http.set_response({ status: 200, data: { title: 'rec' } });
             const client = aspace_module.create_client(http);
@@ -122,8 +128,10 @@ describe('libs/archivesspace', () => {
             );
             expect(call.opts.headers['X-ArchivesSpace-Session']).toBe('tok');
             expect(call.opts.timeout).toBe(5000);
-            // Plugin path doesn't send resolve params (the plugin does
-            // resolve internally and pre-transforms the result).
+            /*
+             * Plugin path doesn't send resolve params (the plugin does
+             * resolve internally and pre-transforms the result).
+             */
             expect(call.opts.params).toBeUndefined();
         });
 
@@ -135,9 +143,11 @@ describe('libs/archivesspace', () => {
         });
 
         it('returns status + data for 4xx without throwing', async () => {
-            // The worker needs to see the 4xx status so it can decide
-            // whether to refresh the token (401/403) or mark the row
-            // failed permanently (404).
+            /*
+             * The worker needs to see the 4xx status so it can decide
+             * whether to refresh the token (401/403) or mark the row
+             * failed permanently (404).
+             */
             const http = make_fake_http();
             http.set_response({ status: 404, data: { error: 'not found' } });
             const client = aspace_module.create_client(http);
@@ -153,17 +163,21 @@ describe('libs/archivesspace', () => {
         });
 
         it('does NOT pipe the response through the transformer (plugin already pre-transformed)', async () => {
-            // Plugin endpoint returns the flat shape directly. We
-            // pass it through unchanged — running transform() on it
-            // would double-transform.
+            /*
+             * Plugin endpoint returns the flat shape directly. We
+             * pass it through unchanged — running transform() on it
+             * would double-transform.
+             */
             const http = make_fake_http();
             const raw = { title: 'already-flat', identifiers: [{ type: 'local', identifier: 'X' }] };
             http.set_response({ status: 200, data: raw });
             const client = aspace_module.create_client(http);
             const res = await client.get_record('/r/1', 'tok');
             expect(res.data).toBe(raw);
-            // No version stamp on the plugin path (the plugin owns
-            // the shape).
+            /*
+             * No version stamp on the plugin path (the plugin owns
+             * the shape).
+             */
             expect(res.data._transformer_version).toBeUndefined();
         });
     });
@@ -211,10 +225,12 @@ describe('libs/archivesspace', () => {
         });
 
         it('pipes the raw AS response through transform() before returning', async () => {
-            // The transformer is its own well-tested module. Here we
-            // just confirm the wiring — the response we hand back has
-            // the FLAT shape (identifiers/notes/etc), not the raw AS
-            // record shape (id_0/component_id/jsonmodel_type/etc).
+            /*
+             * The transformer is its own well-tested module. Here we
+             * just confirm the wiring — the response we hand back has
+             * the FLAT shape (identifiers/notes/etc), not the raw AS
+             * record shape (id_0/component_id/jsonmodel_type/etc).
+             */
             const http = make_fake_http();
             http.set_response({
                 status: 200,
@@ -227,8 +243,10 @@ describe('libs/archivesspace', () => {
             });
             const client = aspace_module.create_client(http);
             const res = await client.get_record('/r/1', 'tok');
-            // Flat shape — identifier array present, jsonmodel_type
-            // stripped out.
+            /*
+             * Flat shape — identifier array present, jsonmodel_type
+             * stripped out.
+             */
             expect(res.data.identifiers).toEqual([{ type: 'local', identifier: 'X-1' }]);
             expect(res.data.title).toBe('Item');
             expect(res.data.jsonmodel_type).toBeUndefined();
@@ -291,8 +309,10 @@ describe('libs/archivesspace', () => {
             await expect(client.ping()).resolves.toBe(true);
             // Hit the login endpoint…
             expect(http.calls.post[0].url).toMatch(/\/users\/svc\/login$/);
-            // …with an EXPIRING session (no expiring:false) so the probe
-            // doesn't accumulate permanent sessions.
+            /*
+             * …with an EXPIRING session (no expiring:false) so the probe
+             * doesn't accumulate permanent sessions.
+             */
             expect(http.calls.post[0].opts.params).toEqual({ password: 's3cret' });
         });
 

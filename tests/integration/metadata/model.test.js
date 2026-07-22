@@ -18,11 +18,13 @@ describe('metadata/model — queue CRUD', () => {
     beforeEach(async () => {
         await db_helper.reset_data();
         await db_queue()(QUEUE).del();
-        // Most assertions here predate the retry-then-dead-letter
-        // behavior added with the system-wide refresh. Force a single-
-        // shot mark_failed so the legacy expectations (one mark_failed
-        // call → terminal row) still hold. New tests dedicated to the
-        // retry path override this explicitly.
+        /*
+         * Most assertions here predate the retry-then-dead-letter
+         * behavior added with the system-wide refresh. Force a single-
+         * shot mark_failed so the legacy expectations (one mark_failed
+         * call → terminal row) still hold. New tests dedicated to the
+         * retry path override this explicitly.
+         */
         original_env = { ...process.env };
         process.env.METADATA_MAX_ATTEMPTS = '1';
         require('../../../config/app')._reset();
@@ -131,8 +133,10 @@ describe('metadata/model — queue CRUD', () => {
                 object_type: 'collection',
                 uri: '/repositories/2/resources/77',
             });
-            // Two members that would have been picked up by
-            // enqueue_collection — must NOT appear in the queue here.
+            /*
+             * Two members that would have been picked up by
+             * enqueue_collection — must NOT appear in the queue here.
+             */
             for (let i = 0; i < 2; i++) {
                 await db_helper.seed_object({
                     is_member_of_collection: c.pid,
@@ -145,8 +149,10 @@ describe('metadata/model — queue CRUD', () => {
             expect(rows).toHaveLength(1);
             expect(rows[0].uuid).toBe(c.pid);
             expect(rows[0].uri).toBe('/repositories/2/resources/77');
-            // Distinct from 'single' / 'collection' so the queue
-            // audit trail records which surface enqueued the row.
+            /*
+             * Distinct from 'single' / 'collection' so the queue
+             * audit trail records which surface enqueued the row.
+             */
             expect(rows[0].update_type).toBe('collection-record');
             expect(rows[0].status).toBe('PENDING');
         });
@@ -324,14 +330,18 @@ describe('metadata/model — queue CRUD', () => {
             const b = await db_helper.seed_object({ uri: '/b' });
             const c = await db_helper.seed_object({ uri: '/c' });
             const { batch_uuid } = await model.enqueue_pids([a.pid, b.pid, c.pid]);
-            // Pretend the worker finished a; b is still PENDING; c is
-            // IN_PROGRESS (already claimed).
+            /*
+             * Pretend the worker finished a; b is still PENDING; c is
+             * IN_PROGRESS (already claimed).
+             */
             const claimed = await model.claim_pending(2);
             await model.mark_complete(claimed[0].id);
             // Note: claimed[1] left IN_PROGRESS deliberately.
             const result = await model.cancel_batch(batch_uuid);
-            // Two rows transitioned: the leftover PENDING + the
-            // IN_PROGRESS claim. The already-COMPLETE row is untouched.
+            /*
+             * Two rows transitioned: the leftover PENDING + the
+             * IN_PROGRESS claim. The already-COMPLETE row is untouched.
+             */
             expect(result.affected).toBe(2);
             const rows = await db_queue()(QUEUE).where({ batch_uuid });
             const statuses = rows.map((r) => r.status).sort();

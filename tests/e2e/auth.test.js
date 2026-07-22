@@ -7,9 +7,11 @@ const cookie_parser = require('cookie-parser');
 const { require_auth, optional_auth } = require('../../auth/middleware');
 const jwt = require('../../libs/jwt');
 
-// We don't have any protected app routes yet — those land in Phase 3.
-// For Phase 1, prove the middleware behaves correctly in a real Express
-// pipeline by mounting it on a test-only echo route.
+/*
+ * We don't have any protected app routes yet — those land in Phase 3.
+ * For Phase 1, prove the middleware behaves correctly in a real Express
+ * pipeline by mounting it on a test-only echo route.
+ */
 
 function build_app() {
     const app = express();

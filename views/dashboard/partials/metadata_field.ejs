@@ -107,6 +107,16 @@ function _strip(s) {
                 <% if (p.type) { %>
                     <span class="text-muted small">(<%= p.type %>)</span>
                 <% } %>
+                <%/* Kaltura entry id for this part — rendered on its own line
+                     BELOW the file name (flex-basis:100% forces the wrap).
+                     '0_0' is the ingest "no match" sentinel; skip it. */%>
+                <% var _kid = p.kaltura_id || p.entry_id; %>
+                <% if (typeof _kid === 'string' && _kid.trim() && _kid.trim() !== '0_0') { %>
+                    <span class="metadata-part-kaltura">
+                        <span class="metadata-tag">kaltura id</span>
+                        <span class="font-monospace"><%= _kid.trim() %></span>
+                    </span>
+                <% } %>
             </li>
         <% }); %>
     </ul>

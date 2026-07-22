@@ -1,6 +1,7 @@
 'use strict';
 
 const repo_model = require('./model');
+const user_model = require('../users/model');
 const projection = require('../libs/object_projection');
 
 async function list_objects(req, res) {
@@ -15,8 +16,10 @@ async function list_objects(req, res) {
     });
     res.json({
         ...data,
-        // API responses surface the enriched fields (title, handle,
-        // uri parsed from display_record) but never the raw blob.
+        /*
+         * API responses surface the enriched fields (title, handle,
+         * uri parsed from display_record) but never the raw blob.
+         */
         items: projection.enrich_all(data.items),
     });
 }
@@ -37,11 +40,17 @@ async function suppress_object(req, res) {
 }
 
 async function delete_object(req, res) {
-    // delete_reason is required — forwarded to Archivematica as the
-    // event_reason on the AIP deletion request. The model also
-    // refuses to delete published objects (must suppress first).
+    /*
+     * delete_reason is required — forwarded to Archivematica as the
+     * event_reason on the AIP deletion request. The model also
+     * refuses to delete published objects (must suppress first).
+     */
     const delete_reason = req.body && req.body.delete_reason;
-    const actor = req.user && (req.user.du_id || req.user.email || req.user.sub);
+    /*
+     * Audit actor: "First Last (du_id)" so the AM admin can identify who
+     * initiated the delete by name, with the du_id as the unambiguous key.
+     */
+    const actor = await user_model.actor_label(req.user);
     const result = await repo_model.soft_delete(req.params.pid, {
         delete_reason,
         actor,

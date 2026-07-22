@@ -1,14 +1,16 @@
 'use strict';
 
-// Unit tests for libs/archivesspace_transform — the pure transformer
-// that turns a resolve-references-expanded ArchivesSpace JSON record
-// into the flat shape the QA validator + indexer + dashboard expect.
-//
-// Each helper is exercised in isolation (via the underscore-prefixed
-// export) so a regression in, say, MIME-map lookup doesn't cascade and
-// hide a separate regression in date synthesis. The end-to-end
-// `transform()` cases pin the assembly contract (which keys end up
-// where) on representative records.
+/*
+ * Unit tests for libs/archivesspace_transform — the pure transformer
+ * that turns a resolve-references-expanded ArchivesSpace JSON record
+ * into the flat shape the QA validator + indexer + dashboard expect.
+ * 
+ * Each helper is exercised in isolation (via the underscore-prefixed
+ * export) so a regression in, say, MIME-map lookup doesn't cascade and
+ * hide a separate regression in date synthesis. The end-to-end
+ * `transform()` cases pin the assembly contract (which keys end up
+ * where) on representative records.
+ */
 
 const {
     transform,
@@ -33,9 +35,11 @@ describe('libs/archivesspace_transform', () => {
         });
 
         it('carries the verbatim file_format_name → MIME entries from the plugin', () => {
-            // Lifted from repository_model.rb:56-67 — values must match
-            // exactly so downstream consumers see the same MIME strings
-            // they got from the legacy /repository endpoint.
+            /*
+             * Lifted from repository_model.rb:56-67 — values must match
+             * exactly so downstream consumers see the same MIME strings
+             * they got from the legacy /repository endpoint.
+             */
             expect(MIME_MAP).toEqual({
                 aiff: 'audio/x-aiff',
                 avi: 'video/x-msvideo',
@@ -272,8 +276,10 @@ describe('libs/archivesspace_transform', () => {
         });
 
         it('tolerates a missing collector (transform default)', () => {
-            // The collector is optional — when absent, side effects are skipped
-            // but the main extent strings still produce.
+            /*
+             * The collector is optional — when absent, side effects are skipped
+             * but the main extent strings still produce.
+             */
             expect(() =>
                 _build_extents([{ number: '1', extent_type: 'reel', dimensions: '16mm' }])
             ).not.toThrow();
@@ -600,8 +606,10 @@ describe('libs/archivesspace_transform', () => {
                     },
                 },
             ];
-            // Unknown format passes through verbatim — better than emitting
-            // undefined on a new file type the plugin didn't know about.
+            /*
+             * Unknown format passes through verbatim — better than emitting
+             * undefined on a new file type the plugin didn't know about.
+             */
             expect(_build_parts(instances).parts[0].type).toBe('webp');
         });
 
@@ -776,9 +784,11 @@ describe('libs/archivesspace_transform', () => {
             expect(out.dates).toHaveLength(1);
             expect(out.dates[0].expression).toBe('1970 June');
             expect(out.extents).toEqual(['1 folder (whole)']);
-            // physdesc came in via the notes block; physical_details came in
-            // via the extent. Both end up in the notes array via the
-            // extent_notes pathway.
+            /*
+             * physdesc came in via the notes block; physical_details came in
+             * via the extent. Both end up in the notes array via the
+             * extent_notes pathway.
+             */
             const note_types = out.notes.map((n) => n.type).sort();
             expect(note_types).toEqual(['abstract', 'physdesc', 'phystech']);
             expect(out.subjects).toEqual([
@@ -816,8 +826,10 @@ describe('libs/archivesspace_transform', () => {
             };
             const out = transform(record);
             expect(out.identifiers).toEqual([{ type: 'local', identifier: 'M.042' }]);
-            // No instances → no resource_type key (the helper only sets it
-            // when a representative DO supplies digital_object_type).
+            /*
+             * No instances → no resource_type key (the helper only sets it
+             * when a representative DO supplies digital_object_type).
+             */
             expect('resource_type' in out).toBe(false);
             // No dates/extents → neither key present.
             expect('dates' in out).toBe(false);
@@ -841,23 +853,27 @@ describe('libs/archivesspace_transform', () => {
         });
     });
 
-    // ---- Resource (collection) records ----
-    //
-    // The legacy plugin deliberately under-populates resource records:
-    // its from_resource() map only runs handle_notes / handle_subjects /
-    // handle_agents — skipping handle_dates, handle_extents, and
-    // handle_instances. The result is a resource shape with empty
-    // dates/extents/parts even when AS has those fields populated.
-    //
-    // We intentionally DIVERGE from that — the unified transformer
-    // applies every helper uniformly so ES sees the same field set
-    // across both object and collection records. These tests pin that
-    // policy so a future "match plugin exactly" reflex can't quietly
-    // revert it.
+    /*
+     * ---- Resource (collection) records ----
+     * 
+     * The legacy plugin deliberately under-populates resource records:
+     * its from_resource() map only runs handle_notes / handle_subjects /
+     * handle_agents — skipping handle_dates, handle_extents, and
+     * handle_instances. The result is a resource shape with empty
+     * dates/extents/parts even when AS has those fields populated.
+     * 
+     * We intentionally DIVERGE from that — the unified transformer
+     * applies every helper uniformly so ES sees the same field set
+     * across both object and collection records. These tests pin that
+     * policy so a future "match plugin exactly" reflex can't quietly
+     * revert it.
+     */
     describe('transform (resource / collection records)', () => {
         it('produces dates/extents on resources too (richer than the legacy plugin)', () => {
-            // A resource record with dates + extents populated in AS.
-            // The plugin would suppress these; we pass them through.
+            /*
+             * A resource record with dates + extents populated in AS.
+             * The plugin would suppress these; we pass them through.
+             */
             const record = {
                 jsonmodel_type: 'resource',
                 uri: '/repositories/2/resources/42',
@@ -908,9 +924,11 @@ describe('libs/archivesspace_transform', () => {
                 title: 'Item',
                 component_id: 'X-1',
             });
-            // Sorted-key parity check — both records must surface the
-            // same baseline shape so the ES mapping doesn't have to
-            // branch on object_type.
+            /*
+             * Sorted-key parity check — both records must surface the
+             * same baseline shape so the ES mapping doesn't have to
+             * branch on object_type.
+             */
             const baseline = [
                 'identifiers',
                 'is_compound',

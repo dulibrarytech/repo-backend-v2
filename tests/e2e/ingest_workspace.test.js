@@ -1,19 +1,23 @@
 'use strict';
 
-// E2E tests for the three pre-ingest workspace pages (MDO, ASpace QA,
-// Packaging). Most assertions target page chrome + sidebar active
-// state + presence of workspace controls — the deeper behavior is
-// covered by the workspace integration tests.
-//
-// We don't have a live curation-API in tests, so the workspace list
-// renders the "not configured" error envelope inline (CURATION_API +
-// CURATION_API_KEY are absent). That's actually useful: lets us
-// assert the dashboard handles the error gracefully.
+/*
+ * E2E tests for the three pre-ingest workspace pages (MDO, ASpace QA,
+ * Packaging). Most assertions target page chrome + sidebar active
+ * state + presence of workspace controls — the deeper behavior is
+ * covered by the workspace integration tests.
+ * 
+ * We don't have a live curation-API in tests, so the workspace list
+ * renders the "not configured" error envelope inline (CURATION_API +
+ * CURATION_API_KEY are absent). That's actually useful: lets us
+ * assert the dashboard handles the error gracefully.
+ */
 
 const supertest = require('supertest');
 const { make_app } = require('../helpers/app');
 const db_helper = require('../helpers/db');
 const jwt = require('../../libs/jwt');
+const { db_queue } = require('../../config/db');
+const tables = require('../../config/db_tables');
 
 let app;
 
@@ -48,8 +52,10 @@ describe('ingest workspace pages — e2e', () => {
             expect(res.status).toBe(200);
             expect(res.text).toContain('Make Digital Objects');
             expect(res.text).toContain('workspace-action-spinner');
-            // Sidebar's Make Digital Objects item is the active one
-            // (both .active class and SR-perceivable aria-current).
+            /*
+             * Sidebar's Make Digital Objects item is the active one
+             * (both .active class and SR-perceivable aria-current).
+             */
             expect(res.text).toMatch(
                 /<a[^>]*class="active"[^>]*aria-current="page"[^>]*aria-label="Make Digital Objects"/
             );
@@ -106,13 +112,15 @@ describe('ingest workspace pages — e2e', () => {
         });
 
         it('hides non-workflow nav items in focus mode (keeps Home + workflow icons only)', async () => {
-            // In focus mode the sidebar shows Home + the four workflow
-            // icons + History. Collections, Objects, Users, Indexer,
-            // and Metadata Refresh stay hidden so the sidebar reads as
-            // a focused pipeline. Home is kept as an escape hatch
-            // alongside the "← Collection Management" page-header
-            // back-link (added in task #114 — Home gives a one-click
-            // jump to the dashboard root from any workflow view).
+            /*
+             * In focus mode the sidebar shows Home + the four workflow
+             * icons + History. Collections, Objects, Users, Indexer,
+             * and Metadata Refresh stay hidden so the sidebar reads as
+             * a focused pipeline. Home is kept as an escape hatch
+             * alongside the "← Collection Management" page-header
+             * back-link (added in task #114 — Home gives a one-click
+             * jump to the dashboard root from any workflow view).
+             */
             const cookie = await cookie_for('side-focus');
             for (const path of [
                 '/repo/dashboard/ingest/workspace',
@@ -124,7 +132,7 @@ describe('ingest workspace pages — e2e', () => {
                 expect(res.status).toBe(200);
                 // Hidden in focus mode.
                 expect(res.text).not.toContain('title="Collections"');
-                expect(res.text).not.toContain('title="Objects (flat browse)"');
+                expect(res.text).not.toContain('title="Objects"');
                 expect(res.text).not.toContain('title="Users"');
                 expect(res.text).not.toContain('title="Admin Utils"');
                 expect(res.text).not.toContain('title="Indexer (admin)"');
@@ -146,9 +154,11 @@ describe('ingest workspace pages — e2e', () => {
             ]) {
                 const res = await supertest(app).get(path).set('Cookie', cookie);
                 expect(res.status).toBe(200);
-                // The Home <a> in the workflow sidebar points at
-                // /repo/dashboard/ (the dashboard root), giving a
-                // one-click exit from focus mode.
+                /*
+                 * The Home <a> in the workflow sidebar points at
+                 * /repo/dashboard/ (the dashboard root), giving a
+                 * one-click exit from focus mode.
+                 */
                 expect(res.text).toMatch(/<a href="\/repo\/dashboard\/"[^>]*title="Home"/);
             }
         });
@@ -168,9 +178,11 @@ describe('ingest workspace pages — e2e', () => {
         });
 
         it('renders "← Collection Management" back-link on every workflow page', async () => {
-            // Matches the pattern from views/dashboard/collection_detail.ejs
-            // ("← All collections"). The link is the only way OUT of
-            // the workflow when focus mode is active.
+            /*
+             * Matches the pattern from views/dashboard/collection_detail.ejs
+             * ("← All collections"). The link is the only way OUT of
+             * the workflow when focus mode is active.
+             */
             const cookie = await cookie_for('back-link');
             for (const path of [
                 '/repo/dashboard/ingest/workspace',
@@ -192,12 +204,14 @@ describe('ingest workspace pages — e2e', () => {
             expect(res.status).toBe(200);
             expect(res.text).toContain('title="Home"');
             expect(res.text).toContain('title="Collections"');
-            expect(res.text).toContain('title="Objects (flat browse)"');
+            expect(res.text).toContain('title="Objects"');
             expect(res.text).toContain('title="Users"');
             expect(res.text).toContain('title="Digital Preservation Jobs"');
-            // Admin Utils is the single entry icon for the admin tools
-            // (Indexer / Metadata Refresh / Services Health). The three
-            // tool icons themselves are only visible IN admin focus mode.
+            /*
+             * Admin Utils is the single entry icon for the admin tools
+             * (Indexer / Metadata Refresh / Services Health). The three
+             * tool icons themselves are only visible IN admin focus mode.
+             */
             expect(res.text).toContain('title="Admin Utils"');
             expect(res.text).not.toContain('title="Indexer (admin)"');
             expect(res.text).not.toContain('title="Metadata Refresh (admin)"');
@@ -210,14 +224,16 @@ describe('ingest workspace pages — e2e', () => {
             const expected = [
                 'title="Home"',
                 'title="Collections"',
-                'title="Objects (flat browse)"',
+                'title="Objects"',
                 'title="Digital Preservation Jobs"',
                 'title="Users"',
                 'title="Admin Utils"',
             ];
-            // Each title appears later in the HTML than the previous
-            // one. Capture any missing titles up-front so the failure
-            // message points at WHICH item is absent.
+            /*
+             * Each title appears later in the HTML than the previous
+             * one. Capture any missing titles up-front so the failure
+             * message points at WHICH item is absent.
+             */
             const positions = expected.map((needle) => res.text.indexOf(needle));
             const missing = expected.filter((_, i) => positions[i] === -1);
             expect(missing).toEqual([]);
@@ -225,20 +241,22 @@ describe('ingest workspace pages — e2e', () => {
             expect(positions).toEqual(sorted);
         });
 
-        it('Admin Utils icon points at /admin/indexer (first tool, same shape as DPJ → workspace)', async () => {
+        it('Admin Utils icon points at /admin/services (the default admin view)', async () => {
             const cookie = await cookie_for('side-admin-link');
             const res = await supertest(app).get('/repo/dashboard/').set('Cookie', cookie);
             expect(res.text).toMatch(
-                /href="[^"]*\/dashboard\/admin\/indexer"[^>]*title="Admin Utils"/
+                /href="[^"]*\/dashboard\/admin\/services"[^>]*title="Admin Utils"/
             );
         });
     });
 
     describe('admin focus mode (in_admin sidebar)', () => {
-        // In admin context the sidebar mirrors workflow mode: Home
-        // escape at top, then the admin tool icons (Indexer / Metadata
-        // Refresh / Services Health). Collections / Objects / Users /
-        // DPJ stay hidden to preserve focus.
+        /*
+         * In admin context the sidebar mirrors workflow mode: Home
+         * escape at top, then the admin tool icons (Indexer / Metadata
+         * Refresh / Services Health). Collections / Objects / Users /
+         * DPJ stay hidden to preserve focus.
+         */
 
         for (const [adminPath, activePage] of [
             ['/repo/dashboard/admin/indexer', 'Indexer (admin)'],
@@ -256,15 +274,17 @@ describe('ingest workspace pages — e2e', () => {
                 expect(res.text).toContain('title="Home"');
                 // Standard nav items are hidden (focus mode).
                 expect(res.text).not.toContain('title="Collections"');
-                expect(res.text).not.toContain('title="Objects (flat browse)"');
+                expect(res.text).not.toContain('title="Objects"');
                 expect(res.text).not.toContain('title="Users"');
                 expect(res.text).not.toContain('title="Digital Preservation Jobs"');
                 // Admin Utils single icon is replaced by the three tool icons.
                 expect(res.text).not.toContain('title="Admin Utils"');
-                // Active marker on the current tool. Anchor on the
-                // aria-label since attribute order in the EJS template
-                // is no longer adjacent (aria-current + aria-label sit
-                // between class and title).
+                /*
+                 * Active marker on the current tool. Anchor on the
+                 * aria-label since attribute order in the EJS template
+                 * is no longer adjacent (aria-current + aria-label sit
+                 * between class and title).
+                 */
                 const escaped = activePage.replace(/[()]/g, '\\$&');
                 expect(res.text).toMatch(
                     new RegExp(`<a[^>]*class="active"[^>]*aria-current="page"[^>]*aria-label="${escaped}"`)
@@ -295,11 +315,15 @@ describe('ingest workspace pages — e2e', () => {
             expect(res.status).toBe(200);
             expect(res.text).toMatch(/id="qa-show-passed-input"/);
             expect(res.text).toMatch(/Show QA-passed/);
-            // Not pre-checked on a default page load — the default
-            // is to HIDE already-passed folders.
+            /*
+             * Not pre-checked on a default page load — the default
+             * is to HIDE already-passed folders.
+             */
             expect(res.text).not.toMatch(/id="qa-show-passed-input"[^>]*checked/);
-            // The polled content div pulls both the search input
-            // and the toggle into its requests via hx-include.
+            /*
+             * The polled content div pulls both the search input
+             * and the toggle into its requests via hx-include.
+             */
             expect(res.text).toMatch(/hx-include="#qa-search-input, #qa-show-passed-input"/);
         });
     });
@@ -321,18 +345,22 @@ describe('ingest workspace pages — e2e', () => {
 
     describe('GET /dashboard/ingest/workspace/list (HTMX partial)', () => {
         it('renders an error envelope when curation-API is unconfigured', async () => {
-            // Without ASTOOLS_* / QA_SERVICE_* env vars, the workspace
-            // module returns the "not configured" error envelope. The
-            // partial renders this as a small alert card above an
-            // empty table — exactly the behavior staff see in a dev
-            // env that's not pointed at libsftp01.
+            /*
+             * Without ASTOOLS_* / QA_SERVICE_* env vars, the workspace
+             * module returns the "not configured" error envelope. The
+             * partial renders this as a small alert card above an
+             * empty table — exactly the behavior staff see in a dev
+             * env that's not pointed at libsftp01.
+             */
             const cookie = await cookie_for('list-1');
             const res = await supertest(app)
                 .get('/repo/dashboard/ingest/workspace/list')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // Error text from workspace.list_workspace surfaces in the
-            // partial.
+            /*
+             * Error text from workspace.list_workspace surfaces in the
+             * partial.
+             */
             expect(res.text).toMatch(/not configured/i);
             // Empty state copy is the MDO-flavored message.
             expect(res.text).toContain('No folders are awaiting Make Digital Objects');
@@ -350,11 +378,13 @@ describe('ingest workspace pages — e2e', () => {
         });
 
         it('honors show_passed=1 — toggles the qa-passed filter off via the controller', async () => {
-            // No real curation-service in test land, so we can't
-            // assert folder rows shape — but we can confirm the
-            // controller plumbs the query param through to
-            // list_workspace by spying on workspace.list_workspace
-            // via a fresh require + replace.
+            /*
+             * No real curation-service in test land, so we can't
+             * assert folder rows shape — but we can confirm the
+             * controller plumbs the query param through to
+             * list_workspace by spying on workspace.list_workspace
+             * via a fresh require + replace.
+             */
             const cookie = await cookie_for('list-toggle');
             const workspace = require('../../ingester/workspace');
             const orig = workspace.list_workspace;
@@ -376,9 +406,11 @@ describe('ingest workspace pages — e2e', () => {
                     .set('Cookie', cookie);
                 expect(calls.at(-1).exclude_qa_passed).toBe(false);
 
-                // show_passed=0 (or any non-"1" value) → still filtered.
-                // Keeps the contract tight: only the literal "1" opts
-                // out; everything else preserves the safe default.
+                /*
+                 * show_passed=0 (or any non-"1" value) → still filtered.
+                 * Keeps the contract tight: only the literal "1" opts
+                 * out; everything else preserves the safe default.
+                 */
                 await supertest(app)
                     .get('/repo/dashboard/ingest/aspace-qa/list?show_passed=0')
                     .set('Cookie', cookie);
@@ -397,6 +429,121 @@ describe('ingest workspace pages — e2e', () => {
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
             expect(res.text).toContain('No folders are ready to submit to the ingest pipeline');
+        });
+    });
+
+    describe('GET /dashboard/ingest/recent (Recent Ingests)', () => {
+        it('redirects unauthed users to login', async () => {
+            const res = await supertest(app).get('/repo/dashboard/ingest/recent');
+            expect(res.status).toBe(302);
+        });
+
+        it('renders a shell wired to the objects table, workflow sidebar marking it active', async () => {
+            const cookie = await cookie_for('recent-1');
+            const res = await supertest(app)
+                .get('/repo/dashboard/ingest/recent')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toContain('Recent Ingests');
+            expect(res.text).toContain('Objects ingested in the last 30 days');
+            // Reuses the Objects table, filtered to the recent window.
+            expect(res.text).toMatch(/id="objects-table"/);
+            expect(res.text).toMatch(/\/objects\/list\?recent_days=30/);
+            // Workflow focus mode: the Recent Ingests sidebar item is active…
+            expect(res.text).toMatch(
+                /<a[^>]*class="active"[^>]*aria-current="page"[^>]*aria-label="Recent Ingests"/
+            );
+            // …and the normal nav is hidden (focus mode).
+            expect(res.text).toContain('title="Make Digital Objects"');
+            expect(res.text).not.toContain('title="Collections"');
+        });
+
+        it('the objects table, scoped by recent_days, shows in-window objects with row actions', async () => {
+            await db_helper.seed_object({
+                pid: 'codu:recent-fresh',
+                display_record: JSON.stringify({ title: 'Carnival of the Animals' }),
+            });
+            await db_helper.seed_object({
+                pid: 'codu:recent-old',
+                created: '2020-01-01 00:00:00',
+                display_record: JSON.stringify({ title: 'Ancient Reel' }),
+            });
+            const cookie = await cookie_for('recent-2');
+            const res = await supertest(app)
+                .get('/repo/dashboard/objects/list?recent_days=30')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            // Fresh object is in the window; the old one is filtered out.
+            expect(res.text).toContain('Carnival of the Animals');
+            expect(res.text).not.toContain('Ancient Reel');
+            /*
+             * The row carries the Objects actions (so metadata/publish work
+             * here) — the Metadata action endpoint is rendered for the row.
+             */
+            expect(res.text).toMatch(/\/objects\/codu:recent-fresh\/metadata/);
+        });
+
+        it('home page "Recent ingests" card links to the standalone view', async () => {
+            const cookie = await cookie_for('recent-home');
+            const res = await supertest(app).get('/repo/dashboard/').set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toMatch(/href="[^"]*\/ingest\/recent"[^>]*>\s*Browse all/);
+        });
+    });
+
+    describe('ingest-in-progress gate (packaging view)', () => {
+        /*
+         * An ingest is "in progress" when any row sits in a worker-claimable
+         * state (STAGE_BY_STATE). Such a row → "Ingest in progress" banner on
+         * the packaging list + submit blocked. Halted/terminal rows are NOT
+         * claimable, so they don't gate (staff can still submit when a prior
+         * ingest has halted awaiting action).
+         */
+        async function seed_active_row(pipeline_state) {
+            await db_queue()(tables.ingest_queue).insert({
+                package: 'busy-pkg',
+                batch: 'busy-batch',
+                collection_uuid: 'c-busy',
+                status: pipeline_state,
+                pipeline_state,
+                is_complete: 0,
+            });
+        }
+
+        it('shows the "Ingest in progress" banner on /packaging/list while a claimable row exists', async () => {
+            await seed_active_row('TRANSFER_IN_PROGRESS');
+            const cookie = await cookie_for('gate-banner');
+            const res = await supertest(app)
+                .get('/repo/dashboard/ingest/packaging/list')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toContain('Ingest in progress');
+        });
+
+        it('does NOT show the banner when the only active row is halted (not claimable)', async () => {
+            await seed_active_row('INGEST_HALTED');
+            const cookie = await cookie_for('gate-halted');
+            const res = await supertest(app)
+                .get('/repo/dashboard/ingest/packaging/list')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).not.toContain('Ingest in progress');
+        });
+
+        it('rejects a second submit while an ingest is in progress (does not run submit_to_ingest)', async () => {
+            await seed_active_row('UPLOADING');
+            const cookie = await cookie_for('gate-submit');
+            const res = await supertest(app)
+                .post('/repo/dashboard/ingest/workspace/col-a/submit-ingest')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toMatch(/already in progress/i);
+            /*
+             * The guard short-circuits before workspace.submit_to_ingest, so we
+             * DON'T see the curation-unconfigured "failed for" envelope that an
+             * actual submit attempt produces.
+             */
+            expect(res.text).not.toContain('failed for col-a');
         });
     });
 
@@ -452,6 +599,62 @@ describe('ingest workspace pages — e2e', () => {
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
             expect(res.text).toContain('Revert failed for col-a');
+        });
+    });
+
+    describe('GET /dashboard/ingest/help (Workflow Guide)', () => {
+        it('redirects unauthed users to login', async () => {
+            const res = await supertest(app).get('/repo/dashboard/ingest/help');
+            expect(res.status).toBe(302);
+        });
+
+        it('renders the guide with the overview, each step anchor, and the glossary', async () => {
+            const cookie = await cookie_for('help-view');
+            const res = await supertest(app)
+                .get('/repo/dashboard/ingest/help')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toContain('Workflow Guide');
+            // Section anchors the per-step deep-links target.
+            expect(res.text).toContain('id="overview"');
+            expect(res.text).toContain('id="make-digital-objects"');
+            expect(res.text).toContain('id="aspace-qa"');
+            expect(res.text).toContain('id="packaging-and-ingesting"');
+            expect(res.text).toContain('id="queue"');
+            expect(res.text).toContain('id="glossary"');
+            // Links out to the actual step pages.
+            expect(res.text).toContain('/repo/dashboard/ingest/workspace');
+            expect(res.text).toContain('/repo/dashboard/ingest/packaging');
+        });
+
+        it('keeps the DPJ workflow sidebar (with a Help entry) active on the guide', async () => {
+            const cookie = await cookie_for('help-sidebar');
+            const res = await supertest(app)
+                .get('/repo/dashboard/ingest/help')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            /*
+             * Workflow-focus mode: the step icons + the Help entry are present,
+             * and the normal-mode DPJ entry icon is not.
+             */
+            expect(res.text).toContain('title="Make Digital Objects"');
+            expect(res.text).toContain('title="Help — Workflow Guide"');
+            expect(res.text).not.toContain('title="Digital Preservation Jobs"');
+        });
+
+        it('each step page links into the matching guide section', async () => {
+            const cookie = await cookie_for('help-deeplinks');
+            const cases = [
+                ['/repo/dashboard/ingest/workspace', '/ingest/help#make-digital-objects'],
+                ['/repo/dashboard/ingest/aspace-qa', '/ingest/help#aspace-qa'],
+                ['/repo/dashboard/ingest/packaging', '/ingest/help#packaging-and-ingesting'],
+                ['/repo/dashboard/ingest', '/ingest/help#queue'],
+            ];
+            for (const [path, anchor] of cases) {
+                const res = await supertest(app).get(path).set('Cookie', cookie);
+                expect(res.status).toBe(200);
+                expect(res.text).toContain(anchor);
+            }
         });
     });
 });

@@ -1,10 +1,12 @@
 'use strict';
 
-// Vitest global setup. Loaded once per worker.
-//
-// Sets NODE_ENV=test and seeds the minimum env vars required by config/
-// modules so tests don't have to maintain their own .env. Real values are
-// nonsense — these never touch production secrets.
+/*
+ * Vitest global setup. Loaded once per worker.
+ * 
+ * Sets NODE_ENV=test and seeds the minimum env vars required by config/
+ * modules so tests don't have to maintain their own .env. Real values are
+ * nonsense — these never touch production secrets.
+ */
 
 process.env.NODE_ENV = process.env.NODE_ENV || 'test';
 
@@ -23,8 +25,10 @@ process.env.APP_PATH = process.env.APP_PATH || '/repo';
 process.env.APP_PORT = process.env.APP_PORT || '0';
 process.env.LOG_LEVEL = process.env.LOG_LEVEL || 'off';
 
-// Belt-and-braces: never let a test process exit silently because of an
-// unhandled rejection in a non-awaited promise.
+/*
+ * Belt-and-braces: never let a test process exit silently because of an
+ * unhandled rejection in a non-awaited promise.
+ */
 process.on('unhandledRejection', (reason) => {
     console.error('Unhandled rejection in test:', reason);
     throw reason instanceof Error ? reason : new Error(String(reason));

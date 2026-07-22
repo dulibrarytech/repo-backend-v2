@@ -50,10 +50,12 @@ describe('collections/model — project', () => {
         };
         const p = project(row);
         expect(p.title).toBe('JCRS');
-        // The stored value is a dip-store-relative path, so the
-        // projection rewrites `thumbnail` to point at the DuraCloud
-        // proxy. The literal stored value is preserved as
-        // `thumbnail_raw` for the upload modal / debuggers.
+        /*
+         * The stored value is a dip-store-relative path, so the
+         * projection rewrites `thumbnail` to point at the DuraCloud
+         * proxy. The literal stored value is preserved as
+         * `thumbnail_raw` for the upload modal / debuggers.
+         */
         expect(p.thumbnail_raw).toBe('tn-uuid');
         expect(p.thumbnail).toBe('/repo/dashboard/objects/p/thumbnail/raw');
         expect(p.handle).toBe('https://hdl/x');
@@ -72,8 +74,10 @@ describe('collections/model — project', () => {
         };
         const p = project(row);
         expect(p.handle).toBe('db-handle');
-        // Same rewrite — `db-tn` isn't an http URL, so the proxy URL
-        // gets synthesized; raw value preserved for round-tripping.
+        /*
+         * Same rewrite — `db-tn` isn't an http URL, so the proxy URL
+         * gets synthesized; raw value preserved for round-tripping.
+         */
         expect(p.thumbnail_raw).toBe('db-tn');
         expect(p.thumbnail).toBe('/repo/dashboard/objects/p/thumbnail/raw');
         expect(p.title).toBeNull();
@@ -97,8 +101,10 @@ describe('collections/model — project', () => {
             }),
         };
         const p = project(row);
-        // We only surface known fields; mods/transcript intentionally
-        // not enumerated.
+        /*
+         * We only surface known fields; mods/transcript intentionally
+         * not enumerated.
+         */
         expect(p.mods).toBeUndefined();
         expect(p.transcript).toBeUndefined();
     });

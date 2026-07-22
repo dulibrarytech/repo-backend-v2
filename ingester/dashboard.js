@@ -1,21 +1,23 @@
 'use strict';
 
-// Ingest dashboard controllers. Mirrors the v2 ingest-service layout:
-//
-//   Pages           Action endpoints
-//   ─────           ────────────────
-//   /ingest                   (queue list)
-//   /ingest/workspace         (Make Digital Objects)
-//   /ingest/aspace-qa         (ASpace Description QA)
-//   /ingest/packaging         (Packaging and Ingesting)
-//
-//   POST /ingest/workspace/:folder/make-digital-objects
-//   POST /ingest/workspace/:folder/check-metadata
-//   POST /ingest/workspace/:folder/submit-ingest
-//   POST /ingest/workspace/:folder/revert-to-mdo
-//
-// Page rendering: render the body template, then wrap in
-// dashboard/layout.ejs. Partials skip the layout.
+/*
+ * Ingest dashboard controllers. Mirrors the v2 ingest-service layout:
+ * 
+ *   Pages           Action endpoints
+ *   ─────           ────────────────
+ *   /ingest                   (queue list)
+ *   /ingest/workspace         (Make Digital Objects)
+ *   /ingest/aspace-qa         (ASpace Description QA)
+ *   /ingest/packaging         (Packaging and Ingesting)
+ * 
+ *   POST /ingest/workspace/:folder/make-digital-objects
+ *   POST /ingest/workspace/:folder/check-metadata
+ *   POST /ingest/workspace/:folder/submit-ingest
+ *   POST /ingest/workspace/:folder/revert-to-mdo
+ * 
+ * Page rendering: render the body template, then wrap in
+ * dashboard/layout.ejs. Partials skip the layout.
+ */
 
 const app_config = require('../config/app');
 const model = require('./model');
@@ -25,6 +27,7 @@ const qa_service = require('./libs/qa_service');
 const archivematica = require('../libs/archivematica');
 const duracloud = require('../libs/duracloud');
 const aspace = require('../libs/archivesspace');
+const es = require('../libs/elasticsearch');
 const worker_registry = require('./worker');
 const api_controller = require('./controller');
 const {
@@ -78,15 +81,17 @@ function parse_filters(query = {}) {
     const status = (query.status || '').trim();
     const batch = (query.batch || '').trim();
     const is_complete_raw = query.is_complete;
-    // Default to "Open only" (is_complete=0). Terminal rows
-    // (RETURNED_TO_PACKAGING, ROLLED_BACK_TO_READY, AM_DELETION_REQUESTED,
-    // COMPLETE, etc.) clutter the live view and create the appearance of
-    // duplicates after a re-submit: the old terminal row sits next to
-    // the new PENDING row, both showing the same package. Staff can flip
-    // to "All rows" / "Closed only" via the dropdown when they need to
-    // audit terminal rows.
-    //
-    // To opt OUT of the default and see every row, pass `is_complete=all`.
+    /*
+     * Default to "Open only" (is_complete=0). Terminal rows
+     * (RETURNED_TO_PACKAGING, ROLLED_BACK_TO_READY, AM_DELETION_REQUESTED,
+     * COMPLETE, etc.) clutter the live view and create the appearance of
+     * duplicates after a re-submit: the old terminal row sits next to
+     * the new PENDING row, both showing the same package. Staff can flip
+     * to "All rows" / "Closed only" via the dropdown when they need to
+     * audit terminal rows.
+     * 
+     * To opt OUT of the default and see every row, pass `is_complete=all`.
+     */
     let is_complete;
     if (is_complete_raw === '1' || is_complete_raw === 'true') is_complete = 1;
     else if (is_complete_raw === '0' || is_complete_raw === 'false') is_complete = 0;
@@ -105,16 +110,20 @@ function filters_to_query(filters) {
     if (filters.batch) q.batch = filters.batch;
     if (filters.is_complete === '1') q.is_complete = true;
     if (filters.is_complete === '0') q.is_complete = false;
-    // 'all' (and any unrecognized value) skips the is_complete filter
-    // entirely so both halves of the queue surface.
+    /*
+     * 'all' (and any unrecognized value) skips the is_complete filter
+     * entirely so both halves of the queue surface.
+     */
 
-    // Hide AIP-backfill synthetic rows from the default queue view.
-    // They show up on the /admin/aip-backfill page instead. Staff
-    // opt in to seeing them here by entering the batch marker
-    // explicitly in the batch filter (their `batch` value starts
-    // with 'aip-backfill-' — the model's whereNot filter is bypassed
-    // when filters.batch is set, since the exact-match takes
-    // precedence over the LIKE exclusion's intent).
+    /*
+     * Hide AIP-backfill synthetic rows from the default queue view.
+     * They show up on the /admin/aip-backfill page instead. Staff
+     * opt in to seeing them here by entering the batch marker
+     * explicitly in the batch filter (their `batch` value starts
+     * with 'aip-backfill-' — the model's whereNot filter is bypassed
+     * when filters.batch is set, since the exact-match takes
+     * precedence over the LIKE exclusion's intent).
+     */
     if (!filters.batch) q.exclude_backfill = true;
     return q;
 }
@@ -126,10 +135,12 @@ async function decorate(rows) {
                 severity: 'INFO',
                 suggested_action: null,
             };
-            // CANCELLED_BY_USER rows need the prior state to choose
-            // the right rollback target; for every other state the
-            // lookup is skipped to avoid a per-row DB roundtrip on
-            // the queue page.
+            /*
+             * CANCELLED_BY_USER rows need the prior state to choose
+             * the right rollback target; for every other state the
+             * lookup is skipped to avoid a per-row DB roundtrip on
+             * the queue page.
+             */
             let prev = null;
             if (r.pipeline_state === 'CANCELLED_BY_USER') {
                 try {
@@ -142,11 +153,13 @@ async function decorate(rows) {
                     });
                 }
             }
-            // For CANCELLED_BY_USER rows we always surface ONE
-            // follow-up action ("Return to Packaging") regardless of
-            // prev_state. The hint names it explicitly so staff
-            // doesn't have to interpret the word "rollback" — and so
-            // the row text matches the kebab label one-for-one.
+            /*
+             * For CANCELLED_BY_USER rows we always surface ONE
+             * follow-up action ("Return to Packaging") regardless of
+             * prev_state. The hint names it explicitly so staff
+             * doesn't have to interpret the word "rollback" — and so
+             * the row text matches the kebab label one-for-one.
+             */
             let suggested_action = r.suggested_action || meta.suggested_action;
             if (r.pipeline_state === 'CANCELLED_BY_USER') {
                 suggested_action = _cancel_followup_text(prev);
@@ -161,19 +174,23 @@ async function decorate(rows) {
     );
 }
 
-// One-line hint for a CANCELLED_BY_USER row. We deliberately use the
-// same copy regardless of prev_state — the kebab always shows
-// "Return to Packaging" and the controller branches on prev_state
-// internally to decide what cleanup runs. The hint names that
-// kebab item explicitly so staff doesn't have to guess.
-//
-// Keep this aligned with ingest_row.ejs's "Return to Packaging"
-// label — if you rename the kebab item, update this string too.
+/*
+ * One-line hint for a CANCELLED_BY_USER row. We deliberately use the
+ * same copy regardless of prev_state — the kebab always shows
+ * "Return to Packaging" and the controller branches on prev_state
+ * internally to decide what cleanup runs. The hint names that
+ * kebab item explicitly so staff doesn't have to guess.
+ * 
+ * Keep this aligned with ingest_row.ejs's "Return to Packaging"
+ * label — if you rename the kebab item, update this string too.
+ */
 function _cancel_followup_text(prev_state) {
-    // Pre-upload cancels never moved the folder out of 001-ready, so
-    // the worded hint is slightly different (no "moved back" phrasing
-    // — the folder never left). All other cases share the longer
-    // version that explains the move.
+    /*
+     * Pre-upload cancels never moved the folder out of 001-ready, so
+     * the worded hint is slightly different (no "moved back" phrasing
+     * — the folder never left). All other cases share the longer
+     * version that explains the move.
+     */
     if (PRE_AM_PRIOR_STATES.has(prev_state) && !POST_UPLOAD_PRE_AM_PRIOR_STATES.has(prev_state)) {
         return (
             'Cancelled by staff. Use Return to Packaging in the kebab menu' +
@@ -258,11 +275,13 @@ async function aspace_qa_page(req, res) {
 }
 
 async function aspace_qa_list_partial(req, res) {
-    // `show_passed=1` opts out of the qa-passed filter so the
-    // operator can see every folder in /processed (including ones
-    // already QA'd). Any other value — including absent — keeps
-    // the default of hiding already-passed folders so the view
-    // shows ONLY work that still needs review.
+    /*
+     * `show_passed=1` opts out of the qa-passed filter so the
+     * operator can see every folder in /processed (including ones
+     * already QA'd). Any other value — including absent — keeps
+     * the default of hiding already-passed folders so the view
+     * shows ONLY work that still needs review.
+     */
     const show_passed = req.query.show_passed === '1';
     const data = await workspace.list_workspace({
         scope: 'processed',
@@ -285,15 +304,70 @@ async function packaging_page(req, res) {
     });
 }
 
+/*
+ * Static Workflow Guide for the Digital Preservation Jobs section — documents
+ * the overall ingest process and each step. Read-only; no model calls. Keeps
+ * the DPJ "workflow focus" sidebar mode via active='help'.
+ */
+async function help_page(req, res) {
+    render_page(req, res, 'dashboard/ingest_help', {
+        page: 'ingest_help',
+        active: 'help',
+        title: 'Digital Preservation Jobs — Help',
+    });
+}
+
+/*
+ * Count of ingests actively moving through the pipeline. Any row in a
+ * worker-claimable state (STAGE_BY_STATE — PENDING through upload, the
+ * Archivematica transfer/ingest stages, and AIP-store) counts as "in
+ * progress". Halted/terminal rows are NOT claimable, so they don't count —
+ * staff can still submit when a prior ingest has halted awaiting action.
+ * Used to surface the "Ingest in progress" banner and to block a second
+ * simultaneous submit: Archivematica serializes transfers (one at a time),
+ * so overlapping ingests confuse staff and strain SFTP. count_rows_in_states
+ * already filters is_complete=0.
+ */
+async function active_ingest_count() {
+    return model.count_rows_in_states(Object.keys(worker_registry.STAGE_BY_STATE));
+}
+
 async function packaging_list_partial(req, res) {
     const data = await workspace.list_workspace({
         scope: 'processed',
         q: req.query.q,
     });
+    const in_progress = await active_ingest_count();
     render_partial(req, res, 'dashboard/partials/workspace_table', {
         ...data,
         view: 'packaging-and-ingesting',
         actions: ['submit_ingest', 'revert_to_mdo'],
+        /*
+         * Drives the "Ingest in progress" banner + the disabled submit
+         * buttons in workspace_table.ejs. The list partial re-polls every
+         * 30s (+ on workspace:refresh), so both clear automatically once
+         * the active ingest finishes.
+         */
+        ingest_in_progress: in_progress > 0,
+        ingest_in_progress_count: in_progress,
+    });
+}
+
+/*
+ * Standalone "Recent Ingests" page — repo objects ingested in the last 30
+ * days. Reached from the home-page "Recent ingests" card ("Browse all →")
+ * and the Digital Preservation Jobs (workflow) sidebar. The table itself is
+ * the shared Objects table, loaded via HTMX from
+ * /objects/list?recent_days=30 — so it reuses object_row.ejs (Metadata /
+ * Refresh metadata / Publish / Suppress / Convert / Delete + bulk) with the
+ * same RBAC, no duplication. This handler just renders the shell.
+ */
+async function recent_ingests_page(req, res) {
+    render_page(req, res, 'dashboard/ingest_recent', {
+        page: 'ingest_recent',
+        active: 'recent-ingests',
+        title: 'Recent Ingests — Ingest @ DU',
+        days: 30,
     });
 }
 
@@ -308,9 +382,11 @@ async function make_digital_objects_action(req, res) {
     if (!folder) throw new ValidationError('folder is required');
     const actor = actor_from_request(req);
     const result = await workspace.run_make_digital_objects(folder);
-    // Pull the package list AFTER the run completed so a folder that
-    // grew/shrank mid-job is captured accurately. List failures here
-    // don't block the job record — we record with an empty array.
+    /*
+     * Pull the package list AFTER the run completed so a folder that
+     * grew/shrank mid-job is captured accurately. List failures here
+     * don't block the job record — we record with an empty array.
+     */
     const packages = await _packages_for_history(folder).catch(() => []);
     await _record_job_safely({
         job_type: 'make_digital_objects',
@@ -346,19 +422,23 @@ async function aspace_qa_check_action(req, res) {
     const actor = actor_from_request(req);
     const result = await workspace.run_qa_check(folder);
     if (result.ok && result.packages.length > 0) {
-        // No in-process marker any more: the SUCCESSFUL row we
-        // record into tbl_ingest_jobs below IS the marker that
-        // list_workspace's qa-passed filter reads from. We still
-        // emit workspace:refresh so the page re-queries; the
-        // record_job call is awaited before the response, so the
-        // refresh sees the new row.
+        /*
+         * No in-process marker any more: the SUCCESSFUL row we
+         * record into tbl_ingest_jobs below IS the marker that
+         * list_workspace's qa-passed filter reads from. We still
+         * emit workspace:refresh so the page re-queries; the
+         * record_job call is awaited before the response, so the
+         * refresh sees the new row.
+         */
         res.set('HX-Trigger', 'workspace:refresh');
     }
-    // Capture the package names QA actually validated against (one
-    // per AS record checked). This is the most accurate snapshot
-    // for the history view — staff can see exactly what was QA'd —
-    // and also the trigger that hides the folder from the QA list
-    // on the next refresh.
+    /*
+     * Capture the package names QA actually validated against (one
+     * per AS record checked). This is the most accurate snapshot
+     * for the history view — staff can see exactly what was QA'd —
+     * and also the trigger that hides the folder from the QA list
+     * on the next refresh.
+     */
     const package_names = (result.packages || []).map((p) => p && p.name).filter(Boolean);
     await _record_job_safely({
         job_type: 'archivesspace_description_qa',
@@ -380,9 +460,30 @@ async function submit_ingest_action(req, res) {
     const folder = req.params.folder;
     if (!folder) throw new ValidationError('folder is required');
     const actor = actor_from_request(req);
+    /*
+     * One ingest in the pipeline at a time. Archivematica serializes
+     * transfers, and overlapping ingests confuse staff + strain SFTP, so
+     * reject a second submit while one is active. The disabled submit
+     * button in the packaging list is UI-only — this is the authoritative
+     * guard. (TOCTOU: two truly-simultaneous submits could both pass; the
+     * worker still serializes the AM transfers, so this covers the common
+     * case without a heavy DB lock.)
+     */
+    if ((await active_ingest_count()) > 0) {
+        return render_action_result(req, res, {
+            ok: false,
+            severity: 'warn',
+            action: 'Submit to Ingest',
+            folder,
+            message:
+                'An ingest is already in progress. Wait until it completes before submitting another — Archivematica processes one ingest at a time.',
+        });
+    }
     const result = await workspace.submit_to_ingest(folder, actor);
-    // Get the package list we actually queued. On failure we still
-    // pull it (for the audit row) but tolerate any error.
+    /*
+     * Get the package list we actually queued. On failure we still
+     * pull it (for the audit row) but tolerate any error.
+     */
     const packages = await _packages_for_history(folder).catch(() => []);
     await _record_job_safely({
         job_type: 'packaging_and_ingesting',
@@ -392,14 +493,16 @@ async function submit_ingest_action(req, res) {
         actor,
         error: result.ok ? null : result.error,
     });
-    // Also record a SUCCESSFUL archivesspace_description_qa job on
-    // successful submit. The submit path implicitly QA-passes the
-    // folder (the pre-flight gate validates the AS resource exists,
-    // and the worker re-validates per-package via Stage 1). Without
-    // this marker, a folder that went through submit → cancel →
-    // return-to-packaging would resurface in the ASpace QA view
-    // even though it was already QA'd at submit time. The marker
-    // makes the QA filter idempotent across re-submit cycles.
+    /*
+     * Also record a SUCCESSFUL archivesspace_description_qa job on
+     * successful submit. The submit path implicitly QA-passes the
+     * folder (the pre-flight gate validates the AS resource exists,
+     * and the worker re-validates per-package via Stage 1). Without
+     * this marker, a folder that went through submit → cancel →
+     * return-to-packaging would resurface in the ASpace QA view
+     * even though it was already QA'd at submit time. The marker
+     * makes the QA filter idempotent across re-submit cycles.
+     */
     if (result.ok) {
         await _record_job_safely({
             job_type: 'archivesspace_description_qa',
@@ -419,11 +522,13 @@ async function submit_ingest_action(req, res) {
             errors: [result.error || 'unknown error'],
         });
     }
-    // Both the workspace lists AND the queue table need to refresh —
-    // the folder leaves the packaging view and new rows appear in
-    // the queue. The redirect_to / redirect_delay_ms options drive
-    // dashboard.js to navigate after the success banner has
-    // surfaced (~2s).
+    /*
+     * Both the workspace lists AND the queue table need to refresh —
+     * the folder leaves the packaging view and new rows appear in
+     * the queue. The redirect_to / redirect_delay_ms options drive
+     * dashboard.js to navigate after the success banner has
+     * surfaced (~2s).
+     */
     res.set('HX-Trigger', 'workspace:refresh, queue:refresh');
     render_action_result(req, res, {
         ok: true,
@@ -462,12 +567,14 @@ async function revert_to_mdo_action(req, res) {
 
 // --- Queue actions ---------------------------------------------------
 
-// Staff-initiated cancel from the queue page. Pairs the worker abort
-// (kicks long polls awake immediately) with the model flip
-// (CANCELLED_BY_USER + audit event whose payload carries the prior
-// state). Returns the rendered row partial so HTMX can swap it in
-// place; on a stale row (already terminal between page render and
-// click) we return a 409 with the current state for the toast.
+/*
+ * Staff-initiated cancel from the queue page. Pairs the worker abort
+ * (kicks long polls awake immediately) with the model flip
+ * (CANCELLED_BY_USER + audit event whose payload carries the prior
+ * state). Returns the rendered row partial so HTMX can swap it in
+ * place; on a stale row (already terminal between page render and
+ * click) we return a 409 with the current state for the toast.
+ */
 async function cancel_row_action(req, res) {
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id) || id <= 0) {
@@ -487,8 +594,10 @@ async function cancel_row_action(req, res) {
     // 2. Flip the row + write the audit event.
     const result = await model.cancel(id, { actor, reason });
     if (!result.ok && result.reason === 'already_terminal') {
-        // Stale row — surface as a toast via the row's data-attrs.
-        // The dashboard.js error handler picks up 409 responses.
+        /*
+         * Stale row — surface as a toast via the row's data-attrs.
+         * The dashboard.js error handler picks up 409 responses.
+         */
         return res.status(409).json({
             id,
             error: 'already_terminal',
@@ -496,31 +605,37 @@ async function cancel_row_action(req, res) {
         });
     }
 
-    // Re-read + decorate so the response carries the updated state
-    // (and the post-cancel action list — rollback options surface
-    // here based on the captured prior state).
+    /*
+     * Re-read + decorate so the response carries the updated state
+     * (and the post-cancel action list — rollback options surface
+     * here based on the captured prior state).
+     */
     const updated = await model.get_queue_row({ id });
     const [decorated] = await decorate([updated]);
     res.set('HX-Trigger', 'queue:refresh');
     render_partial(req, res, 'dashboard/partials/ingest_row', { row: decorated });
 }
 
-// --- Queue row mutation wrappers -------------------------------------
-//
-// The REST API endpoints (controller.rollback_pre_ingest etc.) return
-// JSON for programmatic clients. The dashboard's row kebab menu wants
-// the row to re-render in place via HTMX outerHTML swap — so these
-// thin wrappers run the same API logic, then either pass through the
-// JSON error (for 4xx/5xx) or re-fetch + render the row partial on
-// success. Avoids duplicating the per-action orchestration in two
-// places (was the source of an earlier bug where the row UI showed
-// raw JSON because hx-post pointed at the JSON API endpoint).
+/*
+ * --- Queue row mutation wrappers -------------------------------------
+ * 
+ * The REST API endpoints (controller.rollback_pre_ingest etc.) return
+ * JSON for programmatic clients. The dashboard's row kebab menu wants
+ * the row to re-render in place via HTMX outerHTML swap — so these
+ * thin wrappers run the same API logic, then either pass through the
+ * JSON error (for 4xx/5xx) or re-fetch + render the row partial on
+ * success. Avoids duplicating the per-action orchestration in two
+ * places (was the source of an earlier bug where the row UI showed
+ * raw JSON because hx-post pointed at the JSON API endpoint).
+ */
 
 async function _wrap_api_as_partial(api_fn, req, res) {
-    // Capture whatever the API controller writes to `res`. The
-    // controller may call status(), json(), and set() in any order;
-    // we record state and only flush to the real `res` after the
-    // function settles.
+    /*
+     * Capture whatever the API controller writes to `res`. The
+     * controller may call status(), json(), and set() in any order;
+     * we record state and only flush to the real `res` after the
+     * function settles.
+     */
     let status_code = 200;
     let json_body = null;
     let hx_trigger = null;
@@ -539,24 +654,32 @@ async function _wrap_api_as_partial(api_fn, req, res) {
         },
     };
 
-    // Validation / not-found / forbidden errors propagate to the
-    // central error handler — same as a direct API hit.
+    /*
+     * Validation / not-found / forbidden errors propagate to the
+     * central error handler — same as a direct API hit.
+     */
     await api_fn(req, mock_res);
 
     if (status_code >= 400) {
-        // Surface the error as a real HTTP response so dashboard.js's
-        // htmx:responseError listener can render a toast.
+        /*
+         * Surface the error as a real HTTP response so dashboard.js's
+         * htmx:responseError listener can render a toast.
+         */
         return res.status(status_code).json(json_body);
     }
 
-    // Success path: re-read the row so the response carries the
-    // updated state + the next action list.
+    /*
+     * Success path: re-read the row so the response carries the
+     * updated state + the next action list.
+     */
     const id = parseInt(req.params.id, 10);
     const updated = await model.get_queue_row({ id });
     if (!updated) {
-        // Defensive — shouldn't happen because the API controller
-        // already 404'd if the row was missing. Surface a 404 with
-        // an empty body so HTMX can fall back to the toast handler.
+        /*
+         * Defensive — shouldn't happen because the API controller
+         * already 404'd if the row was missing. Surface a 404 with
+         * an empty body so HTMX can fall back to the toast handler.
+         */
         return res.status(404).json({ error: 'not_found', id });
     }
     const [decorated] = await decorate([updated]);
@@ -629,12 +752,14 @@ function _parse_history_filters(query = {}) {
 
 // --- Services admin (curation-API + Wasabi health) ------------------
 
-// Admin landing page for "external services this app talks to".
-// Two panels: a combined upstream-services panel (curation-API,
-// Archivematica, DuraCloud, ArchivesSpace — see services_health_partial)
-// and the deeper Wasabi probe (boto3 head_bucket via the curation host).
-// Mounted under /dashboard/admin/services, alongside the indexer +
-// metadata-refresh admin pages.
+/*
+ * Admin landing page for "external services this app talks to".
+ * Two panels: a combined upstream-services panel (curation-API,
+ * Archivematica, DuraCloud, ArchivesSpace — see services_health_partial)
+ * and the deeper Wasabi probe (boto3 head_bucket via the curation host).
+ * Mounted under /dashboard/admin/services, alongside the indexer +
+ * metadata-refresh admin pages.
+ */
 async function services_page(req, res) {
     render_page(req, res, 'dashboard/admin/services', {
         page: 'services',
@@ -643,10 +768,12 @@ async function services_page(req, res) {
     });
 }
 
-// The four upstream services the ingest pipeline depends on, each with
-// a single non-throwing reachability/auth probe. Order here is the
-// render order on the page. Each `probe` resolves to a boolean
-// (reachable) or — for curation — we read the HTTP status.
+/*
+ * The four upstream services the ingest pipeline depends on, each with
+ * a single non-throwing reachability/auth probe. Order here is the
+ * render order on the page. Each `probe` resolves to a boolean
+ * (reachable) or — for curation — we read the HTTP status.
+ */
 const SERVICE_PROBES = [
     { key: 'curation_api', label: 'Curation API', probe: _probe_curation },
     { key: 'archivematica', label: 'Archivematica', probe: _probe_archivematica },
@@ -654,13 +781,15 @@ const SERVICE_PROBES = [
     { key: 'archivesspace', label: 'ArchivesSpace', probe: _probe_archivesspace },
 ];
 
-// HTMX-polled combined health panel. Probes all four upstream services
-// IN PARALLEL — each probe carries its own client-configured timeout,
-// so the panel's wall-clock is the slowest single probe, not the sum.
-// Every probe is wrapped so one failure can't reject the batch; the
-// worst case for any card is reachable=false with the error in detail.
-// Polled every 30s from services_page (same gentle cadence as Wasabi —
-// upstream state changes on the scale of outages + config edits).
+/*
+ * HTMX-polled combined health panel. Probes all four upstream services
+ * IN PARALLEL — each probe carries its own client-configured timeout,
+ * so the panel's wall-clock is the slowest single probe, not the sum.
+ * Every probe is wrapped so one failure can't reject the batch; the
+ * worst case for any card is reachable=false with the error in detail.
+ * Polled every 30s from services_page (same gentle cadence as Wasabi —
+ * upstream state changes on the scale of outages + config edits).
+ */
 async function services_health_partial(req, res) {
     const services = await Promise.all(
         SERVICE_PROBES.map(({ key, label, probe }) => _run_probe(key, label, probe))
@@ -671,15 +800,114 @@ async function services_health_partial(req, res) {
     });
 }
 
-// Wrap a per-service probe with timing + uniform shape + a hard
-// guarantee it never throws. Returns:
-//   { key, label, configured, reachable, detail, elapsed_ms }
-// `configured:false` renders as a neutral "not configured" badge (dev
-// environments that don't wire a given service shouldn't show red).
-async function _run_probe(key, label, probe) {
+/*
+ * Capability phrasing for the post-sign-in banner: map each probed service
+ * to the user-facing feature it backs, so staff read "search & browse" not
+ * just "Elasticsearch". Keys match BANNER_PROBES.
+ */
+const SERVICE_CAPABILITY = {
+    elasticsearch: 'search & browse',
+    curation_api: 'ingest / QA moves',
+    archivematica: 'ingest pipeline',
+    duracloud: 'preservation storage',
+    archivesspace: 'metadata sync',
+};
+
+/*
+ * The banner probes everything the admin grid does PLUS Elasticsearch
+ * (search/browse) — the datastore staff notice first when it's down, and
+ * the headline service in the outage logs that motivated this work. Reuses
+ * SERVICE_PROBES so the curated ingest-upstream set stays single-sourced.
+ */
+const BANNER_PROBES = [
+    ...SERVICE_PROBES,
+    { key: 'elasticsearch', label: 'Elasticsearch', probe: _probe_elasticsearch },
+];
+
+/*
+ * Per-probe deadline for the banner. It MUST exceed the slowest *healthy*
+ * probe, or a real service gets false-flagged as down. ArchivesSpace's probe
+ * is a full login round-trip bounded by ARCHIVESPACE_TIMEOUT_MS (15s), and
+ * DuraCloud's is also 15s; the original 3s value guillotined a healthy-but-slow
+ * ArchivesSpace login and rendered a spurious "Some services are temporarily
+ * unavailable" banner — while the admin health view, which runs the SAME probes
+ * unbounded, correctly showed everything online. 20s clears the 15s
+ * ArchivesSpace/DuraCloud and 10s Elasticsearch probes, while still capping a
+ * genuinely hung probe so this after-paint banner doesn't wait on
+ * Archivematica's 60s request budget (healthy AM/curation liveness is fast,
+ * well under 20s). Invariant guarded in tests against the ArchivesSpace timeout.
+ */
+const BANNER_PROBE_TIMEOUT_MS = 20000;
+
+/*
+ * Post-sign-in "degraded services" banner. Lazy-loaded by the home page
+ * AFTER paint (hx-trigger="load"), so a slow or timing-out probe can never
+ * delay the landing page — the whole point of this work is that sign-in and
+ * the page that follows render regardless of third-party availability.
+ * Probes run in parallel (each with its own client timeout) and never throw
+ * (_run_probe guarantees it). Renders the alert only for services that are
+ * configured but unreachable; when nothing is degraded the partial emits
+ * nothing and the hx-swap="outerHTML" mount is simply removed.
+ */
+async function services_banner_partial(req, res) {
+    const results = await Promise.all(
+        BANNER_PROBES.map(({ key, label, probe }) =>
+            _run_probe(key, label, probe, BANNER_PROBE_TIMEOUT_MS)
+        )
+    );
+    const degraded = results
+        .filter((s) => s.configured && !s.reachable)
+        .map((s) => ({ label: s.label, capability: SERVICE_CAPABILITY[s.key] || '' }));
+    render_partial(req, res, 'dashboard/partials/services_banner', {
+        degraded,
+        checked_at: new Date().toISOString(),
+    });
+}
+
+/*
+ * Race a probe against a deadline so the post-sign-in banner resolves fast
+ * even when a service hangs on a long client timeout (ES's connect timeout is
+ * ~10s). On expiry we RESOLVE to a sentinel rather than rejecting, so the
+ * caller treats it as a normal "unreachable" — not a surprise throw. A late
+ * rejection from the losing promise is swallowed so it can't surface as an
+ * unhandledRejection. timeout_ms <= 0 means "no deadline" (the admin grid).
+ */
+function _with_deadline(probe, timeout_ms) {
+    const p = Promise.resolve().then(probe);
+    if (!timeout_ms || timeout_ms <= 0) return p;
+    p.catch(() => {});
+    return Promise.race([
+        p,
+        new Promise((resolve) => {
+            const t = setTimeout(() => resolve({ __timed_out: true }), timeout_ms);
+            if (t.unref) t.unref();
+        }),
+    ]);
+}
+
+/*
+ * Wrap a per-service probe with timing + uniform shape + a hard
+ * guarantee it never throws. Returns:
+ *   { key, label, configured, reachable, detail, elapsed_ms }
+ * `configured:false` renders as a neutral "not configured" badge (dev
+ * environments that don't wire a given service shouldn't show red).
+ * `timeout_ms` (optional) bounds the probe — on expiry the service is
+ * reported unreachable with a "timed out" detail instead of hanging.
+ */
+async function _run_probe(key, label, probe, timeout_ms = 0) {
     const started = Date.now();
     try {
-        const out = await probe();
+        const out = await _with_deadline(probe, timeout_ms);
+        if (out && out.__timed_out) {
+            return {
+                key,
+                label,
+                configured: true,
+                reachable: false,
+                detail: `probe timed out after ${timeout_ms}ms`,
+                elapsed_ms: Date.now() - started,
+            };
+        }
         const configured = out.configured !== false;
         return {
             key,
@@ -690,9 +918,11 @@ async function _run_probe(key, label, probe) {
             elapsed_ms: Date.now() - started,
         };
     } catch (err) {
-        // Defensive: the individual _probe_* helpers are written not to
-        // throw, but a surprise (e.g. a config read blowing up) must
-        // still render a red card rather than 500 the whole panel.
+        /*
+         * Defensive: the individual _probe_* helpers are written not to
+         * throw, but a surprise (e.g. a config read blowing up) must
+         * still render a red card rather than 500 the whole panel.
+         */
         log.warn({ event: 'service_probe_threw', service: key, err: err.message });
         return {
             key,
@@ -705,8 +935,10 @@ async function _run_probe(key, label, probe) {
     }
 }
 
-// Curation API — GET /health (no auth). qa_service.health() throws on a
-// transport failure, which _run_probe catches into reachable=false.
+/*
+ * Curation API — GET /health (no auth). qa_service.health() throws on a
+ * transport failure, which _run_probe catches into reachable=false.
+ */
 async function _probe_curation() {
     if (!qa_service.is_configured()) return { configured: false };
     const r = await qa_service.health();
@@ -714,10 +946,12 @@ async function _probe_curation() {
     return { configured: true, reachable: ok, detail: `GET /health → ${r.status}` };
 }
 
-// Archivematica — transfer (main) API liveness. health_api() returns
-// { ok, status, error } so the card can name the actual failure (a
-// 401/403 auth problem, a 404 base-URL problem, or a TLS/transport
-// error) instead of a generic "no HTTP 200".
+/*
+ * Archivematica — transfer (main) API liveness. health_api() returns
+ * { ok, status, error } so the card can name the actual failure (a
+ * 401/403 auth problem, a 404 base-URL problem, or a TLS/transport
+ * error) instead of a generic "no HTTP 200".
+ */
 async function _probe_archivematica() {
     if (!archivematica.is_configured()) return { configured: false };
     const r = await archivematica.health_api();
@@ -725,16 +959,20 @@ async function _probe_archivematica() {
     if (r.ok) {
         detail = 'transfer API reachable (HTTP 200)';
     } else if (r.error) {
-        // Transport-level failure — surface it verbatim. A TLS message
-        // here ("self-signed certificate", "unable to verify the first
-        // certificate") means the AM cert isn't trusted; set
-        // NODE_EXTRA_CA_CERTS to the AM host's CA (v2 doesn't disable
-        // TLS verification the way v1 did).
+        /*
+         * Transport-level failure — surface it verbatim. A TLS message
+         * here ("self-signed certificate", "unable to verify the first
+         * certificate") means the AM cert isn't trusted; set
+         * NODE_EXTRA_CA_CERTS to the AM host's CA (v2 doesn't disable
+         * TLS verification the way v1 did).
+         */
         detail = `transport error: ${r.error}`;
     } else {
-        // Got an HTTP response, just not 200. 401/403 → check
-        // ARCHIVEMATICA_USERNAME / ARCHIVEMATICA_API_KEY; 404 → check
-        // the ARCHIVEMATICA_API base URL.
+        /*
+         * Got an HTTP response, just not 200. 401/403 → check
+         * ARCHIVEMATICA_USERNAME / ARCHIVEMATICA_API_KEY; 404 → check
+         * the ARCHIVEMATICA_API base URL.
+         */
         detail = `transfer API returned HTTP ${r.status}`;
     }
     return { configured: true, reachable: r.ok, detail };
@@ -762,12 +1000,31 @@ async function _probe_archivesspace() {
     };
 }
 
-// HTMX-polled Wasabi status panel. Single curation-API hit — the
-// `head_bucket` probe — wrapped in graceful failure handling so a
-// curation-side outage renders as a clear red card rather than a
-// 500 page. Polled every 30s from the services_page (Wasabi state
-// changes on the scale of config edits + outages, not seconds, so
-// the cadence is gentler than the 5s indexer poll).
+/*
+ * Elasticsearch — cluster health round-trip (the search/browse backend).
+ * es.health() catches internally and returns { ok, status, err? }, never
+ * throwing. Not part of the ingest-upstream admin grid, but probed by the
+ * post-sign-in banner because search is what staff notice first.
+ */
+async function _probe_elasticsearch() {
+    if (!es.is_configured()) return { configured: false };
+    const r = await es.health();
+    if (r.ok) return { configured: true, reachable: true, detail: `cluster ${r.status}` };
+    const detail =
+        r.status === 'unreachable'
+            ? `unreachable${r.err ? ': ' + r.err : ''}`
+            : `cluster ${r.status}`;
+    return { configured: true, reachable: false, detail };
+}
+
+/*
+ * HTMX-polled Wasabi status panel. Single curation-API hit — the
+ * `head_bucket` probe — wrapped in graceful failure handling so a
+ * curation-side outage renders as a clear red card rather than a
+ * 500 page. Polled every 30s from the services_page (Wasabi state
+ * changes on the scale of config edits + outages, not seconds, so
+ * the cadence is gentler than the 5s indexer poll).
+ */
 async function services_wasabi_partial(req, res) {
     let reachable = false;
     let body = null;
@@ -784,9 +1041,11 @@ async function services_wasabi_partial(req, res) {
         reachable,
         body,
         transport_error,
-        // Cosmetics: render a relative timestamp client-side from
-        // this server-side stamp. EJS templates don't have a great
-        // date helper so we just stringify.
+        /*
+         * Cosmetics: render a relative timestamp client-side from
+         * this server-side stamp. EJS templates don't have a great
+         * date helper so we just stringify.
+         */
         checked_at: new Date().toISOString(),
     });
 }
@@ -800,27 +1059,35 @@ function _errors_array(result) {
     return result.error ? [result.error] : ['Unknown error'];
 }
 
-// List the packages currently in a folder via the curation-service.
-// Used by the job-recorder so the history row captures the actual
-// packages the action ran against (rather than guessing).
+/*
+ * List the packages currently in a folder via the curation-service.
+ * Used by the job-recorder so the history row captures the actual
+ * packages the action ran against (rather than guessing).
+ */
 async function _packages_for_history(folder) {
     const data = await workspace.list_workspace({
-        // Either scope works — we only need this folder's package list.
-        // 'unprocessed' is the slightly more general endpoint.
+        /*
+         * Either scope works — we only need this folder's package list.
+         * 'unprocessed' is the slightly more general endpoint.
+         */
         scope: 'unprocessed',
     });
     const match = (data.folders || []).find((f) => f.name === folder);
     if (match && Array.isArray(match.packages)) return match.packages;
-    // Fall back to /processed (the folder may have moved between
-    // calls). If both miss, return [] — the history row will simply
-    // show no packages, which is honest.
+    /*
+     * Fall back to /processed (the folder may have moved between
+     * calls). If both miss, return [] — the history row will simply
+     * show no packages, which is honest.
+     */
     const data_p = await workspace.list_workspace({ scope: 'processed' });
     const match_p = (data_p.folders || []).find((f) => f.name === folder);
     return match_p && Array.isArray(match_p.packages) ? match_p.packages : [];
 }
 
-// Record-job wrapper — never throws. A history-write failure must not
-// block the user-facing action result; we log and continue.
+/*
+ * Record-job wrapper — never throws. A history-write failure must not
+ * block the user-facing action result; we log and continue.
+ */
 async function _record_job_safely(payload) {
     try {
         return await jobs.record_job(payload);
@@ -847,6 +1114,8 @@ module.exports = {
     aspace_qa_list_partial,
     packaging_page,
     packaging_list_partial,
+    recent_ingests_page,
+    help_page,
     // Workspace actions
     make_digital_objects_action,
     aspace_qa_check_action,
@@ -859,4 +1128,9 @@ module.exports = {
     services_page,
     services_health_partial,
     services_wasabi_partial,
+    services_banner_partial,
+    // exported for tests
+    _run_probe,
+    _with_deadline,
+    BANNER_PROBE_TIMEOUT_MS,
 };

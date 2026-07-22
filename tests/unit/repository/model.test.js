@@ -47,8 +47,10 @@ describe('repository/model — input validation', () => {
         });
 
         it('bulk_publish rejects more than MAX_BULK_PIDS', async () => {
-            // 101 distinct real v4 UUIDs — we want the cap check to fire,
-            // not the per-pid validator (which would catch all-zero fakes).
+            /*
+             * 101 distinct real v4 UUIDs — we want the cap check to fire,
+             * not the per-pid validator (which would catch all-zero fakes).
+             */
             const { randomUUID } = require('node:crypto');
             const huge = Array.from({ length: 101 }, () => randomUUID());
             await expect(repo_model.bulk_publish(huge)).rejects.toMatchObject({
@@ -79,10 +81,12 @@ describe('repository/model — input validation', () => {
     });
 
     it('PUBLIC_FIELDS does not leak long-text columns', () => {
-        // mods / transcript / transcript_search are never returned —
-        // they're huge ASpace blobs. display_record IS included here
-        // (the dashboard parses it for title/handle/uri at render time)
-        // but the API controllers strip it before responding.
+        /*
+         * mods / transcript / transcript_search are never returned —
+         * they're huge ASpace blobs. display_record IS included here
+         * (the dashboard parses it for title/handle/uri at render time)
+         * but the API controllers strip it before responding.
+         */
         const forbidden = ['mods', 'transcript', 'transcript_search'];
         for (const f of forbidden) {
             expect(repo_model.PUBLIC_FIELDS).not.toContain(f);

@@ -1,26 +1,28 @@
 'use strict';
 
-// AIPs dashboard controller — Stage 6 + legacy migration surface.
-//
-// Five routes:
-//
-//   GET  /dashboard/aips                — list page (filters + spinner)
-//   GET  /dashboard/aips/list           — table partial (HTMX swap)
-//   GET  /dashboard/aips/:id/download   — 302 to a presigned Wasabi URL,
-//                                          increment the downloaded counter
-//   POST /dashboard/aips/:id/retry      — clear backoff/attempts and
-//                                          flip the corresponding queue
-//                                          row back to AIP_STORE_PENDING
-//                                          so Stage 6 re-runs
-//   GET  /dashboard/aips/:id/row        — HTMX-targeted single-row
-//                                          re-render after retry (so the
-//                                          table updates in place)
-//
-// Read pattern follows objects.ejs / collections.ejs: a page +
-// partial split where the page sets up filter inputs and the partial
-// is HTMX-swapped on filter changes. The partial joins
-// tbl_aip_store ← LEFT → tbl_objects on uuid=pid so the table can
-// show the human-readable object title alongside the AIP filename.
+/*
+ * AIPs dashboard controller — Stage 6 + legacy migration surface.
+ * 
+ * Five routes:
+ * 
+ *   GET  /dashboard/aips                — list page (filters + spinner)
+ *   GET  /dashboard/aips/list           — table partial (HTMX swap)
+ *   GET  /dashboard/aips/:id/download   — 302 to a presigned Wasabi URL,
+ *                                          increment the downloaded counter
+ *   POST /dashboard/aips/:id/retry      — clear backoff/attempts and
+ *                                          flip the corresponding queue
+ *                                          row back to AIP_STORE_PENDING
+ *                                          so Stage 6 re-runs
+ *   GET  /dashboard/aips/:id/row        — HTMX-targeted single-row
+ *                                          re-render after retry (so the
+ *                                          table updates in place)
+ * 
+ * Read pattern follows objects.ejs / collections.ejs: a page +
+ * partial split where the page sets up filter inputs and the partial
+ * is HTMX-swapped on filter changes. The partial joins
+ * tbl_aip_store ← LEFT → tbl_objects on uuid=pid so the table can
+ * show the human-readable object title alongside the AIP filename.
+ */
 
 const app_config = require('../config/app');
 const log = require('../libs/log');
@@ -77,20 +79,24 @@ function trigger_toast(res, level, message) {
     trigger_events(res, { toast: { level, message } });
 }
 
-// Coerce a query-string value to a string. Express's qs parser will
-// produce a string for a single occurrence, an array of strings for
-// repeated keys (?q=a&q=b → ['a','b']), and undefined when absent.
-// We pick the last value on array (matches the common "last wins"
-// convention) and fall back to '' on undefined/null.
+/*
+ * Coerce a query-string value to a string. Express's qs parser will
+ * produce a string for a single occurrence, an array of strings for
+ * repeated keys (?q=a&q=b → ['a','b']), and undefined when absent.
+ * We pick the last value on array (matches the common "last wins"
+ * convention) and fall back to '' on undefined/null.
+ */
 function _str(v) {
     if (v === undefined || v === null) return '';
     if (Array.isArray(v)) return _str(v[v.length - 1]);
     return String(v);
 }
 
-// Format bytes for the dashboard column. Mirrors libs/format.js style
-// but kept inline because the rest of the AIP-store dashboard is
-// also display-formatting glue.
+/*
+ * Format bytes for the dashboard column. Mirrors libs/format.js style
+ * but kept inline because the rest of the AIP-store dashboard is
+ * also display-formatting glue.
+ */
 function format_bytes(n) {
     if (n === null || n === undefined) return '—';
     const bytes = Number(n);
@@ -102,20 +108,24 @@ function format_bytes(n) {
     return `${v.toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
 }
 
-// Enrich list-page rows with the matching tbl_objects title. We do
-// this as a separate batch read (one query for all rows on the page)
-// rather than via a JOIN so the existing aip_store_model.list stays
-// scoped to its own table and tests don't need to seed tbl_objects.
+/*
+ * Enrich list-page rows with the matching tbl_objects title. We do
+ * this as a separate batch read (one query for all rows on the page)
+ * rather than via a JOIN so the existing aip_store_model.list stays
+ * scoped to its own table and tests don't need to seed tbl_objects.
+ */
 async function _attach_titles(items) {
     const uuids = items.map((r) => r.uuid).filter(Boolean);
     if (uuids.length === 0) return items;
-    let by_pid = {};
+    const by_pid = {};
     try {
         const objs = await repository_model.list_by_pids(uuids);
         for (const o of objs) by_pid[o.pid] = o;
     } catch (err) {
-        // Title is decoration — don't fail the page if the read
-        // glitches. Loud log so an operator notices.
+        /*
+         * Title is decoration — don't fail the page if the read
+         * glitches. Loud log so an operator notices.
+         */
         log.warn({ event: 'aip_dashboard_title_lookup_failed', err: err.message });
     }
     return items.map((r) => {
@@ -141,11 +151,13 @@ async function _attach_titles(items) {
 async function aips_page(req, res) {
     render_page(req, res, 'dashboard/aips', {
         page: 'aips',
-        // 'aips' (not 'admin') so the sidebar renders normal-mode
-        // nav with the AIPs icon highlighted in place. AIPs is
-        // adjacent to Digital Preservation Jobs in the main nav
-        // — same staff path as objects/collections — rather than
-        // hidden behind the Admin Utils focus mode.
+        /*
+         * 'aips' (not 'admin') so the sidebar renders normal-mode
+         * nav with the AIPs icon highlighted in place. AIPs is
+         * adjacent to Digital Preservation Jobs in the main nav
+         * — same staff path as objects/collections — rather than
+         * hidden behind the Admin Utils focus mode.
+         */
         active: 'aips',
         title: 'AIPs — Repo Dashboard',
         filters: {
@@ -158,13 +170,15 @@ async function aips_page(req, res) {
 }
 
 async function aips_table_partial(req, res) {
-    // Defensive coercion: Express parses duplicated query keys as an
-    // array (e.g. ?q=&q=foo → ['', 'foo']). The dashboard view tries
-    // hard not to send duplicates (see aips_table.ejs pagination
-    // comment), but a hand-crafted URL or a misbehaving extension
-    // could still send one. Without this, `req.query.q.trim()` would
-    // throw "trim is not a function" and we'd 500 on filter changes.
-    // Last-wins matches what callers usually mean by a duplicated key.
+    /*
+     * Defensive coercion: Express parses duplicated query keys as an
+     * array (e.g. ?q=&q=foo → ['', 'foo']). The dashboard view tries
+     * hard not to send duplicates (see aips_table.ejs pagination
+     * comment), but a hand-crafted URL or a misbehaving extension
+     * could still send one. Without this, `req.query.q.trim()` would
+     * throw "trim is not a function" and we'd 500 on filter changes.
+     * Last-wins matches what callers usually mean by a duplicated key.
+     */
     const q = _str(req.query.q).trim();
     const source = _str(req.query.source);
     const status = _str(req.query.status);
@@ -188,13 +202,15 @@ async function aips_table_partial(req, res) {
     });
 }
 
-// 302 to a presigned Wasabi URL. The browser pulls the AIP bytes
-// directly from Wasabi without transiting either v2 or the curation
-// service.
-//
-// On the way out we also increment the downloaded counter so the
-// dashboard can show usage. Counter bump is best-effort — a failure
-// there shouldn't block the user's download.
+/*
+ * 302 to a presigned Wasabi URL. The browser pulls the AIP bytes
+ * directly from Wasabi without transiting either v2 or the curation
+ * service.
+ * 
+ * On the way out we also increment the downloaded counter so the
+ * dashboard can show usage. Counter bump is best-effort — a failure
+ * there shouldn't block the user's download.
+ */
 async function aip_download(req, res) {
     const id = Number.parseInt(req.params.id, 10);
     if (!Number.isInteger(id) || id <= 0) {
@@ -210,12 +226,14 @@ async function aip_download(req, res) {
         );
     }
 
-    // Resolve the Wasabi key, walking: wasabi_key → aip → basename(aip_legacy).
-    // The third fallback exists because ~332 legacy rows have an empty
-    // `aip` column but a populated `aip_legacy` — the original migration's
-    // basename-extraction pass never ran for them, but the file IS in
-    // Wasabi at the basename of aip_legacy. See
-    // aip_store_model.derive_wasabi_key for the full rationale.
+    /*
+     * Resolve the Wasabi key, walking: wasabi_key → aip → basename(aip_legacy).
+     * The third fallback exists because ~332 legacy rows have an empty
+     * `aip` column but a populated `aip_legacy` — the original migration's
+     * basename-extraction pass never ran for them, but the file IS in
+     * Wasabi at the basename of aip_legacy. See
+     * aip_store_model.derive_wasabi_key for the full rationale.
+     */
     const key = aip_store_model.derive_wasabi_key(row);
     if (!key) {
         throw new ValidationError(
@@ -249,17 +267,19 @@ async function aip_download(req, res) {
     res.redirect(302, presign.data.url);
 }
 
-// Manual retry for an AIP_STORE_FAILED row. Two-step:
-//   1. Reset tbl_aip_store row's attempts/next_attempt_at/error.
-//   2. Find the matching ingest_queue row (by repo PID) and flip
-//      pipeline_state back to AIP_STORE_PENDING so the worker
-//      picks it up next tick.
-//
-// Step 2 is the load-bearing part — without it Stage 6 won't run
-// again no matter how clean the tbl_aip_store row is. If we can't
-// find a queue row (legacy migration rows that pre-date the v2
-// queue), we still reset tbl_aip_store but return a warning so
-// staff knows the retry won't auto-execute.
+/*
+ * Manual retry for an AIP_STORE_FAILED row. Two-step:
+ *   1. Reset tbl_aip_store row's attempts/next_attempt_at/error.
+ *   2. Find the matching ingest_queue row (by repo PID) and flip
+ *      pipeline_state back to AIP_STORE_PENDING so the worker
+ *      picks it up next tick.
+ * 
+ * Step 2 is the load-bearing part — without it Stage 6 won't run
+ * again no matter how clean the tbl_aip_store row is. If we can't
+ * find a queue row (legacy migration rows that pre-date the v2
+ * queue), we still reset tbl_aip_store but return a warning so
+ * staff knows the retry won't auto-execute.
+ */
 async function aip_retry(req, res) {
     const id = Number.parseInt(req.params.id, 10);
     if (!Number.isInteger(id) || id <= 0) {
@@ -270,11 +290,13 @@ async function aip_retry(req, res) {
 
     let queue_retry_ok = false;
     try {
-        // The ingest queue's natural link to a tbl_aip_store row is
-        // the AM AIP UUID (which we stored on the v2 row at copy
-        // time). For legacy rows where aip_uuid is NULL, there's no
-        // way to find the queue row — return an informational
-        // warning rather than fail the retry.
+        /*
+         * The ingest queue's natural link to a tbl_aip_store row is
+         * the AM AIP UUID (which we stored on the v2 row at copy
+         * time). For legacy rows where aip_uuid is NULL, there's no
+         * way to find the queue row — return an informational
+         * warning rather than fail the retry.
+         */
         if (reset.aip_uuid) {
             const queue_rows = await ingest_model.list_queue(
                 { sip_uuid: reset.aip_uuid },
@@ -309,15 +331,19 @@ async function aip_retry(req, res) {
             id,
             err: err.message,
         });
-        // Fall through — tbl_aip_store was already reset, so the
-        // toast can be honest about what happened.
+        /*
+         * Fall through — tbl_aip_store was already reset, so the
+         * toast can be honest about what happened.
+         */
     }
 
-    // ASCII-only toast text: HTTP headers can't carry a Unicode
-    // em-dash, and trigger_toast round-trips through HX-Trigger.
-    // Same gotcha documented in aip_backfill_controller.js and the
-    // metadata admin controller — kept loud so future contributors
-    // don't reintroduce the en-/em-dash here.
+    /*
+     * ASCII-only toast text: HTTP headers can't carry a Unicode
+     * em-dash, and trigger_toast round-trips through HX-Trigger.
+     * Same gotcha documented in aip_backfill_controller.js and the
+     * metadata admin controller — kept loud so future contributors
+     * don't reintroduce the en-/em-dash here.
+     */
     trigger_toast(
         res,
         queue_retry_ok ? 'success' : 'warn',
@@ -332,10 +358,12 @@ async function aip_retry(req, res) {
     render_partial(req, res, 'dashboard/partials/aip_row', { item: enriched[0] });
 }
 
-// HTMX target for the post-retry single-row refresh, in case the
-// table needs to pull a fresh row from outside the retry response
-// path (e.g. after an external state change). Same response shape
-// as the retry handler's body.
+/*
+ * HTMX target for the post-retry single-row refresh, in case the
+ * table needs to pull a fresh row from outside the retry response
+ * path (e.g. after an external state change). Same response shape
+ * as the retry handler's body.
+ */
 async function aip_row_partial(req, res) {
     const id = Number.parseInt(req.params.id, 10);
     if (!Number.isInteger(id) || id <= 0) {

@@ -55,10 +55,31 @@ describe('search/model — DB integration', () => {
         expect(r.total).toBe(1);
     });
 
+    it('not_member_of_collection + exclude_collections scope the add-objects picker', async () => {
+        // Eligible: an active object not already in the target collection.
+        const eligible = await db_helper.seed_object({ is_member_of_collection: 'codu:root' });
+        // Excluded: already a member of the target collection.
+        await db_helper.seed_object({ is_member_of_collection: 'codu:target' });
+        // Excluded: a collection row (can't be a member).
+        await db_helper.seed_object({
+            object_type: 'collection',
+            is_member_of_collection: 'codu:root',
+        });
+        const r = await search_model.search({
+            is_active: true,
+            exclude_collections: true,
+            not_member_of_collection: 'codu:target',
+        });
+        expect(r.total).toBe(1);
+        expect(r.items[0].pid).toBe(eligible.pid);
+    });
+
     it('matches text stored only in display_record (title + descriptive metadata)', async () => {
-        // The title lives ONLY in the display_record JSON envelope —
-        // there's no dedicated title column. Searching it is the whole
-        // point of including display_record in SEARCHABLE_COLUMNS.
+        /*
+         * The title lives ONLY in the display_record JSON envelope —
+         * there's no dedicated title column. Searching it is the whole
+         * point of including display_record in SEARCHABLE_COLUMNS.
+         */
         await db_helper.seed_object({
             file_name: 'unrelated.dat',
             handle: 'https://hdl.invalid/x',
@@ -73,8 +94,10 @@ describe('search/model — DB integration', () => {
     });
 
     it('finds a title by plural query (singularization): "Former patients" → "Former patient ..."', async () => {
-        // The exact scenario reported by staff: searching the plural
-        // "patients" must surface a record titled "Former patient ...".
+        /*
+         * The exact scenario reported by staff: searching the plural
+         * "patients" must surface a record titled "Former patient ...".
+         */
         await db_helper.seed_object({
             display_record: JSON.stringify({
                 title: 'Former patient in Ford county sanatorium, 1938',
@@ -137,8 +160,10 @@ describe('search/model — DB integration', () => {
     it('does not match underscore as a wildcard (LIKE-escape)', async () => {
         await db_helper.seed_object({ file_name: 'aXb.jpg' });
         await db_helper.seed_object({ file_name: 'aZb.jpg' });
-        // q='a_b' with LIKE wildcard semantics would match both;
-        // our escape turns it into a literal underscore match — neither.
+        /*
+         * q='a_b' with LIKE wildcard semantics would match both;
+         * our escape turns it into a literal underscore match — neither.
+         */
         const r = await search_model.search({ q: 'a_b' });
         expect(r.total).toBe(0);
     });

@@ -1,25 +1,27 @@
 'use strict';
 
-// Admin: AIP backfill — catch-up the ~tens of thousands of AIPs that
-// ingested under v2 BEFORE Stage 6 existed (or with the feature flag
-// off). Each "Start backfill" click enqueues up to
-// cfg.aip_store.backfill_chunk_size synthetic queue rows that the
-// existing ingest worker drains via Stage 6.
-//
-// Routes mounted at /dashboard/admin/aip-backfill/* (see
-// dashboard/routes.js):
-//
-//   GET  /dashboard/admin/aip-backfill            full page
-//   GET  /dashboard/admin/aip-backfill/status     status partial (polled)
-//   POST /dashboard/admin/aip-backfill/start      enqueue next chunk
-//   POST /dashboard/admin/aip-backfill/cancel     cancel pending rows in
-//                                                  the latest batch
-//
-// Shape mirrors metadata/admin_controller.js so operators only have
-// to learn one admin pattern. Each handler is a thin shell over the
-// ingester/aip_backfill model; ValidationError bubbles to the central
-// handler for the JSON envelope, all other errors land as a 500
-// (with the request id) via the standard error path.
+/*
+ * Admin: AIP backfill — catch-up the ~tens of thousands of AIPs that
+ * ingested under v2 BEFORE Stage 6 existed (or with the feature flag
+ * off). Each "Start backfill" click enqueues up to
+ * cfg.aip_store.backfill_chunk_size synthetic queue rows that the
+ * existing ingest worker drains via Stage 6.
+ * 
+ * Routes mounted at /dashboard/admin/aip-backfill/* (see
+ * dashboard/routes.js):
+ * 
+ *   GET  /dashboard/admin/aip-backfill            full page
+ *   GET  /dashboard/admin/aip-backfill/status     status partial (polled)
+ *   POST /dashboard/admin/aip-backfill/start      enqueue next chunk
+ *   POST /dashboard/admin/aip-backfill/cancel     cancel pending rows in
+ *                                                  the latest batch
+ * 
+ * Shape mirrors metadata/admin_controller.js so operators only have
+ * to learn one admin pattern. Each handler is a thin shell over the
+ * ingester/aip_backfill model; ValidationError bubbles to the central
+ * handler for the JSON envelope, all other errors land as a 500
+ * (with the request id) via the standard error path.
+ */
 
 const app_config = require('../config/app');
 const aip_backfill = require('../ingester/aip_backfill');
@@ -72,10 +74,12 @@ function trigger_toast(res, level, message) {
     trigger_events(res, { toast: { level, message } });
 }
 
-// Build the status object the partial renders. Combines the model's
-// per-state counts with the total "missing AIPs" headline so the
-// operator can see, in one glance: how many are left to do AND how
-// the in-flight batch is progressing.
+/*
+ * Build the status object the partial renders. Combines the model's
+ * per-state counts with the total "missing AIPs" headline so the
+ * operator can see, in one glance: how many are left to do AND how
+ * the in-flight batch is progressing.
+ */
 async function build_status() {
     const cfg = app_config();
     const aip_cfg = cfg.aip_store || {};
@@ -86,8 +90,10 @@ async function build_status() {
     return {
         missing,
         status,
-        // Surface the chunk size + feature-flag state so the page
-        // doesn't have to import config itself.
+        /*
+         * Surface the chunk size + feature-flag state so the page
+         * doesn't have to import config itself.
+         */
         chunk_size: aip_cfg.backfill_chunk_size || 1000,
         aip_store_enabled: Boolean(aip_cfg.enabled),
     };
@@ -108,18 +114,22 @@ async function backfill_status_partial(req, res) {
     render_partial(req, res, 'dashboard/partials/aip_backfill_status', data);
 }
 
-// Start a chunk. Refuses if Stage 6 itself is disabled — without
-// AIP_STORE_ENABLED=true the worker would just drain the synthetic
-// rows as no-ops without contacting Wasabi. Better to fail loudly
-// at start than have the operator wonder why nothing happened.
+/*
+ * Start a chunk. Refuses if Stage 6 itself is disabled — without
+ * AIP_STORE_ENABLED=true the worker would just drain the synthetic
+ * rows as no-ops without contacting Wasabi. Better to fail loudly
+ * at start than have the operator wonder why nothing happened.
+ */
 async function backfill_start(req, res) {
     const cfg = app_config().aip_store;
     try {
         if (!cfg || !cfg.enabled) {
-            // ASCII-only message: HTTP header values can't carry
-            // a Unicode em-dash, and trigger_toast round-trips
-            // through HX-Trigger. Same gotcha documented in
-            // metadata/admin_controller.js's start_refresh handler.
+            /*
+             * ASCII-only message: HTTP header values can't carry
+             * a Unicode em-dash, and trigger_toast round-trips
+             * through HX-Trigger. Same gotcha documented in
+             * metadata/admin_controller.js's start_refresh handler.
+             */
             throw new ValidationError(
                 'AIP_STORE_ENABLED is off - set it to true and restart the ' +
                     'worker before starting a backfill (otherwise the queue ' +
@@ -151,10 +161,12 @@ async function backfill_start(req, res) {
     return backfill_status_partial(req, res);
 }
 
-// Cancel the pending rows in the most recent batch. We don't ask the
-// caller for a batch_marker - the page only has one "Cancel" button
-// and the most-recent batch is the only one that could realistically
-// have rows still PENDING (worker drains FIFO).
+/*
+ * Cancel the pending rows in the most recent batch. We don't ask the
+ * caller for a batch_marker - the page only has one "Cancel" button
+ * and the most-recent batch is the only one that could realistically
+ * have rows still PENDING (worker drains FIFO).
+ */
 async function backfill_cancel(req, res) {
     try {
         const status = await aip_backfill.get_status();

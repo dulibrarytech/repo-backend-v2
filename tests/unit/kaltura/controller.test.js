@@ -1,8 +1,10 @@
 'use strict';
 
-// Unit tests for kaltura/controller — focuses on the pure helpers and
-// the per-file resolution rules. The DB + HTTP layers are integration
-// concerns covered by tests/integration/kaltura.
+/*
+ * Unit tests for kaltura/controller — focuses on the pure helpers and
+ * the per-file resolution rules. The DB + HTTP layers are integration
+ * concerns covered by tests/integration/kaltura.
+ */
 
 const controller = require('../../../kaltura/controller');
 
@@ -84,9 +86,11 @@ describe('kaltura/controller — _extract_entry_ids', () => {
 });
 
 describe('kaltura/controller — _resolve_file', () => {
-    // Fake service injected via deps so the SDK never runs in unit
-    // tests. The controller's _resolve_file accepts `{ service }` as
-    // its 4th arg precisely so callers (and tests) can override.
+    /*
+     * Fake service injected via deps so the SDK never runs in unit
+     * tests. The controller's _resolve_file accepts `{ service }` as
+     * its 4th arg precisely so callers (and tests) can override.
+     */
     function make_fake_service({ first, second } = {}) {
         let calls = 0;
         return {

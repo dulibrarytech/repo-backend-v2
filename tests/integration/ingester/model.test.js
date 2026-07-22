@@ -1,18 +1,20 @@
 'use strict';
 
-// Integration tests for ingester/model.js. Real sqlite-in-memory pool,
-// real migrations, exercising:
-//
-//   - queue_packages: bulk insert + initial state_change event
-//   - update_queue: status→pipeline_state mirror; severity +
-//     suggested_action auto-population; event row written only when
-//     pipeline_state changes; explicit overrides honored; `updated`
-//     bumped; opts.event_type, opts.actor, opts.payload threaded through
-//   - get_queue_row / list_queue: simple reads and filters
-//   - get_timeline: returns events in insertion order with parsed payloads
-//   - reset_orphaned: ACTIVELY_RUNNING_STATES → PENDING; WAIT states
-//     and terminal states untouched
-//   - _purge_batch: wipes queue + event rows together
+/*
+ * Integration tests for ingester/model.js. Real sqlite-in-memory pool,
+ * real migrations, exercising:
+ * 
+ *   - queue_packages: bulk insert + initial state_change event
+ *   - update_queue: status→pipeline_state mirror; severity +
+ *     suggested_action auto-population; event row written only when
+ *     pipeline_state changes; explicit overrides honored; `updated`
+ *     bumped; opts.event_type, opts.actor, opts.payload threaded through
+ *   - get_queue_row / list_queue: simple reads and filters
+ *   - get_timeline: returns events in insertion order with parsed payloads
+ *   - reset_orphaned: ACTIVELY_RUNNING_STATES → PENDING; WAIT states
+ *     and terminal states untouched
+ *   - _purge_batch: wipes queue + event rows together
+ */
 
 const model = require('../../../ingester/model');
 const db_helper = require('../../helpers/db');
@@ -24,9 +26,11 @@ const QUEUE = tables.ingest_queue;
 const EVENTS = tables.ingest_events;
 
 function row_template(overrides = {}) {
-    // tbl_ingest_queue has many notNullable-with-default columns; the
-    // model only requires the few that callers actually set. Provide
-    // a minimal happy-path template plus whatever the test wants.
+    /*
+     * tbl_ingest_queue has many notNullable-with-default columns; the
+     * model only requires the few that callers actually set. Provide
+     * a minimal happy-path template plus whatever the test wants.
+     */
     return {
         batch: 'batch-A',
         package: 'pkg-001',
@@ -137,14 +141,16 @@ describe('ingester/model — update_queue', () => {
     });
 
     it("retries once on MariaDB 'Record has changed since last read' error", async () => {
-        // Regression for the live production halt: Stage 3's
-        // fire-and-forget micro_service update could be in-flight
-        // when the final TRANSFER_COMPLETE write fired, and MariaDB
-        // would throw "Record has changed since last read in table".
-        // update_queue now does a one-shot retry on this specific
-        // error message — Stage 3 has also been fixed to await its
-        // micro_service writes, but the retry stays as defense-in-
-        // depth.
+        /*
+         * Regression for the live production halt: Stage 3's
+         * fire-and-forget micro_service update could be in-flight
+         * when the final TRANSFER_COMPLETE write fired, and MariaDB
+         * would throw "Record has changed since last read in table".
+         * update_queue now does a one-shot retry on this specific
+         * error message — Stage 3 has also been fixed to await its
+         * micro_service writes, but the retry stays as defense-in-
+         * depth.
+         */
         const [id] = await model.queue_packages([row_template()]);
         const knex = db_queue();
         const original = knex.transaction.bind(knex);
@@ -171,10 +177,12 @@ describe('ingester/model — update_queue', () => {
     });
 
     it('does NOT retry on unrelated errors', async () => {
-        // Defense-against-overreach: only the specific MariaDB
-        // optimistic-concurrency message triggers a retry. Other
-        // errors propagate immediately so callers see the real
-        // failure rather than a phantom double-execution.
+        /*
+         * Defense-against-overreach: only the specific MariaDB
+         * optimistic-concurrency message triggers a retry. Other
+         * errors propagate immediately so callers see the real
+         * failure rather than a phantom double-execution.
+         */
         const [id] = await model.queue_packages([row_template()]);
         const knex = db_queue();
         const spy = vi
@@ -294,9 +302,11 @@ describe('ingester/model — update_queue', () => {
     });
 
     it('skips event rows for ones whose state did not actually change', async () => {
-        // Row A is PENDING, row B is STARTING. A batch update to
-        // STARTING transitions A but is a no-op for B; only A should
-        // get an event row.
+        /*
+         * Row A is PENDING, row B is STARTING. A batch update to
+         * STARTING transitions A but is a no-op for B; only A should
+         * get an event row.
+         */
         const [a_id, b_id] = await model.queue_packages([
             row_template({ package: 'pkg-A', status: 'PENDING' }),
             row_template({ package: 'pkg-B', status: 'STARTING' }),
@@ -324,8 +334,10 @@ describe('ingester/model — update_queue', () => {
     });
 
     it('lets the caller override pipeline_state directly (status not required)', async () => {
-        // Belt-and-braces: callers using only pipeline_state still get
-        // event-log + severity behavior.
+        /*
+         * Belt-and-braces: callers using only pipeline_state still get
+         * event-log + severity behavior.
+         */
         const [id] = await model.queue_packages([row_template()]);
         await db_queue()(EVENTS).del();
         await model.update_queue({ id }, { pipeline_state: 'STARTING' });
@@ -528,9 +540,11 @@ describe('ingester/model — reset_orphaned', () => {
     });
 
     it('does NOT touch completed rows even if their state is in the running set', async () => {
-        // Edge case: a row that finished its stage cleanly but landed
-        // on a state name overlapping with the running set is_complete=1
-        // already, so it must stay out.
+        /*
+         * Edge case: a row that finished its stage cleanly but landed
+         * on a state name overlapping with the running set is_complete=1
+         * already, so it must stay out.
+         */
         const [id] = await model.queue_packages([
             row_template({ package: 'done', status: 'STARTING' }),
         ]);

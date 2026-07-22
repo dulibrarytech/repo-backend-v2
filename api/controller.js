@@ -1,12 +1,14 @@
 'use strict';
 
-// Public API controllers — thin wrappers around api/model. Each
-// handler builds the request context (the thumbnail-URL maker
-// closure), calls the model, and serializes the result.
-//
-// Responses are JSON for the data endpoints. Thumbnail proxy
-// streams binary bytes (image/jpeg) or falls back to the SVG
-// placeholder. All routes are unauthenticated.
+/*
+ * Public API controllers — thin wrappers around api/model. Each
+ * handler builds the request context (the thumbnail-URL maker
+ * closure), calls the model, and serializes the result.
+ * 
+ * Responses are JSON for the data endpoints. Thumbnail proxy
+ * streams binary bytes (image/jpeg) or falls back to the SVG
+ * placeholder. All routes are unauthenticated.
+ */
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -20,8 +22,10 @@ const projection = require('../libs/object_projection');
 const repo_model = require('../repository/model');
 const { NotFoundError } = require('../libs/errors');
 
-// Shared model instance. Tests construct their own via create_model
-// with an injected ES client.
+/*
+ * Shared model instance. Tests construct their own via create_model
+ * with an injected ES client.
+ */
 const model = create_model();
 
 const THUMBNAIL_PLACEHOLDER = path.join(
@@ -32,9 +36,11 @@ const THUMBNAIL_PLACEHOLDER = path.join(
     'thumbnail-missing.svg'
 );
 
-// Standard response shape for JSON endpoints. Pulls request_id from
-// the request (set by libs/request_id) so consumers can include it
-// in bug reports.
+/*
+ * Standard response shape for JSON endpoints. Pulls request_id from
+ * the request (set by libs/request_id) so consumers can include it
+ * in bug reports.
+ */
 function send_json(req, res, status, body, { max_age = 300 } = {}) {
     res.status(status);
     res.set('Content-Type', 'application/json; charset=utf-8');
@@ -46,16 +52,20 @@ function send_json(req, res, status, body, { max_age = 300 } = {}) {
 function send_thumbnail_placeholder(res) {
     res.status(200);
     res.set('Content-Type', 'image/svg+xml');
-    // Shorter cache than real thumbnails — if a record's thumbnail
-    // becomes available later, we want to pick it up reasonably
-    // quickly. 60s mirrors the dashboard's placeholder behavior.
+    /*
+     * Shorter cache than real thumbnails — if a record's thumbnail
+     * becomes available later, we want to pick it up reasonably
+     * quickly. 60s mirrors the dashboard's placeholder behavior.
+     */
     res.set('Cache-Control', 'public, max-age=60');
     fs.createReadStream(THUMBNAIL_PLACEHOLDER).pipe(res);
 }
 
-// GET /api/v1/health — public, lightweight. Doesn't probe ES (that
-// would let unauthenticated callers DDoS the cluster); just confirms
-// the API process is alive.
+/*
+ * GET /api/v1/health — public, lightweight. Doesn't probe ES (that
+ * would let unauthenticated callers DDoS the cluster); just confirms
+ * the API process is alive.
+ */
 async function health(req, res) {
     send_json(
         req,
@@ -94,31 +104,37 @@ async function list_collections(req, res) {
     send_json(req, res, 200, result);
 }
 
-// GET /api/v1/objects/:pid/thumbnail
-//
-// Public thumbnail proxy. Same TN-first/DC-fallback chain as the
-// dashboard's auth-gated handler, but gated on the ES index's
-// published flag instead of just "row exists". A row that's been
-// suppressed but is still in tbl_objects shouldn't leak its
-// thumbnail to public callers.
-//
-// We use the ES index (via model.is_eligible) as the source of
-// truth for "is this public?" because the index already encodes
-// the eligibility rule and any consistency lag has already been
-// reconciled by the indexer worker.
+/*
+ * GET /api/v1/objects/:pid/thumbnail
+ * 
+ * Public thumbnail proxy. Same TN-first/DC-fallback chain as the
+ * dashboard's auth-gated handler, but gated on the ES index's
+ * published flag instead of just "row exists". A row that's been
+ * suppressed but is still in tbl_objects shouldn't leak its
+ * thumbnail to public callers.
+ * 
+ * We use the ES index (via model.is_eligible) as the source of
+ * truth for "is this public?" because the index already encodes
+ * the eligibility rule and any consistency lag has already been
+ * reconciled by the indexer worker.
+ */
 async function get_thumbnail(req, res) {
     const pid = req.params.pid;
-    // Eligibility gate. If the row isn't in the ES index, it's
-    // either not published, soft-deleted, or unknown — all three
-    // map to placeholder for public callers.
+    /*
+     * Eligibility gate. If the row isn't in the ES index, it's
+     * either not published, soft-deleted, or unknown — all three
+     * map to placeholder for public callers.
+     */
     const eligible = await model.is_eligible(pid);
     if (!eligible) return send_thumbnail_placeholder(res);
 
-    // We still need the row's stored thumbnail value to decide
-    // between uploaded-URL redirect / TN / DC. The ES doc has
-    // `thumbnail` (the stored value) on the projected doc — read
-    // it directly from the DB so we never serve a thumbnail that
-    // disagrees with the live publish state.
+    /*
+     * We still need the row's stored thumbnail value to decide
+     * between uploaded-URL redirect / TN / DC. The ES doc has
+     * `thumbnail` (the stored value) on the projected doc — read
+     * it directly from the DB so we never serve a thumbnail that
+     * disagrees with the live publish state.
+     */
     let row;
     try {
         row = await repo_model.get(pid);
@@ -172,14 +188,18 @@ async function get_thumbnail(req, res) {
     return send_thumbnail_placeholder(res);
 }
 
-// Light-touch logging for the JSON endpoints so operators can see
-// public-API traffic shape without the noise of static-asset hits.
-// Note: this is fired AFTER the response, in the next-tick, so it
-// doesn't add latency.
+/*
+ * Light-touch logging for the JSON endpoints so operators can see
+ * public-API traffic shape without the noise of static-asset hits.
+ * Note: this is fired AFTER the response, in the next-tick, so it
+ * doesn't add latency.
+ */
 function log_request(req, res, next) {
     res.on('finish', () => {
-        // Skip the thumbnail route (high-volume image traffic) and
-        // health (noise from monitoring).
+        /*
+         * Skip the thumbnail route (high-volume image traffic) and
+         * health (noise from monitoring).
+         */
         if (req.path.endsWith('/health')) return;
         if (req.path.includes('/thumbnail')) return;
         log.info({

@@ -6,13 +6,17 @@ const os = require('node:os');
 const supertest = require('supertest');
 const { make_app } = require('../helpers/app');
 const db_helper = require('../helpers/db');
+const { db } = require('../../config/db');
+const tables = require('../../config/db_tables');
 const jwt = require('../../libs/jwt');
 const app_config = require('../../config/app');
 
 let app;
-// Per-suite temp dir that the thumbnail upload route writes into. We
-// point THUMBNAIL_UPLOAD_PATH here for the lifetime of the suite so
-// the upload tests don't pollute ./public/thumbnails.
+/*
+ * Per-suite temp dir that the thumbnail upload route writes into. We
+ * point THUMBNAIL_UPLOAD_PATH here for the lifetime of the suite so
+ * the upload tests don't pollute ./public/thumbnails.
+ */
 let upload_tempdir;
 
 async function cookie_for(du_id) {
@@ -20,9 +24,11 @@ async function cookie_for(du_id) {
     return `${jwt.COOKIE_NAME}=${jwt.sign({ sub: String(u.id), du_id })}`;
 }
 
-// A minimal JPEG: magic bytes + a JFIF marker chunk. Enough bytes to
-// pass our magic-byte gate. We don't need a renderable image — the
-// route only inspects the first three bytes.
+/*
+ * A minimal JPEG: magic bytes + a JFIF marker chunk. Enough bytes to
+ * pass our magic-byte gate. We don't need a renderable image — the
+ * route only inspects the first three bytes.
+ */
 function tiny_jpeg() {
     return Buffer.from([
         0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00,
@@ -42,8 +48,10 @@ describe('dashboard — e2e', () => {
     afterAll(async () => {
         await db_helper.teardown();
         await fs.rm(upload_tempdir, { recursive: true, force: true });
-        // Reset the cached config so tests in other files don't inherit
-        // our overridden THUMBNAIL_UPLOAD_PATH.
+        /*
+         * Reset the cached config so tests in other files don't inherit
+         * our overridden THUMBNAIL_UPLOAD_PATH.
+         */
         app_config._reset();
     });
 
@@ -86,8 +94,10 @@ describe('dashboard — e2e', () => {
         });
 
         it('POST /login with bad credentials renders the error message', async () => {
-            // The route is kept for tests + script callers; the UI no
-            // longer invokes it (SSO is the only login path).
+            /*
+             * The route is kept for tests + script callers; the UI no
+             * longer invokes it (SSO is the only login path).
+             */
             const res = await supertest(app)
                 .post('/repo/dashboard/login')
                 .type('form')
@@ -144,20 +154,24 @@ describe('dashboard — e2e', () => {
     });
 
     describe('a11y — landmarks, skip link, sidebar', () => {
-        // Phase 2 of the accessibility work: skip-to-main link,
-        // aria-label on every sidebar icon, aria-current on the
-        // active nav item. These checks belong to all authed pages,
-        // so a single representative request (the home page) covers
-        // the shared layout output.
+        /*
+         * Phase 2 of the accessibility work: skip-to-main link,
+         * aria-label on every sidebar icon, aria-current on the
+         * active nav item. These checks belong to all authed pages,
+         * so a single representative request (the home page) covers
+         * the shared layout output.
+         */
         it('renders a skip-to-main link as the first focusable element', async () => {
             const cookie = await cookie_for('a11y-skip');
             const res = await supertest(app)
                 .get('/repo/dashboard/')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // The link must point to #main-content and carry the
-            // .skip-link class (which positions it off-screen until
-            // focused).
+            /*
+             * The link must point to #main-content and carry the
+             * .skip-link class (which positions it off-screen until
+             * focused).
+             */
             expect(res.text).toMatch(
                 /<a[^>]*href="#main-content"[^>]*class="skip-link"[^>]*>\s*Skip to main content\s*<\/a>/
             );
@@ -168,9 +182,11 @@ describe('dashboard — e2e', () => {
             const res = await supertest(app)
                 .get('/repo/dashboard/')
                 .set('Cookie', cookie);
-            // id="main-content" must match the skip link's href; the
-            // tabindex="-1" lets focus move there without altering tab
-            // order (the link is what's in the order, not <main>).
+            /*
+             * id="main-content" must match the skip link's href; the
+             * tabindex="-1" lets focus move there without altering tab
+             * order (the link is what's in the order, not <main>).
+             */
             expect(res.text).toMatch(
                 /<main[^>]*id="main-content"[^>]*tabindex="-1"/
             );
@@ -181,14 +197,16 @@ describe('dashboard — e2e', () => {
             const res = await supertest(app)
                 .get('/repo/dashboard/')
                 .set('Cookie', cookie);
-            // Each icon-only link must be reachable by SR users.
-            // We verify the labels for the normal-mode nav. (Workflow
-            // / admin mode are exercised by their own page tests.)
+            /*
+             * Each icon-only link must be reachable by SR users.
+             * We verify the labels for the normal-mode nav. (Workflow
+             * / admin mode are exercised by their own page tests.)
+             */
             for (const label of [
                 'Home',
                 'Stats',
                 'Collections',
-                'Objects (flat browse)',
+                'Objects',
                 'Digital Preservation Jobs',
                 'Users',
                 'Admin Utils',
@@ -199,14 +217,42 @@ describe('dashboard — e2e', () => {
             }
         });
 
+        it('every sidebar link carries a title (Bootstrap tooltip source)', async () => {
+            /*
+             * dashboard.js upgrades these icon-rail `title` attributes to
+             * Bootstrap tooltips (right-placed, quick, prominent). The title
+             * is the tooltip content source — guard it so a future edit can't
+             * silently drop the hover labels.
+             */
+            const cookie = await cookie_for('sidebar-tooltips');
+            const res = await supertest(app)
+                .get('/repo/dashboard/')
+                .set('Cookie', cookie);
+            for (const label of [
+                'Home',
+                'Stats',
+                'Collections',
+                'Objects',
+                'Digital Preservation Jobs',
+                'Users',
+                'Admin Utils',
+            ]) {
+                expect(res.text).toMatch(
+                    new RegExp(`title="${label.replace(/[()]/g, '\\$&')}"`)
+                );
+            }
+        });
+
         it('active sidebar item carries aria-current="page"', async () => {
             const cookie = await cookie_for('a11y-current');
             const res = await supertest(app)
                 .get('/repo/dashboard/')
                 .set('Cookie', cookie);
-            // On the home page, the Home link should be the active one.
-            // .active + aria-current="page" should land on the SAME
-            // anchor (we don't want one without the other).
+            /*
+             * On the home page, the Home link should be the active one.
+             * .active + aria-current="page" should land on the SAME
+             * anchor (we don't want one without the other).
+             */
             expect(res.text).toMatch(
                 /<a[^>]*class="active"[^>]*aria-current="page"[^>]*aria-label="Home"/
             );
@@ -217,13 +263,17 @@ describe('dashboard — e2e', () => {
             const res = await supertest(app)
                 .get('/repo/dashboard/')
                 .set('Cookie', cookie);
-            // The Collections link is not active on the home page; it
-            // must not claim to be the current page.
+            /*
+             * The Collections link is not active on the home page; it
+             * must not claim to be the current page.
+             */
             expect(res.text).toMatch(
                 /<a[^>]*aria-label="Collections"[^>]*>/
             );
-            // The slice from "Collections" link start to the next link
-            // start must NOT contain aria-current.
+            /*
+             * The slice from "Collections" link start to the next link
+             * start must NOT contain aria-current.
+             */
             const m = res.text.match(
                 /<a[^>]*aria-label="Collections"[\s\S]*?<\/a>/
             );
@@ -232,9 +282,11 @@ describe('dashboard — e2e', () => {
         });
 
         it('workflow-mode sidebar marks the active workflow step', async () => {
-            // Packaging page enters workflow mode. The Packaging link
-            // should be both .active AND aria-current="page". The
-            // sibling MDO link should be neither.
+            /*
+             * Packaging page enters workflow mode. The Packaging link
+             * should be both .active AND aria-current="page". The
+             * sibling MDO link should be neither.
+             */
             const cookie = await cookie_for('a11y-workflow');
             const res = await supertest(app)
                 .get('/repo/dashboard/ingest/packaging')
@@ -251,12 +303,14 @@ describe('dashboard — e2e', () => {
             expect(mdo[0]).not.toMatch(/aria-current/);
         });
 
-        // Phase 5: HTMX swap-target announcements (WCAG 4.1.3). Each
-        // region that swaps in response to user action or polling
-        // needs aria-live so screen reader users learn about the
-        // change. The toast-stack + workspace-action-result regions
-        // already had aria-live; this batch covers the table/list
-        // targets that were silent before.
+        /*
+         * Phase 5: HTMX swap-target announcements (WCAG 4.1.3). Each
+         * region that swaps in response to user action or polling
+         * needs aria-live so screen reader users learn about the
+         * change. The toast-stack + workspace-action-result regions
+         * already had aria-live; this batch covers the table/list
+         * targets that were silent before.
+         */
 
         it('objects-table swap target carries aria-live for SR announcements', async () => {
             const cookie = await cookie_for('a11y-live-objects');
@@ -312,26 +366,32 @@ describe('dashboard — e2e', () => {
             );
         });
 
-        // Phase 5: form-error announcement (WCAG 3.3.1). The error
-        // alert at the top of the user create/edit modal must have
-        // role="alert" so SR users hear validation failures
-        // immediately on re-render — without role="alert" the partial
-        // re-renders silently and they don't know why nothing
-        // happened.
+        /*
+         * Phase 5: form-error announcement (WCAG 3.3.1). The error
+         * alert at the top of the user create/edit modal must have
+         * role="alert" so SR users hear validation failures
+         * immediately on re-render — without role="alert" the partial
+         * re-renders silently and they don't know why nothing
+         * happened.
+         */
 
         it('user create modal error alert has role="alert"', async () => {
             const cookie = await cookie_for('a11y-form-err-create');
-            // Submitting an empty form triggers the error re-render —
-            // the controller returns the partial with `error` set.
+            /*
+             * Submitting an empty form triggers the error re-render —
+             * the controller returns the partial with `error` set.
+             */
             const res = await supertest(app)
                 .post('/repo/dashboard/users')
                 .set('Cookie', cookie)
                 .type('form')
                 .send({ du_id: '', email: '', first_name: '', last_name: '' });
             expect(res.status).toBeLessThan(500);
-            // Whether the controller returns 200 + partial or 422 +
-            // partial, the error div should carry role="alert" and the
-            // id used for aria-describedby.
+            /*
+             * Whether the controller returns 200 + partial or 422 +
+             * partial, the error div should carry role="alert" and the
+             * id used for aria-describedby.
+             */
             expect(res.text).toMatch(
                 /<div[^>]*id="user-form-error"[^>]*role="alert"/
             );
@@ -362,8 +422,10 @@ describe('dashboard — e2e', () => {
             const res = await supertest(app)
                 .get('/repo/dashboard/')
                 .set('Cookie', cookie);
-            // user-scalable=yes is the default — making it explicit
-            // documents the intent + survives later edits to the tag.
+            /*
+             * user-scalable=yes is the default — making it explicit
+             * documents the intent + survives later edits to the tag.
+             */
             expect(res.text).toMatch(
                 /<meta[^>]+name="viewport"[^>]+user-scalable=yes/
             );
@@ -381,9 +443,11 @@ describe('dashboard — e2e', () => {
 
         it('every swappable modal partial puts id="modal-content-title" on its h5 title', async () => {
             const cookie = await cookie_for('a11y-modal-title-ids');
-            // Touch one partial per modal flow to confirm the id
-            // lands. The metadata view modal is the simplest one to
-            // exercise (no DB-write side effects).
+            /*
+             * Touch one partial per modal flow to confirm the id
+             * lands. The metadata view modal is the simplest one to
+             * exercise (no DB-write side effects).
+             */
             const o = await db_helper.seed_object({
                 display_record: JSON.stringify({
                     display_record: { title: 'Sample for a11y' },
@@ -416,8 +480,10 @@ describe('dashboard — e2e', () => {
                 .get('/repo/dashboard/stats')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // The SVG carries both a short name (aria-label) and a
-            // longer summary inside <desc> for SRs that prefer it.
+            /*
+             * The SVG carries both a short name (aria-label) and a
+             * longer summary inside <desc> for SRs that prefer it.
+             */
             expect(res.text).toMatch(/<svg[^>]*aria-label="Ingests per year bar chart"/);
             expect(res.text).toMatch(/<desc[^>]*id="ingests-chart-desc"[^>]*>[^<]*Ingests per year/);
             expect(res.text).toMatch(/<svg[^>]*aria-describedby="ingests-chart-desc"/);
@@ -449,10 +515,12 @@ describe('dashboard — e2e', () => {
         });
 
         it('shell-page loading spinners carry aria-label', async () => {
-            // Verify on the objects shell — its empty-state spinner
-            // is the canonical pattern reused across pages. Catching
-            // it here also catches any future regression where the
-            // empty-state markup gets copy-pasted without the label.
+            /*
+             * Verify on the objects shell — its empty-state spinner
+             * is the canonical pattern reused across pages. Catching
+             * it here also catches any future regression where the
+             * empty-state markup gets copy-pasted without the label.
+             */
             const cookie = await cookie_for('a11y-spinner');
             const res = await supertest(app)
                 .get('/repo/dashboard/objects')
@@ -460,6 +528,29 @@ describe('dashboard — e2e', () => {
             expect(res.text).toMatch(
                 /<span[^>]*class="spinner-border[^"]*"[^>]*role="status"[^>]*aria-label="Loading"/
             );
+        });
+
+        it('search/filter inputs carry an aria-label, not just a placeholder (WCAG 3.3.2)', async () => {
+            const cookie = await cookie_for('a11y-search-labels');
+            /*
+             * A placeholder is not an accessible name; every type="search"
+             * box on the list/queue pages must expose an aria-label.
+             */
+            const pages = [
+                '/repo/dashboard/objects',
+                '/repo/dashboard/collections',
+                '/repo/dashboard/aips',
+                '/repo/dashboard/ingest',
+            ];
+            for (const path of pages) {
+                const res = await supertest(app).get(path).set('Cookie', cookie);
+                expect(res.status).toBe(200);
+                const searches = res.text.match(/<input\b[^>]*type="search"[^>]*>/g) || [];
+                expect(searches.length).toBeGreaterThan(0);
+                for (const tag of searches) {
+                    expect(tag).toMatch(/aria-label="[^"]+"/);
+                }
+            }
         });
     });
 
@@ -475,12 +566,14 @@ describe('dashboard — e2e', () => {
             expect(res.text).toMatch(/Active users/);
         });
 
-        it('Top Collections partial shows title-first with PID as subtitle', async () => {
+        it('Top Collections partial shows the title only (no PID subtitle)', async () => {
             const stats_model = require('../../stats/model');
             stats_model._reset();
             const cookie = await cookie_for('top-coll-titles');
-            // Seed two child rows pointing at codu:Beta + the
-            // matching collection row carrying the title.
+            /*
+             * Seed two child rows pointing at codu:Beta + the
+             * matching collection row carrying the title.
+             */
             await db_helper.seed_object({ is_member_of_collection: 'codu:Beta' });
             await db_helper.seed_object({ is_member_of_collection: 'codu:Beta' });
             await db_helper.seed_object({
@@ -492,17 +585,15 @@ describe('dashboard — e2e', () => {
                 .get('/repo/dashboard/_home/top-collections')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // Title rendered as the primary label
+            // Title rendered as the (only) label.
             expect(res.text).toContain('Beta Letters');
-            // PID still shown (smaller, monospace) so staff can copy
-            expect(res.text).toContain('codu:Beta');
-            // Title sits BEFORE the PID in document order — the
-            // partial puts the title in a <span> with the pid in a
-            // following <div>. Use indexOf to verify ordering.
-            const title_pos = res.text.indexOf('Beta Letters');
-            const pid_pos = res.text.indexOf('codu:Beta');
-            expect(title_pos).toBeLessThan(pid_pos);
-            expect(title_pos).toBeGreaterThan(-1);
+            /*
+             * The PID subtitle was removed — `codu:Beta` no longer appears as
+             * visible text. It survives only in the link href, URL-encoded, so
+             * the literal `codu:Beta` is absent but the filter link still works.
+             */
+            expect(res.text).not.toContain('codu:Beta');
+            expect(res.text).toContain('collection=codu%3ABeta');
         });
 
         it('Top Collections partial falls back to PID when no title exists', async () => {
@@ -515,21 +606,27 @@ describe('dashboard — e2e', () => {
                 .get('/repo/dashboard/_home/top-collections')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // PID rendered as the only label (the {title || pid}
-            // fallback path in the template).
+            /*
+             * PID rendered as the only label (the {title || pid}
+             * fallback path in the template).
+             */
             expect(res.text).toContain('codu:Lonely');
         });
     });
 
     describe('stats page', () => {
-        // Dedicated /dashboard/stats — v1-dashboard parity. 12-card
-        // grid + inline-SVG ingests-per-year chart. DuraCloud cards
-        // lazy-load via HTMX (covered by a separate test).
+        /*
+         * Dedicated /dashboard/stats — v1-dashboard parity. 12-card
+         * grid + inline-SVG ingests-per-year chart. DuraCloud cards
+         * lazy-load via HTMX (covered by a separate test).
+         */
         const stats_model = require('../../stats/model');
 
         beforeEach(() => {
-            // Cache is shared across tests; explicit reset keeps the
-            // numbers we seed visible immediately.
+            /*
+             * Cache is shared across tests; explicit reset keeps the
+             * numbers we seed visible immediately.
+             */
             stats_model._reset();
         });
 
@@ -574,10 +671,12 @@ describe('dashboard — e2e', () => {
                 .get('/repo/dashboard/stats')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // Loose match: the value 2 appears next to "Total Collections"
-            // and the value 1 next to "Published Collections", etc.
-            // Don't lock down the surrounding markup — just confirm
-            // the numbers reached the page.
+            /*
+             * Loose match: the value 2 appears next to "Total Collections"
+             * and the value 1 next to "Published Collections", etc.
+             * Don't lock down the surrounding markup — just confirm
+             * the numbers reached the page.
+             */
             expect(res.text).toMatch(/2[\s\S]{0,120}Total Collections/);
             expect(res.text).toMatch(/1[\s\S]{0,120}Published Collections/);
         });
@@ -593,10 +692,12 @@ describe('dashboard — e2e', () => {
             expect(res.text).toContain('Ingests Per Year');
             // Bar fill color comes from v1's brick-red palette.
             expect(res.text).toContain('fill="#7a1f1f"');
-            // Padded year labels — 2020 and current year both appear
-            // on the x-axis even if neither has data. EJS keeps the
-            // template's whitespace inside the <text> tags, so use
-            // a whitespace-tolerant regex instead of indexOf.
+            /*
+             * Padded year labels — 2020 and current year both appear
+             * on the x-axis even if neither has data. EJS keeps the
+             * template's whitespace inside the <text> tags, so use
+             * a whitespace-tolerant regex instead of indexOf.
+             */
             expect(res.text).toMatch(/>\s*2020\s*<\/text>/);
             const this_year = new Date().getFullYear();
             expect(res.text).toMatch(
@@ -612,8 +713,10 @@ describe('dashboard — e2e', () => {
                 .get('/repo/dashboard/stats')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // Server-rendered placeholder so the layout doesn't jump
-            // when the values arrive — ellipsis + label visible.
+            /*
+             * Server-rendered placeholder so the layout doesn't jump
+             * when the values arrive — ellipsis + label visible.
+             */
             expect(res.text).toMatch(/id="stats-duracloud"/);
             expect(res.text).toMatch(
                 /hx-get="\/repo\/dashboard\/_stats\/duracloud"/
@@ -627,9 +730,11 @@ describe('dashboard — e2e', () => {
                 .get('/repo/dashboard/_stats/duracloud')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // AM storage isn't configured in the test env, so all
-            // three card values render as em-dash. The page should
-            // still 200 — graceful degradation.
+            /*
+             * AM storage isn't configured in the test env, so all
+             * three card values render as em-dash. The page should
+             * still 200 — graceful degradation.
+             */
             expect(res.text).toContain('Total DuraCloud DIP Store Usage');
             expect(res.text).toContain('Total DuraCloud AIP Store Usage');
             expect(res.text).toContain('Total DuraCloud Storage Usage');
@@ -641,9 +746,11 @@ describe('dashboard — e2e', () => {
             const res = await supertest(app)
                 .get('/repo/dashboard/stats')
                 .set('Cookie', cookie);
-            // Match the active Stats link by its aria-label (stable
-            // anchor) and verify both the visual .active class and the
-            // SR-perceivable aria-current land on the same element.
+            /*
+             * Match the active Stats link by its aria-label (stable
+             * anchor) and verify both the visual .active class and the
+             * SR-perceivable aria-current land on the same element.
+             */
             expect(res.text).toMatch(
                 /<a[^>]*class="active"[^>]*aria-current="page"[^>]*aria-label="Stats"/
             );
@@ -652,8 +759,10 @@ describe('dashboard — e2e', () => {
         it('home page sidebar shows the Stats icon (out-of-workflow mode)', async () => {
             const cookie = await cookie_for('stats-7');
             const res = await supertest(app).get('/repo/dashboard/').set('Cookie', cookie);
-            // The icon link to /dashboard/stats is present (sits under
-            // the Home icon per design).
+            /*
+             * The icon link to /dashboard/stats is present (sits under
+             * the Home icon per design).
+             */
             expect(res.text).toMatch(
                 /href="[^"]*\/dashboard\/stats"[^>]*title="Stats"/
             );
@@ -668,19 +777,23 @@ describe('dashboard — e2e', () => {
             expect(res.text).toMatch(/id="objects-table"/);
             expect(res.text).toMatch(/hx-get="\/repo\/dashboard\/objects\/list"/);
             expect(res.text).toMatch(/hx-trigger="load/);
-            // The objects-table div must carry hx-include for the
-            // filter inputs — without it, navigating to
-            // /dashboard/objects?q=<pid> would populate the search
-            // input from the URL but render the unfiltered default
-            // page (the bug the AIPs view's PID-link triggered).
-            expect(res.text).toMatch(/hx-include="\[name=q\][\s\S]*?name=is_published[\s\S]*?name=collection/);
+            /*
+             * The objects-table div must carry hx-include for the
+             * filter inputs — without it, navigating to
+             * /dashboard/objects?q=<pid> would populate the search
+             * input from the URL but render the unfiltered default
+             * page (the bug the AIPs view's PID-link triggered).
+             */
+            expect(res.text).toMatch(/hx-include="\[name=q\][\s\S]*?name=is_published/);
         });
 
         it('shell page passes ?q= from URL into the search input so hx-include picks it up', async () => {
-            // Arriving via the AIPs view's PID link (and similar
-            // deep-links) puts the PID in ?q=. The page must echo it
-            // into the <input name="q" value="..."> so the
-            // #objects-table div's hx-include flows it to /objects/list.
+            /*
+             * Arriving via the AIPs view's PID link (and similar
+             * deep-links) puts the PID in ?q=. The page must echo it
+             * into the <input name="q" value="..."> so the
+             * #objects-table div's hx-include flows it to /objects/list.
+             */
             const cookie = await cookie_for('o-q-url');
             const pid = '82dad06a-4e53-4d04-a1ba-ca75fd68f929';
             const res = await supertest(app)
@@ -694,9 +807,11 @@ describe('dashboard — e2e', () => {
         });
 
         it('GET /objects/list filters by ?q=<pid> exactly when the URL carries it', async () => {
-            // End-to-end check: hitting /objects/list with q=<pid>
-            // (the same shape #objects-table's hx-include produces)
-            // returns ONLY the matching row.
+            /*
+             * End-to-end check: hitting /objects/list with q=<pid>
+             * (the same shape #objects-table's hx-include produces)
+             * returns ONLY the matching row.
+             */
             const cookie = await cookie_for('o-q-list');
             const target = await db_helper.seed_object();
             const noise = await db_helper.seed_object();
@@ -708,12 +823,40 @@ describe('dashboard — e2e', () => {
             expect(res.text).not.toContain(`id="object-${noise.pid}"`);
         });
 
+        it('kebab shows "View public handle" only on PUBLISHED objects', async () => {
+            /*
+             * The action links out to the public record, which only resolves
+             * once the object is published — so it's gated on is_published.
+             */
+            const cookie = await cookie_for('o-handle-unpub');
+            // Unpublished (but seeded with a handle) → no handle action.
+            await db_helper.seed_object({ is_published: 0, handle: 'https://hdl.example/unpub' });
+            const unpub = await supertest(app)
+                .get('/repo/dashboard/objects/list')
+                .set('Cookie', cookie);
+            expect(unpub.status).toBe(200);
+            expect(unpub.text).not.toContain('View public handle');
+        });
+
+        it('kebab shows "View public handle" + the handle URL for a published object', async () => {
+            const cookie = await cookie_for('o-handle-pub');
+            await db_helper.seed_object({ is_published: 1, handle: 'https://hdl.example/pub' });
+            const res = await supertest(app)
+                .get('/repo/dashboard/objects/list')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toContain('View public handle');
+            expect(res.text).toContain('href="https://hdl.example/pub"');
+        });
+
         it('GET /objects/list survives duplicated ?q= (last-wins coercion)', async () => {
-            // Defense-in-depth: pagination URLs strip the filter
-            // params to avoid colliding with hx-include, but a hand-
-            // crafted URL could still send each filter twice. The
-            // controller's _last_string coercion must take the last
-            // value (matching the AIPs controller pattern).
+            /*
+             * Defense-in-depth: pagination URLs strip the filter
+             * params to avoid colliding with hx-include, but a hand-
+             * crafted URL could still send each filter twice. The
+             * controller's _last_string coercion must take the last
+             * value (matching the AIPs controller pattern).
+             */
             const cookie = await cookie_for('o-q-dup');
             const target = await db_helper.seed_object();
             const res = await supertest(app)
@@ -737,13 +880,15 @@ describe('dashboard — e2e', () => {
         });
 
         describe('filter combinations on /objects/list', () => {
-            // Three rows, each in a distinct state. Tests below filter
-            // on (is_published, is_active) and assert exactly which
-            // rows the table renders.
-            //
-            //   active_published    — is_active=1, is_published=1
-            //   active_unpublished  — is_active=1, is_published=0  (the "to-do" pile)
-            //   deleted_unpublished — is_active=0, is_published=0  (soft-deleted)
+            /*
+             * Three rows, each in a distinct state. Tests below filter
+             * on (is_published, is_active) and assert exactly which
+             * rows the table renders.
+             * 
+             *   active_published    — is_active=1, is_published=1
+             *   active_unpublished  — is_active=1, is_published=0  (the "to-do" pile)
+             *   deleted_unpublished — is_active=0, is_published=0  (soft-deleted)
+             */
             async function seed_filter_fixtures() {
                 const ap = await db_helper.seed_object({
                     is_active: 1,
@@ -759,9 +904,11 @@ describe('dashboard — e2e', () => {
                 });
                 return { ap, au, du };
             }
-            // Look for the row's pid in the rendered HTML. The row id
-            // on object_row.ejs is `object-<pid>` — robust against
-            // the rest of the row content varying.
+            /*
+             * Look for the row's pid in the rendered HTML. The row id
+             * on object_row.ejs is `object-<pid>` — robust against
+             * the rest of the row content varying.
+             */
             function row_visible(html, pid) {
                 return html.includes(`id="object-${pid}"`);
             }
@@ -777,32 +924,40 @@ describe('dashboard — e2e', () => {
                 expect(row_visible(res.text, au.pid)).toBe(true);
                 // Active-published is filtered out by is_published=0.
                 expect(row_visible(res.text, ap.pid)).toBe(false);
-                // Deleted-unpublished is hidden by the auto-applied
-                // is_active=1 default. This is the user-reported fix.
+                /*
+                 * Deleted-unpublished is hidden by the auto-applied
+                 * is_active=1 default. This is the user-reported fix.
+                 */
                 expect(row_visible(res.text, du.pid)).toBe(false);
             });
 
             it('"Unpublished" filter still shows deleted rows when is_active=0 is explicit', async () => {
-                // The auto-default only applies when is_active is
-                // OMITTED from the query. Passing it explicitly
-                // (e.g. an admin audit URL) wins.
+                /*
+                 * The auto-default only applies when is_active is
+                 * OMITTED from the query. Passing it explicitly
+                 * (e.g. an admin audit URL) wins.
+                 */
                 const cookie = await cookie_for('o-filter-unp-explicit');
                 const { au, du } = await seed_filter_fixtures();
                 const res = await supertest(app)
                     .get('/repo/dashboard/objects/list?is_published=0&is_active=0')
                     .set('Cookie', cookie);
                 expect(res.status).toBe(200);
-                // Only the deleted-unpublished row matches the explicit
-                // {is_active:0, is_published:0} pair.
+                /*
+                 * Only the deleted-unpublished row matches the explicit
+                 * {is_active:0, is_published:0} pair.
+                 */
                 expect(row_visible(res.text, du.pid)).toBe(true);
                 expect(row_visible(res.text, au.pid)).toBe(false);
             });
 
             it('default "All states" filter hides soft-deleted rows', async () => {
-                // Contract: soft-deleted (is_active=0) rows do NOT render
-                // in the default Objects view, regardless of is_published.
-                // Staff who need to audit deleted rows opt in explicitly
-                // via ?is_active=0 (see test below).
+                /*
+                 * Contract: soft-deleted (is_active=0) rows do NOT render
+                 * in the default Objects view, regardless of is_published.
+                 * Staff who need to audit deleted rows opt in explicitly
+                 * via ?is_active=0 (see test below).
+                 */
                 const cookie = await cookie_for('o-filter-all');
                 const { ap, au, du } = await seed_filter_fixtures();
                 const res = await supertest(app)
@@ -815,8 +970,10 @@ describe('dashboard — e2e', () => {
             });
 
             it('explicit ?is_active=0 surfaces soft-deleted rows for audit', async () => {
-                // The opt-in path. Staff hitting this URL want to see
-                // ONLY soft-deleted rows.
+                /*
+                 * The opt-in path. Staff hitting this URL want to see
+                 * ONLY soft-deleted rows.
+                 */
                 const cookie = await cookie_for('o-filter-deleted');
                 const { ap, au, du } = await seed_filter_fixtures();
                 const res = await supertest(app)
@@ -829,12 +986,14 @@ describe('dashboard — e2e', () => {
             });
 
             it('"Published" filter hides deleted-published rows by default', async () => {
-                // The hide-deleted default is universal across
-                // is_published values. A legacy row that's is_active=0
-                // AND is_published=1 stays hidden in the default
-                // Published view; staff combine ?is_active=0&is_published=1
-                // when auditing this rare state (covered in the
-                // audit-view test below).
+                /*
+                 * The hide-deleted default is universal across
+                 * is_published values. A legacy row that's is_active=0
+                 * AND is_published=1 stays hidden in the default
+                 * Published view; staff combine ?is_active=0&is_published=1
+                 * when auditing this rare state (covered in the
+                 * audit-view test below).
+                 */
                 const cookie = await cookie_for('o-filter-pub');
                 const deleted_published = await db_helper.seed_object({
                     is_active: 0,
@@ -848,9 +1007,11 @@ describe('dashboard — e2e', () => {
             });
 
             it('explicit ?is_active=0&is_published=1 surfaces deleted-published rows', async () => {
-                // Audit path: the two explicit filters together let
-                // staff find the rare deleted-but-still-published rows
-                // (usually legacy data) that they'd otherwise miss.
+                /*
+                 * Audit path: the two explicit filters together let
+                 * staff find the rare deleted-but-still-published rows
+                 * (usually legacy data) that they'd otherwise miss.
+                 */
                 const cookie = await cookie_for('o-filter-deleted-pub');
                 const deleted_published = await db_helper.seed_object({
                     is_active: 0,
@@ -894,14 +1055,18 @@ describe('dashboard — e2e', () => {
             expect(res.text).toBe('');
             const decoded = JSON.parse(res.headers['hx-trigger']);
             expect(decoded.toast.message).toMatch(/deleted/i);
-            // Regression guard: the response MUST emit modal:close so
-            // dashboard.js dismisses the confirmation modal. An earlier
-            // rev used an inline hx-on::after-request hack that didn't
-            // fire — staff would click Delete and the modal stayed
-            // open over an already-deleted row.
+            /*
+             * Regression guard: the response MUST emit modal:close so
+             * dashboard.js dismisses the confirmation modal. An earlier
+             * rev used an inline hx-on::after-request hack that didn't
+             * fire — staff would click Delete and the modal stayed
+             * open over an already-deleted row.
+             */
             expect(decoded).toHaveProperty('modal:close');
-            // ALSO emits objects:refresh so the table re-fetches even
-            // when hx-target=#object-<pid> isn't on the current page.
+            /*
+             * ALSO emits objects:refresh so the table re-fetches even
+             * when hx-target=#object-<pid> isn't on the current page.
+             */
             expect(decoded).toHaveProperty('objects:refresh');
         });
 
@@ -924,9 +1089,19 @@ describe('dashboard — e2e', () => {
                 .type('form')
                 .send({ delete_reason: 'will not be deleted' });
             expect(res.status).toBe(409);
-            // Row is unchanged — still active + published.
-            const after = await db_helper.seed_object;
-            // Spot check: confirm row is still active by hitting the row partial.
+            /*
+             * The rejected delete must NOT have mutated the row: it's
+             * still active + published in the DB (a published object can't
+             * be soft-deleted; suppress it first).
+             */
+            const after = await db()(tables.objects).where({ pid: o.pid }).first();
+            expect(after).toBeDefined();
+            expect(after.is_active).toBe(1);
+            expect(after.is_published).toBe(1);
+            /*
+             * Spot check: still surfaced in the listing partial (not hidden
+             * as if deleted).
+             */
             const list = await supertest(app)
                 .get('/repo/dashboard/objects/list')
                 .set('Cookie', cookie);
@@ -955,9 +1130,11 @@ describe('dashboard — e2e', () => {
                 .get(`/repo/dashboard/objects/${o.pid}/delete/confirm`)
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // Modal explains the path forward instead of letting the
-            // user submit a doomed delete. The server-side model
-            // enforces the same guard via 409.
+            /*
+             * Modal explains the path forward instead of letting the
+             * user submit a doomed delete. The server-side model
+             * enforces the same guard via 409.
+             */
             expect(res.text).toMatch(/Suppress it first/i);
             // No textarea + no submit-form means staff can't try.
             expect(res.text).not.toMatch(/name="delete_reason"/);
@@ -993,16 +1170,20 @@ describe('dashboard — e2e', () => {
                 .get(`/repo/dashboard/objects/${o.pid}/metadata`)
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // Modal-shaped fragment, not a full page. The header / body
-            // may carry extra layout classes alongside the Bootstrap
-            // modal-* anchors — match on the anchor only.
+            /*
+             * Modal-shaped fragment, not a full page. The header / body
+             * may carry extra layout classes alongside the Bootstrap
+             * modal-* anchors — match on the anchor only.
+             */
             expect(res.text).toMatch(/class="[^"]*\bmodal-header\b/);
             expect(res.text).toMatch(/class="[^"]*\bmodal-body\b/);
             expect(res.text).toMatch(/class="[^"]*\bmodal-footer\b/);
             expect(res.text).not.toMatch(/<html/);
 
-            // Every top-level key from display_record appears as a humanized
-            // label in a <dt>, alongside its value in a <dd>.
+            /*
+             * Every top-level key from display_record appears as a humanized
+             * label in a <dt>, alongside its value in a <dd>.
+             */
             expect(res.text).toMatch(/<dt[^>]*>\s*title\s*</i);
             expect(res.text).toMatch(/<dt[^>]*>\s*abstract\s*</i);
             expect(res.text).toMatch(/<dt[^>]*>\s*f subjects\s*</i); // snake_case → " "
@@ -1012,6 +1193,14 @@ describe('dashboard — e2e', () => {
             // Values render with type-appropriate styling.
             expect(res.text).toMatch(/A Meta-Tagged Object/);
             expect(res.text).toMatch(/Once upon a metadata field/);
+            /*
+             * Regression (uniform row spacing): a plain-string value sits
+             * FLUSH against its pre-wrap span. Leading indentation would be
+             * preserved by white-space: pre-wrap as a blank line above the
+             * value, inflating the row and misaligning it from the label.
+             */
+            expect(res.text).toMatch(/break-word;">Once upon a metadata field\./);
+            expect(res.text).not.toMatch(/break-word;">\s*\n/);
             // Array of strings → badge chips
             expect(res.text).toMatch(/sev-badge[^>]*>\s*Photography\s*</);
             expect(res.text).toMatch(/sev-badge[^>]*>\s*Archive science\s*</);
@@ -1024,11 +1213,13 @@ describe('dashboard — e2e', () => {
         });
 
         it('metadata modal drills into a nested display_record envelope', async () => {
-            // The ES indexer writes the ASpace metadata under an inner
-            // `display_record` key, while the outer column also carries
-            // wrapper fields (pid, handle, thumbnail, etc.) we don't want
-            // to surface in the modal. The controller should drill into
-            // the inner object and render only those fields.
+            /*
+             * The ES indexer writes the ASpace metadata under an inner
+             * `display_record` key, while the outer column also carries
+             * wrapper fields (pid, handle, thumbnail, etc.) we don't want
+             * to surface in the modal. The controller should drill into
+             * the inner object and render only those fields.
+             */
             const cookie = await cookie_for('o-meta-nested');
             const o = await db_helper.seed_object({
                 handle: 'https://hdl.invalid/nested',
@@ -1061,9 +1252,11 @@ describe('dashboard — e2e', () => {
             expect(res.text).toMatch(/<dt[^>]*>\s*is compound\s*</i);
             expect(res.text).toMatch(/Sanatorium, Volume 12, Number 1/);
 
-            // Outer wrapper fields do NOT render as their own labels.
-            // (We allow the wrapper PID to appear in the modal header
-            // text, but never as a <dt> in the metadata <dl>.)
+            /*
+             * Outer wrapper fields do NOT render as their own labels.
+             * (We allow the wrapper PID to appear in the modal header
+             * text, but never as a <dt> in the metadata <dl>.)
+             */
             expect(res.text).not.toMatch(/<dt[^>]*>\s*pid\s*</i);
             expect(res.text).not.toMatch(/<dt[^>]*>\s*handle\s*</i);
             expect(res.text).not.toMatch(/<dt[^>]*>\s*thumbnail\s*</i);
@@ -1087,6 +1280,76 @@ describe('dashboard — e2e', () => {
             expect(res.text).toMatch(/No <code>display_record<\/code> metadata recorded/);
         });
 
+        it('metadata modal skips empty fields', async () => {
+            const cookie = await cookie_for('o-meta-empty-fields');
+            const o = await db_helper.seed_object({
+                display_record: JSON.stringify({
+                    title: 'Has Some Empties',
+                    real_field: 'a real value',
+                    empty_string: '',
+                    empty_array: [],
+                    empty_object: {},
+                    zero_value: 0,
+                }),
+            });
+            const res = await supertest(app)
+                .get(`/repo/dashboard/objects/${o.pid}/metadata`)
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            // Non-empty fields render (incl. 0, which is NOT empty)...
+            expect(res.text).toMatch(/<dt[^>]*>\s*real field\s*</i);
+            expect(res.text).toMatch(/<dt[^>]*>\s*zero value\s*</i);
+            // ...empty ones are skipped entirely.
+            expect(res.text).not.toMatch(/<dt[^>]*>\s*empty string\s*</i);
+            expect(res.text).not.toMatch(/<dt[^>]*>\s*empty array\s*</i);
+            expect(res.text).not.toMatch(/<dt[^>]*>\s*empty object\s*</i);
+        });
+
+        it('metadata modal renders each part\'s Kaltura entry id below its file name', async () => {
+            const cookie = await cookie_for('o-meta-kaltura');
+            const audio = await db_helper.seed_object({
+                mime_type: 'audio/mp3',
+                display_record: JSON.stringify({
+                    title: 'An Audio Recording',
+                    display_record: {
+                        parts: [
+                            { order: '1', title: 'recording-001.mp3', type: 'audio/mp3', kaltura_id: '1_q4myck5q' },
+                        ],
+                    },
+                }),
+            });
+            const res = await supertest(app)
+                .get(`/repo/dashboard/objects/${audio.pid}/metadata`)
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            /*
+             * The file name + its kaltura id both render, on the per-part line
+             * (not as a separate top-level row anymore).
+             */
+            expect(res.text).toMatch(/recording-001\.mp3/);
+            expect(res.text).toMatch(/metadata-part-kaltura/);
+            expect(res.text).toMatch(/1_q4myck5q/);
+            expect(res.text).not.toMatch(/<dt[^>]*>\s*Kaltura Entry ID\s*</);
+        });
+
+        it('metadata modal renders no kaltura line for a part without a kaltura id', async () => {
+            const cookie = await cookie_for('o-meta-no-kaltura');
+            const o = await db_helper.seed_object({
+                mime_type: 'image/tiff',
+                display_record: JSON.stringify({
+                    title: 'A Scan',
+                    display_record: { parts: [{ order: '1', title: 'scan-001.tif', type: 'image/tiff' }] },
+                }),
+            });
+            const res = await supertest(app)
+                .get(`/repo/dashboard/objects/${o.pid}/metadata`)
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toMatch(/scan-001\.tif/); // the part still renders
+            expect(res.text).not.toMatch(/metadata-part-kaltura/);
+            expect(res.text).not.toMatch(/kaltura id/);
+        });
+
         it('metadata modal 404s on unknown pid', async () => {
             const cookie = await cookie_for('o-meta-missing');
             const res = await supertest(app)
@@ -1096,11 +1359,13 @@ describe('dashboard — e2e', () => {
         });
 
         it('metadata modal renders identifiers inline with type chip', async () => {
-            // Identifiers are arrays of {type, identifier} objects.
-            // The generic recursive renderer would collapse each into
-            // a "▶ 2 fields" disclosure — useless. The shape-aware
-            // metadata_field partial flattens them to one readable
-            // line per identifier with the type as a small chip.
+            /*
+             * Identifiers are arrays of {type, identifier} objects.
+             * The generic recursive renderer would collapse each into
+             * a "▶ 2 fields" disclosure — useless. The shape-aware
+             * metadata_field partial flattens them to one readable
+             * line per identifier with the type as a small chip.
+             */
             const cookie = await cookie_for('o-meta-ids');
             const o = await db_helper.seed_object({
                 display_record: JSON.stringify({
@@ -1116,9 +1381,11 @@ describe('dashboard — e2e', () => {
                 .get(`/repo/dashboard/objects/${o.pid}/metadata`)
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // Both the type tag and the identifier value should be
-            // present as plain text inside the page — no <details> for
-            // identifiers.
+            /*
+             * Both the type tag and the identifier value should be
+             * present as plain text inside the page — no <details> for
+             * identifiers.
+             */
             expect(res.text).toMatch(/metadata-tag[^>]*>\s*local\s*</);
             expect(res.text).toMatch(/U219\.03\.0004\.0005\.00010/);
             // The header surfaces the same call number for quick scan.
@@ -1172,8 +1439,10 @@ describe('dashboard — e2e', () => {
             expect(res.text).toMatch(/metadata-tag[^>]*>\s*aat\s*</);
             expect(res.text).toMatch(/Photography/);
             expect(res.text).toMatch(/Archive science -- United States/);
-            // Subjects should NOT render as collapsed "N fields"
-            // disclosures (regression guard).
+            /*
+             * Subjects should NOT render as collapsed "N fields"
+             * disclosures (regression guard).
+             */
             expect(res.text).not.toMatch(/<summary[^>]*>\s*\d+ fields?\s*<\/summary>[\s\S]*Photography/);
         });
 
@@ -1253,9 +1522,11 @@ describe('dashboard — e2e', () => {
         });
 
         it('metadata modal falls back to generic renderer for unknown shapes', async () => {
-            // A field that is NOT in the dispatcher list still uses the
-            // recursive metadata_value partial — so a one-off custom
-            // bag of fields keeps working.
+            /*
+             * A field that is NOT in the dispatcher list still uses the
+             * recursive metadata_value partial — so a one-off custom
+             * bag of fields keeps working.
+             */
             const cookie = await cookie_for('o-meta-fallback');
             const o = await db_helper.seed_object({
                 display_record: JSON.stringify({
@@ -1298,8 +1569,10 @@ describe('dashboard — e2e', () => {
         });
 
         it('list partial reads thumbnail out of display_record when the column is null', async () => {
-            // Mirrors the legacy ingest path where the URL lives in
-            // display_record but the column lags behind.
+            /*
+             * Mirrors the legacy ingest path where the URL lives in
+             * display_record but the column lags behind.
+             */
             const cookie = await cookie_for('o-tn-dr');
             await db_helper.seed_object({
                 thumbnail: null,
@@ -1316,10 +1589,12 @@ describe('dashboard — e2e', () => {
         });
 
         it('list partial rewrites a dip-store-relative thumbnail to the proxy URL', async () => {
-            // This is the bulk of the existing corpus: ingest writes a
-            // path tail like <dip_path>/thumbnails/<uuid>.jpg into the
-            // column. The projection rewrites it to point at our proxy
-            // so the browser can fetch through the dashboard session.
+            /*
+             * This is the bulk of the existing corpus: ingest writes a
+             * path tail like <dip_path>/thumbnails/<uuid>.jpg into the
+             * column. The projection rewrites it to point at our proxy
+             * so the browser can fetch through the dashboard session.
+             */
             const cookie = await cookie_for('o-tn-legacy');
             const o = await db_helper.seed_object({
                 thumbnail: 'archivematica-dip-2024/thumbnails/legacy.jpg',
@@ -1337,12 +1612,14 @@ describe('dashboard — e2e', () => {
         });
 
         describe('thumbnail proxy', () => {
-            // The streaming-fetch path against a real DuraCloud is
-            // out of scope here — we'd need a full HTTP fixture. The
-            // tests below cover all the branches the proxy decides
-            // WITHOUT a DC roundtrip: redirect-on-absolute-URL,
-            // placeholder when DC is unconfigured, placeholder for
-            // missing/unknown rows.
+            /*
+             * The streaming-fetch path against a real DuraCloud is
+             * out of scope here — we'd need a full HTTP fixture. The
+             * tests below cover all the branches the proxy decides
+             * WITHOUT a DC roundtrip: redirect-on-absolute-URL,
+             * placeholder when DC is unconfigured, placeholder for
+             * missing/unknown rows.
+             */
 
             it('redirects 302 when the stored thumbnail is already an absolute URL', async () => {
                 const cookie = await cookie_for('o-tn-rdr');
@@ -1359,18 +1636,22 @@ describe('dashboard — e2e', () => {
             });
 
             it('returns the SVG placeholder when DuraCloud is not configured', async () => {
-                // The default test env never sets DURACLOUD_API; the
-                // proxy falls back to the local placeholder.
+                /*
+                 * The default test env never sets DURACLOUD_API; the
+                 * proxy falls back to the local placeholder.
+                 */
                 const cookie = await cookie_for('o-tn-nodc');
                 const o = await db_helper.seed_object({
                     thumbnail: 'archivematica/thumbnails/abc.jpg',
                 });
                 const res = await supertest(app)
-                    // Force supertest to buffer the binary-ish response
-                    // so we can assert on its bytes. Without this,
-                    // image/* responses come back as an empty res.text
-                    // and a Buffer in res.body that supertest only
-                    // populates with this opt-in.
+                    /*
+                     * Force supertest to buffer the binary-ish response
+                     * so we can assert on its bytes. Without this,
+                     * image/* responses come back as an empty res.text
+                     * and a Buffer in res.body that supertest only
+                     * populates with this opt-in.
+                     */
                     .get(`/repo/dashboard/objects/${o.pid}/thumbnail/raw`)
                     .set('Cookie', cookie)
                     .buffer(true)
@@ -1395,9 +1676,11 @@ describe('dashboard — e2e', () => {
             });
 
             it('returns the placeholder for an unknown pid (no 404)', async () => {
-                // Soft-deleted-while-listing scenario. A 404 would
-                // surface a broken-image icon in the browser, defeating
-                // the whole point.
+                /*
+                 * Soft-deleted-while-listing scenario. A 404 would
+                 * surface a broken-image icon in the browser, defeating
+                 * the whole point.
+                 */
                 const cookie = await cookie_for('o-tn-gone');
                 const res = await supertest(app)
                     .get(
@@ -1455,8 +1738,10 @@ describe('dashboard — e2e', () => {
                 const on_disk = await fs.readFile(path.join(upload_tempdir, `${o.pid}.jpg`));
                 expect(on_disk.slice(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))).toBe(true);
 
-                // Response body is the freshly-rendered object_row,
-                // carrying the new <img>.
+                /*
+                 * Response body is the freshly-rendered object_row,
+                 * carrying the new <img>.
+                 */
                 expect(res.text).toMatch(new RegExp(`id="object-${o.pid}"`));
                 expect(res.text).toMatch(/class="thumb-img"/);
                 expect(res.text).toMatch(/\/repo\/static\/tn\/[^"]+\.jpg/);
@@ -1548,26 +1833,32 @@ describe('dashboard — e2e', () => {
                         filename: 'unauth.jpg',
                         contentType: 'image/jpeg',
                     });
-                // The dashboard auth middleware sends a 302 to /login
-                // for non-HTMX requests; HTMX requests get 401 +
-                // HX-Redirect. Supertest is the former.
+                /*
+                 * The dashboard auth middleware sends a 302 to /login
+                 * for non-HTMX requests; HTMX requests get 401 +
+                 * HX-Redirect. Supertest is the former.
+                 */
                 expect([302, 401]).toContain(res.status);
             });
         });
 
         describe('thumbnail cache invalidation', () => {
-            // Re-use the per-suite TN cache directory. Each test
-            // writes its own dummy cache file under <pid>.jpg, then
-            // calls the endpoint and asserts the file disappeared.
+            /*
+             * Re-use the per-suite TN cache directory. Each test
+             * writes its own dummy cache file under <pid>.jpg, then
+             * calls the endpoint and asserts the file disappeared.
+             */
             const fs_node = require('node:fs');
             const fs_p = require('node:fs/promises');
             const node_path = require('node:path');
 
-            // The suite's `make_app` doesn't override TN_CACHE_PATH;
-            // libs/tn_service falls back to the config default which
-            // is './public/tn_cache' (relative to cwd). We use that
-            // for these tests, cleaning up our specific files in the
-            // afterEach so we don't pollute the working tree.
+            /*
+             * The suite's `make_app` doesn't override TN_CACHE_PATH;
+             * libs/tn_service falls back to the config default which
+             * is './public/tn_cache' (relative to cwd). We use that
+             * for these tests, cleaning up our specific files in the
+             * afterEach so we don't pollute the working tree.
+             */
             let tn_cache_root;
             beforeAll(() => {
                 tn_cache_root = node_path.resolve('./public/tn_cache');
@@ -1667,20 +1958,42 @@ describe('dashboard — e2e', () => {
                 expect(res.text).toMatch(
                     /<form id="bulk-form-publish"[^>]+hx-post="\/repo\/dashboard\/objects\/bulk\/publish"/
                 );
+                /*
+                 * Each bulk form must pull the selected pids in via hx-include —
+                 * the `form` attribute approach was broken (multi-id is invalid
+                 * HTML, so pids never submitted → "Select at least one object").
+                 */
+                expect(res.text).toMatch(
+                    /<form id="bulk-form-publish"[^>]+hx-include="#bulk-pids"/
+                );
+                expect(res.text).toMatch(
+                    /<form id="bulk-form-suppress"[^>]+hx-include="#bulk-pids"/
+                );
+                expect(res.text).toMatch(
+                    /<form id="bulk-form-refresh-metadata"[^>]+hx-include="#bulk-pids"/
+                );
+                // The hidden input no longer relies on the invalid multi-id form attr.
+                expect(res.text).not.toMatch(/id="bulk-pids"[^>]*\bform=/);
+                // Bulk delete button stays removed (modified-75).
+                expect(res.text).not.toContain('bulk-form-delete');
             });
 
             it('list partial does not render a checkbox for soft-deleted rows', async () => {
-                // The select cell is rendered (column alignment) but
-                // without an actual <input>, so the row can't be picked
-                // up by the multi-select UI.
+                /*
+                 * The select cell is rendered (column alignment) but
+                 * without an actual <input>, so the row can't be picked
+                 * up by the multi-select UI.
+                 */
                 const cookie = await cookie_for('o-bulk-soft');
                 await db_helper.seed_object({ is_active: 1 });
                 await db_helper.seed_object({ is_active: 0 });
                 const res = await supertest(app)
                     .get('/repo/dashboard/objects/list?is_active=&page_size=10')
                     .set('Cookie', cookie);
-                // One checkbox total (the active row); the soft-deleted
-                // row's <td class="select-cell"> stays empty.
+                /*
+                 * One checkbox total (the active row); the soft-deleted
+                 * row's <td class="select-cell"> stays empty.
+                 */
                 const checkboxes = res.text.match(/class="row-select form-check-input"/g) || [];
                 expect(checkboxes).toHaveLength(1);
             });
@@ -1743,8 +2056,10 @@ describe('dashboard — e2e', () => {
                 expect(res.text).toMatch(/Delete 2 objects\?/);
                 expect(res.text).toMatch(/A first thing/);
                 expect(res.text).toMatch(/B second thing/);
-                // The submit form posts to the actual delete endpoint
-                // with the same pid list.
+                /*
+                 * The submit form posts to the actual delete endpoint
+                 * with the same pid list.
+                 */
                 expect(res.text).toMatch(/hx-post="\/repo\/dashboard\/objects\/bulk\/delete"/);
             });
 
@@ -1763,8 +2078,10 @@ describe('dashboard — e2e', () => {
                 expect(res.status).toBe(204);
                 const trigger = JSON.parse(res.headers['hx-trigger']);
                 expect(trigger.toast.message).toMatch(/2 objects deleted/);
-                // Same regression guard as single-delete — the bulk
-                // modal must dismiss too.
+                /*
+                 * Same regression guard as single-delete — the bulk
+                 * modal must dismiss too.
+                 */
                 expect(trigger).toHaveProperty('modal:close');
             });
 
@@ -1844,11 +2161,13 @@ describe('dashboard — e2e', () => {
         });
 
         describe('metadata refresh — queue endpoints', () => {
-            // The HTTP routes return modal/partial HTML and write to
-            // tbl_metadata_update_queue. The worker is NOT started
-            // here (METADATA_WORKER_ENABLED defaults are irrelevant
-            // for these tests — we never call worker.start). We just
-            // verify the queue state after each endpoint call.
+            /*
+             * The HTTP routes return modal/partial HTML and write to
+             * tbl_metadata_update_queue. The worker is NOT started
+             * here (METADATA_WORKER_ENABLED defaults are irrelevant
+             * for these tests — we never call worker.start). We just
+             * verify the queue state after each endpoint call.
+             */
 
             const tables = require('../../config/db_tables');
             const { db_queue } = require('../../config/db');
@@ -1869,8 +2188,10 @@ describe('dashboard — e2e', () => {
                     .set('Cookie', cookie);
                 expect(res.status).toBe(200);
                 expect(res.text).toMatch(/Refreshing metadata/);
-                // The modal embeds a hx-get pointing at the progress
-                // partial keyed by batch_uuid.
+                /*
+                 * The modal embeds a hx-get pointing at the progress
+                 * partial keyed by batch_uuid.
+                 */
                 const batch_match = res.text.match(/\/jobs\/([0-9a-f-]{36})\/progress/);
                 expect(batch_match).toBeTruthy();
                 const batch_uuid = batch_match[1];
@@ -1910,18 +2231,22 @@ describe('dashboard — e2e', () => {
             });
 
             it('POST /collections/:pid/metadata/refresh enqueues only the collection record (no members)', async () => {
-                // Sibling route to /refresh-members. The collections-list
-                // kabob targets this one; members are intentionally
-                // excluded so a list-view click can't trigger a long-
-                // running bulk refresh.
+                /*
+                 * Sibling route to /refresh-members. The collections-list
+                 * kabob targets this one; members are intentionally
+                 * excluded so a list-view click can't trigger a long-
+                 * running bulk refresh.
+                 */
                 await clear_queue();
                 const cookie = await cookie_for('md-coll-only');
                 const c = await db_helper.seed_object({
                     object_type: 'collection',
                     uri: '/repositories/2/resources/42',
                 });
-                // Two members that would have landed in the queue if
-                // we'd hit /refresh-members. They must NOT appear here.
+                /*
+                 * Two members that would have landed in the queue if
+                 * we'd hit /refresh-members. They must NOT appear here.
+                 */
                 await db_helper.seed_object({
                     is_member_of_collection: c.pid,
                     uri: '/r/m1',
@@ -1944,11 +2269,13 @@ describe('dashboard — e2e', () => {
             });
 
             it('POST refresh fires an HX-Trigger toast so the action is announced even before the modal renders', async () => {
-                // Toast is emitted from the shared render_progress_modal
-                // helper — covers all four enqueue paths in one assertion.
-                // Test through the collection-record path because that's
-                // the newest entry point; a regression on any of the four
-                // would show up here as long as the helper stays shared.
+                /*
+                 * Toast is emitted from the shared render_progress_modal
+                 * helper — covers all four enqueue paths in one assertion.
+                 * Test through the collection-record path because that's
+                 * the newest entry point; a regression on any of the four
+                 * would show up here as long as the helper stays shared.
+                 */
                 await clear_queue();
                 const cookie = await cookie_for('md-init-toast');
                 const c = await db_helper.seed_object({
@@ -1967,9 +2294,11 @@ describe('dashboard — e2e', () => {
             });
 
             it('POST /collections/:pid/metadata/refresh rejects a non-collection pid', async () => {
-                // Defense in depth: the kabob is only rendered on
-                // collection rows, but the route should still refuse
-                // a non-collection pid coming from a manual POST.
+                /*
+                 * Defense in depth: the kabob is only rendered on
+                 * collection rows, but the route should still refuse
+                 * a non-collection pid coming from a manual POST.
+                 */
                 await clear_queue();
                 const cookie = await cookie_for('md-coll-bad');
                 const o = await db_helper.seed_object({
@@ -2038,9 +2367,11 @@ describe('dashboard — e2e', () => {
                 const trigger = JSON.parse(res.headers['hx-trigger']);
                 expect(trigger['objects:refresh']).toBeTruthy();
                 expect(trigger['metadata:batch-done']).toBeTruthy();
-                // Cancellation counts as an "exception" in the toast
-                // payload — the operator should see a warn-level
-                // completion notice rather than success.
+                /*
+                 * Cancellation counts as an "exception" in the toast
+                 * payload — the operator should see a warn-level
+                 * completion notice rather than success.
+                 */
                 expect(trigger.toast).toBeTruthy();
                 expect(trigger.toast.level).toBe('warn');
                 expect(trigger.toast.message).toMatch(/exception/i);
@@ -2048,12 +2379,14 @@ describe('dashboard — e2e', () => {
             });
 
             it('GET /jobs/:batch_uuid/progress fires a success toast when every row completed cleanly', async () => {
-                // The warn-toast variant is covered above. This case
-                // forces the queue into the all-COMPLETE terminal
-                // state so we can assert the success-level toast
-                // copy. Driving the worker for this would be
-                // overkill; writing the terminal row directly is the
-                // same shape the worker would produce.
+                /*
+                 * The warn-toast variant is covered above. This case
+                 * forces the queue into the all-COMPLETE terminal
+                 * state so we can assert the success-level toast
+                 * copy. Driving the worker for this would be
+                 * overkill; writing the terminal row directly is the
+                 * same shape the worker would produce.
+                 */
                 await clear_queue();
                 const cookie = await cookie_for('md-done-ok');
                 const o = await db_helper.seed_object({ uri: '/r/done-ok' });
@@ -2061,9 +2394,11 @@ describe('dashboard — e2e', () => {
                     .post(`/repo/dashboard/objects/${o.pid}/metadata/refresh`)
                     .set('Cookie', cookie);
                 const batch_uuid = enqueue_res.text.match(/\/jobs\/([0-9a-f-]{36})\/progress/)[1];
-                // Flip the row to COMPLETE without going through the
-                // worker. status='COMPLETE' + is_complete=1 + no error
-                // is what get_batch_progress reads as a clean success.
+                /*
+                 * Flip the row to COMPLETE without going through the
+                 * worker. status='COMPLETE' + is_complete=1 + no error
+                 * is what get_batch_progress reads as a clean success.
+                 */
                 await db_queue()(tables.metadata_update_queue)
                     .where({ batch_uuid })
                     .update({ status: 'COMPLETE', is_complete: 1 });
@@ -2202,12 +2537,45 @@ describe('dashboard — e2e', () => {
         });
     });
 
+    describe('collections list — default sort A–Z', () => {
+        it('GET /collections/list (no sort param) sorts by title A–Z', async () => {
+            const cookie = await cookie_for('coll-sort-default');
+            await db_helper.seed_object({
+                object_type: 'collection',
+                display_record: JSON.stringify({ title: 'Zebra Papers' }),
+            });
+            await db_helper.seed_object({
+                object_type: 'collection',
+                display_record: JSON.stringify({ title: 'Apple Records' }),
+            });
+            const res = await supertest(app)
+                .get('/repo/dashboard/collections/list')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            const apple = res.text.indexOf('Apple Records');
+            const zebra = res.text.indexOf('Zebra Papers');
+            expect(apple).toBeGreaterThan(-1);
+            expect(zebra).toBeGreaterThan(-1);
+            expect(apple).toBeLessThan(zebra); // A before Z
+        });
+
+        it('GET /collections pre-selects the Title (A–Z) sort option', async () => {
+            const cookie = await cookie_for('coll-sort-page');
+            const res = await supertest(app).get('/repo/dashboard/collections').set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toMatch(/<option value="title"[^>]*selected/);
+            expect(res.text).not.toMatch(/<option value="count"[^>]*selected/);
+        });
+    });
+
     describe('collection detail page (header layout)', () => {
-        // Subtitle convention: "<N> objects · <M> published · <handle-link>"
-        // when a handle exists, falling back to "· PID <uuid>" when
-        // it doesn't. The Handle row in the side Details panel was
-        // removed once the handle moved up — these tests guard
-        // against either piece silently regressing.
+        /*
+         * Subtitle convention: "<N> objects · <M> published · <handle-link>"
+         * when a handle exists, falling back to "· PID <uuid>" when
+         * it doesn't. The Handle row in the side Details panel was
+         * removed once the handle moved up — these tests guard
+         * against either piece silently regressing.
+         */
         const dr = (title) => JSON.stringify({ display_record: { title } });
 
         it('subtitle shows the handle (scheme-stripped) when present, NOT the PID', async () => {
@@ -2221,16 +2589,22 @@ describe('dashboard — e2e', () => {
                 .get(`/repo/dashboard/collections/${c.pid}`)
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // Linked handle in the subtitle (scheme stripped per the
-            // existing convention in object_row.ejs).
+            /*
+             * Linked handle in the subtitle (scheme stripped per the
+             * existing convention in object_row.ejs).
+             */
             expect(res.text).toMatch(
                 /<a href="https:\/\/hdl\.invalid\/20\.500\.12345\/sio-1"[^>]*>\s*hdl\.invalid\/20\.500\.12345\/sio-1\s*<\/a>/
             );
-            // The legacy "PID <uuid>" segment must NOT appear in the
-            // subtitle when a handle exists.
+            /*
+             * The legacy "PID <uuid>" segment must NOT appear in the
+             * subtitle when a handle exists.
+             */
             const subtitle_block = res.text.split('page-subtitle')[1] || '';
-            // Just the opening segment up to the first closing </p> —
-            // enough to scan the subtitle's literal content.
+            /*
+             * Just the opening segment up to the first closing </p> —
+             * enough to scan the subtitle's literal content.
+             */
             const subtitle = subtitle_block.split('</p>')[0];
             expect(subtitle).not.toMatch(/PID/);
             expect(subtitle).not.toContain(c.pid);
@@ -2263,20 +2637,26 @@ describe('dashboard — e2e', () => {
                 .get(`/repo/dashboard/collections/${c.pid}`)
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // The Details panel still exists (Created, Status, etc.)
-            // but the Handle <dt> is gone.
+            /*
+             * The Details panel still exists (Created, Status, etc.)
+             * but the Handle <dt> is gone.
+             */
             expect(res.text).toMatch(/<h2[^>]*>Details<\/h2>/);
             expect(res.text).not.toMatch(/<dt[^>]*>\s*Handle\s*<\/dt>/);
         });
 
         it('renders a "… more" toggle for long abstracts (and clamps via line-clamp class)', async () => {
             const cookie = await cookie_for('coll-abstract-long');
-            // The truncation heuristic kicks in above 600 chars.
-            // Use a sentinel string the regex match anchors on cleanly.
+            /*
+             * The truncation heuristic kicks in above 600 chars.
+             * Use a sentinel string the regex match anchors on cleanly.
+             */
             const long_abstract = 'sentinel-long-abstract-content ' + 'filler '.repeat(160).trim();
-            // libs/object_projection reads `dr.abstract` at the top
-            // level of the parsed display_record JSON — so the seed
-            // here is flat, not nested under `{display_record: {...}}`.
+            /*
+             * libs/object_projection reads `dr.abstract` at the top
+             * level of the parsed display_record JSON — so the seed
+             * here is flat, not nested under `{display_record: {...}}`.
+             */
             const c = await db_helper.seed_object({
                 object_type: 'collection',
                 display_record: JSON.stringify({
@@ -2355,8 +2735,10 @@ describe('dashboard — e2e', () => {
 
         it('POST /admin/indexer/reindex-all dirties only PUBLISHED+active rows', async () => {
             const cookie = await cookie_for('idx-all');
-            // 2 eligible (published + active), 1 unpublished, 1 soft-
-            // deleted. Only the 2 eligible get dirtied.
+            /*
+             * 2 eligible (published + active), 1 unpublished, 1 soft-
+             * deleted. Only the 2 eligible get dirtied.
+             */
             await db_helper.seed_object({
                 is_active: 1,
                 is_published: 1,
@@ -2385,8 +2767,10 @@ describe('dashboard — e2e', () => {
             expect(trigger.toast.level).toBe('success');
             expect(trigger.toast.message).toMatch(/Dirtied 2 rows/);
 
-            // Response IS the status partial — verify counters reflect
-            // the new state.
+            /*
+             * Response IS the status partial — verify counters reflect
+             * the new state.
+             */
             expect(res.text).toMatch(/Dirty/);
         });
 
@@ -2438,6 +2822,54 @@ describe('dashboard — e2e', () => {
             expect(res.status).toBe(400);
         });
 
+        it('status partial surfaces dead-lettered rows + a Retry failed button', async () => {
+            const cookie = await cookie_for('idx-dl-status');
+            await db_helper.seed_object({ index_error: 'failed to parse field [dates.begin]' });
+            const res = await supertest(app)
+                .get('/repo/dashboard/admin/indexer/status')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toMatch(/dead-lettered/);
+            // The retry control posts to the new route.
+            expect(res.text).toMatch(
+                /hx-post="\/repo\/dashboard\/admin\/indexer\/reindex-failed"/
+            );
+            expect(res.text).toMatch(/Retry failed/);
+        });
+
+        it('status partial omits the dead-letter alert when none are parked', async () => {
+            const cookie = await cookie_for('idx-dl-none');
+            await db_helper.seed_object({ is_published: 1, is_active: 1 });
+            const res = await supertest(app)
+                .get('/repo/dashboard/admin/indexer/status')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).not.toMatch(/reindex-failed/);
+        });
+
+        it('POST /admin/indexer/reindex-failed re-queues dead-lettered rows', async () => {
+            const cookie = await cookie_for('idx-dl-retry');
+            await db_helper.seed_object({
+                is_updated: 0,
+                index_attempts: 5,
+                index_error: 'boom',
+            });
+            await db_helper.seed_object({ is_updated: 0, index_error: null }); // healthy
+            const res = await supertest(app)
+                .post('/repo/dashboard/admin/indexer/reindex-failed')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            const trigger = JSON.parse(res.headers['hx-trigger']);
+            expect(trigger.toast.level).toBe('success');
+            expect(trigger.toast.message).toMatch(/Re-queued 1 dead-lettered row/);
+            /*
+             * Response IS the refreshed status partial: the row is no
+             * longer parked, so the dead-letter alert (and its button) are
+             * gone.
+             */
+            expect(res.text).not.toMatch(/reindex-failed/);
+        });
+
         it('admin endpoints require auth', async () => {
             const res = await supertest(app)
                 .post('/repo/dashboard/admin/indexer/reindex-all')
@@ -2460,9 +2892,11 @@ describe('dashboard — e2e', () => {
             const res = await supertest(app).get('/repo/dashboard/users').set('Cookie', cookie);
             expect(res.status).toBe(200);
             expect(res.text).toMatch(/id="users-table"/);
-            // The inline create-form was replaced by an "Add user"
-            // button that opens a modal — its hx-get fetches the
-            // form modal and lands it in #modal-content.
+            /*
+             * The inline create-form was replaced by an "Add user"
+             * button that opens a modal — its hx-get fetches the
+             * form modal and lands it in #modal-content.
+             */
             expect(res.text).toMatch(
                 /<button[^>]*hx-get="\/repo\/dashboard\/users\/new"[^>]*hx-target="#modal-content"/
             );
@@ -2473,29 +2907,40 @@ describe('dashboard — e2e', () => {
             const cookie = await cookie_for('u-create-modal');
             const res = await supertest(app).get('/repo/dashboard/users/new').set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // Standard modal structure — auto-opens via the
-            // dashboard.js #modal-content afterSwap listener.
+            /*
+             * Standard modal structure — auto-opens via the
+             * dashboard.js #modal-content afterSwap listener.
+             */
             expect(res.text).toMatch(/class="modal-header"/);
             expect(res.text).toMatch(/<h5[^>]*>Add user<\/h5>/);
             // Form fields present, posting back to /users.
             expect(res.text).toMatch(/id="new-du-id"[^>]*name="du_id"/);
             expect(res.text).toMatch(/id="new-email"[^>]*name="email"/);
+            // RBAC role selector (defaults to staff).
+            expect(res.text).toMatch(/<select[^>]*name="role"/);
+            expect(res.text).toMatch(/value="admin"/);
             expect(res.text).toMatch(/hx-post="\/repo\/dashboard\/users"/);
-            // Targets #modal-content so validation errors re-render
-            // INSIDE the modal frame rather than replacing the page.
+            /*
+             * Targets #modal-content so validation errors re-render
+             * INSIDE the modal frame rather than replacing the page.
+             */
             expect(res.text).toMatch(/hx-target="#modal-content"/);
-            // The "Immutable once set..." DU ID help text was
-            // removed — it duplicated information staff already know
-            // and added unnecessary visual weight to the modal.
+            /*
+             * The "Immutable once set..." DU ID help text was
+             * removed — it duplicated information staff already know
+             * and added unnecessary visual weight to the modal.
+             */
             expect(res.text).not.toMatch(/Immutable once set/);
             expect(res.text).not.toMatch(/actor identifier in audit logs/);
-            // Every field carries a "required" badge so staff see
-            // visually which inputs the form expects — matches the
-            // edit modal for consistency.
+            /*
+             * Every field carries a "required" badge so staff see
+             * visually which inputs the form expects — matches the
+             * edit modal for consistency.
+             */
             const required_badges = (res.text.match(/class="required-badge">required</g) || [])
                 .length;
-            // 4 fields: du_id, email, first_name, last_name.
-            expect(required_badges).toBe(4);
+            // 5 fields: du_id, email, first_name, last_name, role.
+            expect(required_badges).toBe(5);
         });
 
         it('edit modal carries a "required" badge on every editable field', async () => {
@@ -2510,20 +2955,26 @@ describe('dashboard — e2e', () => {
                 .get(`/repo/dashboard/users/${target.id}/edit`)
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // 3 editable fields on the edit modal: email,
-            // first_name, last_name. du_id is NOT a field (shown
-            // only as muted header text).
+            /*
+             * 4 editable fields on the edit modal: email, first_name,
+             * last_name, role. du_id is NOT a field (shown only as muted
+             * header text).
+             */
             const required_badges = (res.text.match(/class="required-badge">required</g) || [])
                 .length;
-            expect(required_badges).toBe(3);
+            expect(required_badges).toBe(4);
+            // Role selector pre-selects the user's current role.
+            expect(res.text).toMatch(/<select[^>]*name="role"/);
         });
 
         it('"Include deactivated" toggle uses CSP-safe form serialization (no hx-vals="js:...")', async () => {
-            // The hx-vals='js:...' shorthand evaluates its expression
-            // via new Function() — blocked by our CSP. Static
-            // name+value plus hx-include is the equivalent without
-            // any eval. This test pins the safe pattern so a future
-            // edit can't silently regress to the eval form.
+            /*
+             * The hx-vals='js:...' shorthand evaluates its expression
+             * via new Function() — blocked by our CSP. Static
+             * name+value plus hx-include is the equivalent without
+             * any eval. This test pins the safe pattern so a future
+             * edit can't silently regress to the eval form.
+             */
             const cookie = await cookie_for('u-toggle-csp');
             const res = await supertest(app).get('/repo/dashboard/users').set('Cookie', cookie);
             expect(res.status).toBe(200);
@@ -2531,8 +2982,10 @@ describe('dashboard — e2e', () => {
             expect(res.text).toMatch(
                 /<input[^>]*id="toggle-inactive"[^>]*name="include_inactive"[^>]*value="1"/
             );
-            // No `js:` prefix anywhere in the rendered page — that's
-            // the broken pattern.
+            /*
+             * No `js:` prefix anywhere in the rendered page — that's
+             * the broken pattern.
+             */
             expect(res.text).not.toMatch(/hx-vals=['"][^'"]*js:/);
             // Polled refreshes carry the current toggle state.
             expect(res.text).toMatch(/hx-include="#toggle-inactive"/);
@@ -2571,10 +3024,12 @@ describe('dashboard — e2e', () => {
                     last_name: 'B',
                 });
             expect(res.status).toBe(200);
-            // Empty body — the modal:close trigger dismisses the
-            // modal frame; the users:created trigger refreshes the
-            // table. No need to re-render the form because the modal
-            // disappears.
+            /*
+             * Empty body — the modal:close trigger dismisses the
+             * modal frame; the users:created trigger refreshes the
+             * table. No need to re-render the form because the modal
+             * disappears.
+             */
             expect(res.text).toBe('');
             const decoded = JSON.parse(res.headers['hx-trigger']);
             expect(decoded.toast.message).toMatch(/newbie created/i);
@@ -2595,9 +3050,11 @@ describe('dashboard — e2e', () => {
                     last_name: 'b',
                 });
             expect(res.status).toBe(400);
-            // The response is the modal partial again — same target
-            // (#modal-content) so the swap happens inside the modal
-            // and the user sees errors without losing context.
+            /*
+             * The response is the modal partial again — same target
+             * (#modal-content) so the swap happens inside the modal
+             * and the user sees errors without losing context.
+             */
             expect(res.text).toMatch(/class="modal-header"/);
             expect(res.text).toMatch(/<h5[^>]*>Add user<\/h5>/);
             expect(res.text).toMatch(/alert-danger/);
@@ -2616,8 +3073,10 @@ describe('dashboard — e2e', () => {
             expect(res.text).toBe('');
             const decoded = JSON.parse(res.headers['hx-trigger']);
             expect(decoded.toast.level).toBe('success');
-            // Also fires users:created so the table refreshes (the
-            // newly-deactivated row's badge + actions change).
+            /*
+             * Also fires users:created so the table refreshes (the
+             * newly-deactivated row's badge + actions change).
+             */
             expect(decoded['users:created']).toBeTruthy();
         });
 
@@ -2636,11 +3095,13 @@ describe('dashboard — e2e', () => {
             // Modal structure — header / body / footer.
             expect(res.text).toMatch(/class="modal-header"/);
             expect(res.text).toMatch(/<h5[^>]*>Edit user<\/h5>/);
-            // du_id is shown in the modal header for context but is
-            // NOT rendered as a form field — surfacing it as one
-            // (even readonly) invited accidental copy/paste over the
-            // value and risked breaking the audit-trail invariant.
-            // It now appears only as muted header text under the title.
+            /*
+             * du_id is shown in the modal header for context but is
+             * NOT rendered as a form field — surfacing it as one
+             * (even readonly) invited accidental copy/paste over the
+             * value and risked breaking the audit-trail invariant.
+             * It now appears only as muted header text under the title.
+             */
             expect(res.text).toContain('editme');
             expect(res.text).not.toMatch(/id="edit-du-id"/);
             expect(res.text).not.toMatch(/name="du_id"/);
@@ -2698,9 +3159,11 @@ describe('dashboard — e2e', () => {
         });
 
         it('POST /users/:id refuses to change du_id on the dashboard route', async () => {
-            // du_id is immutable from the dashboard — the controller
-            // builds the patch from {first_name, last_name, email}
-            // only, so any du_id in the body is silently ignored.
+            /*
+             * du_id is immutable from the dashboard — the controller
+             * builds the patch from {first_name, last_name, email}
+             * only, so any du_id in the body is silently ignored.
+             */
             const cookie = await cookie_for('u-update-duid');
             const target = await db_helper.seed_user({ du_id: 'stable-id' });
             const res = await supertest(app)
@@ -2740,20 +3203,24 @@ describe('dashboard — e2e', () => {
         });
 
         it('user_row partial renders Edit + Activate when the user is deactivated', async () => {
-            // Action-button regexes match the htmx attribute on the
-            // dropdown <button> — using attribute presence (not text)
-            // sidesteps the "Deactivated" status badge / "Active"
-            // status badge collisions with the action labels.
+            /*
+             * Action-button regexes match the htmx attribute on the
+             * dropdown <button> — using attribute presence (not text)
+             * sidesteps the "Deactivated" status badge / "Active"
+             * status badge collisions with the action labels.
+             */
             const has_edit_action = (s) => /<button[^>]*\/users\/\d+\/edit/.test(s);
             const has_deactivate_action = (s) => /hx-delete="[^"]*\/users\/\d+"/.test(s);
             const has_activate_action = (s) => /hx-post="[^"]*\/users\/\d+\/activate"/.test(s);
 
-            // Extract each row segment in isolation. A naive
-            // `<tr...>[\s\S]*?</tr>` regex starting at the first opening
-            // <tr> can accidentally include later rows because the
-            // non-greedy `*?` only stops at the FIRST `</tr>` — but
-            // the seed string we're looking for might be in a later
-            // row. Split-and-filter is robust.
+            /*
+             * Extract each row segment in isolation. A naive
+             * `<tr...>[\s\S]*?</tr>` regex starting at the first opening
+             * <tr> can accidentally include later rows because the
+             * non-greedy `*?` only stops at the FIRST `</tr>` — but
+             * the seed string we're looking for might be in a later
+             * row. Split-and-filter is robust.
+             */
             function row_for(html, du_id) {
                 // Split on closing tag so each chunk is one row.
                 const chunks = html.split('</tr>');
@@ -2808,13 +3275,36 @@ describe('dashboard — e2e', () => {
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
             expect(res.text).toMatch(/AIPs/);
-            // Filter inputs render.
+            /*
+             * Filter inputs render: search + status. The "source" dropdown was
+             * removed — all sources are shown by default.
+             */
             expect(res.text).toMatch(/name="q"/);
-            expect(res.text).toMatch(/name="source"/);
             expect(res.text).toMatch(/name="status"/);
+            expect(res.text).not.toMatch(/name="source"/);
             // The HTMX table target is present and points at /aips/list.
             expect(res.text).toMatch(/id="aips-table"/);
             expect(res.text).toMatch(/\/dashboard\/aips\/list/);
+        });
+
+        it("header shows the user's full name (from tbl_users), not the DU ID", async () => {
+            /*
+             * Regression: the identity next to the logout icon showed the raw
+             * du_id on non-home pages, because res.locals.user is the JWT
+             * (which carries no name). attach_role_context now merges the
+             * first/last name from tbl_users, so every view's header shows the
+             * full name. cookie_for seeds first_name 'Ada' / last_name 'User'
+             * but signs a NAME-LESS JWT — so a passing name proves the merge.
+             */
+            const cookie = await cookie_for('aip-hdr-871095226');
+            const res = await supertest(app)
+                .get('/repo/dashboard/aips')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            // The user-label shows the resolved full name…
+            expect(res.text).toMatch(/Ada User/);
+            // …not the bare du_id fallback.
+            expect(res.text).not.toMatch(/aip-hdr-871095226/);
         });
 
         it('GET /aips/list returns table rows when data exists', async () => {
@@ -2836,18 +3326,20 @@ describe('dashboard — e2e', () => {
         });
 
         it('GET /aips/list survives duplicated query params (last-wins coercion)', async () => {
-            // Regression: the pagination button used to embed q /
-            // source / status in its hx-get URL while the parent div
-            // ALSO included them via hx-include. The two collided to
-            // send each filter twice; Express then parsed
-            // req.query.q as ['','foo'] and the controller's
-            // .trim() call threw "trim is not a function" → 500.
-            //
-            // The view fix removes the URL-embedded filters from
-            // pagination links. The controller fix coerces array-
-            // shaped inputs to a string defensively. This test
-            // covers the controller's defensive layer — a future
-            // refactor of the view alone won't silently regress.
+            /*
+             * Regression: the pagination button used to embed q /
+             * source / status in its hx-get URL while the parent div
+             * ALSO included them via hx-include. The two collided to
+             * send each filter twice; Express then parsed
+             * req.query.q as ['','foo'] and the controller's
+             * .trim() call threw "trim is not a function" → 500.
+             * 
+             * The view fix removes the URL-embedded filters from
+             * pagination links. The controller fix coerces array-
+             * shaped inputs to a string defensively. This test
+             * covers the controller's defensive layer — a future
+             * refactor of the view alone won't silently regress.
+             */
             await db_helper.seed_aip_store({ aip: 'M-search-me.7z', is_migrated: 6 });
             const cookie = await cookie_for('aip-dup');
             const res = await supertest(app)
@@ -2859,8 +3351,10 @@ describe('dashboard — e2e', () => {
                 )
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // Last-wins: the second q value drove the filter and
-            // matched the seeded row.
+            /*
+             * Last-wins: the second q value drove the filter and
+             * matched the seeded row.
+             */
             expect(res.text).toMatch(/M-search-me\.7z/);
         });
 
@@ -2898,9 +3392,11 @@ describe('dashboard — e2e', () => {
             expect(res.status).toBe(200);
             // The response is the updated row partial (outerHTML swap).
             expect(res.text).toContain(`id="aip-row-${seeded.id}"`);
-            // Toast confirms the action. The legacy row in the test has
-            // no matching ingest queue row, so the toast is the
-            // "AIP row reset, but no matching queue row" variant.
+            /*
+             * Toast confirms the action. The legacy row in the test has
+             * no matching ingest queue row, so the toast is the
+             * "AIP row reset, but no matching queue row" variant.
+             */
             const decoded = JSON.parse(res.headers['hx-trigger']);
             expect(decoded.toast).toBeTruthy();
             // Either level is acceptable; the row reset succeeded.
@@ -2915,9 +3411,11 @@ describe('dashboard — e2e', () => {
 
         it('GET /admin/aip-backfill renders the page with the missing count + Start button', async () => {
             const cookie = await cookie_for('aip-bf-page');
-            // Seed two missing-AIP rows so the page has something to
-            // report. The Start button's enabled state ALSO depends
-            // on AIP_STORE_ENABLED — we'll exercise both branches.
+            /*
+             * Seed two missing-AIP rows so the page has something to
+             * report. The Start button's enabled state ALSO depends
+             * on AIP_STORE_ENABLED — we'll exercise both branches.
+             */
             await db_helper.seed_object({ sip_uuid: 'aip-x' });
             await db_helper.seed_object({ sip_uuid: 'aip-y' });
             const res = await supertest(app)
@@ -2925,16 +3423,20 @@ describe('dashboard — e2e', () => {
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
             expect(res.text).toMatch(/AIP Backfill/);
-            // The missing count surfaces in the status partial,
-            // which is inlined on first render.
+            /*
+             * The missing count surfaces in the status partial,
+             * which is inlined on first render.
+             */
             expect(res.text).toMatch(/Missing AIPs/);
             expect(res.text).toMatch(/<strong>2<\/strong>/);
         });
 
         it('POST /admin/aip-backfill/start refuses when AIP_STORE_ENABLED is false', async () => {
-            // Default for the test env is AIP_STORE_ENABLED=false
-            // (the .env-example default). The controller's preflight
-            // check should refuse and surface an error toast.
+            /*
+             * Default for the test env is AIP_STORE_ENABLED=false
+             * (the .env-example default). The controller's preflight
+             * check should refuse and surface an error toast.
+             */
             const original = { ...process.env };
             delete process.env.AIP_STORE_ENABLED;
             require('../../config/app')._reset();
@@ -2998,8 +3500,10 @@ describe('dashboard — e2e', () => {
             try {
                 const cookie = await cookie_for('aip-bf-cancel');
                 await db_helper.seed_object({ sip_uuid: 'aip-q' });
-                // Use the start route to enqueue so cancel finds the
-                // batch via the same path the operator does.
+                /*
+                 * Use the start route to enqueue so cancel finds the
+                 * batch via the same path the operator does.
+                 */
                 await supertest(app)
                     .post('/repo/dashboard/admin/aip-backfill/start')
                     .set('Cookie', cookie);
@@ -3029,14 +3533,18 @@ describe('dashboard — e2e', () => {
                 .get('/repo/dashboard/aips')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // AIPs lives in normal-mode nav (not admin focus mode),
-            // adjacent to Digital Preservation Jobs. The link uses
-            // aria-label="AIPs" (no "(admin)" suffix).
+            /*
+             * AIPs lives in normal-mode nav (not admin focus mode),
+             * adjacent to Digital Preservation Jobs. The link uses
+             * aria-label="AIPs" (no "(admin)" suffix).
+             */
             expect(res.text).toMatch(/aria-label="AIPs"/);
             expect(res.text).toMatch(/aria-current="page"[^>]*>\s*<svg[^>]*>[\s\S]*?<\/svg>/);
-            // Sibling check: the DPJ icon should be present in the
-            // same render (i.e. we ARE in normal nav, not the admin
-            // focus mode that would hide it).
+            /*
+             * Sibling check: the DPJ icon should be present in the
+             * same render (i.e. we ARE in normal nav, not the admin
+             * focus mode that would hide it).
+             */
             expect(res.text).toMatch(/aria-label="Digital Preservation Jobs"/);
         });
     });

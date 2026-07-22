@@ -4,8 +4,10 @@ const supertest = require('supertest');
 const express = require('express');
 const sanitize = require('../../libs/sanitize');
 
-// Builds a minimal app that exercises the same body+query sanitize
-// middleware the real factory installs, then echoes whatever survived.
+/*
+ * Builds a minimal app that exercises the same body+query sanitize
+ * middleware the real factory installs, then echoes whatever survived.
+ */
 function build_echo_app() {
     const app = express();
     app.use(express.json({ limit: '1mb' }));
@@ -45,10 +47,12 @@ describe('XSS sanitization', () => {
             .post('/echo')
             .send({ ok: 'value', constructor: { x: 1 } })
             .expect(200);
-        // The literal `constructor` own-property must be dropped from
-        // the parsed body. Reading `.constructor` always returns the
-        // inherited Object constructor — use hasOwnProperty for the
-        // real test.
+        /*
+         * The literal `constructor` own-property must be dropped from
+         * the parsed body. Reading `.constructor` always returns the
+         * inherited Object constructor — use hasOwnProperty for the
+         * real test.
+         */
         expect(res.body.body.ok).toBe('value');
         expect(Object.prototype.hasOwnProperty.call(res.body.body, 'constructor')).toBe(false);
     });

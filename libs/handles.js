@@ -1,19 +1,21 @@
 'use strict';
 
-// Handle service client. DU's Handle.net front-end accepts POST to
-// create a new handle and PUT to refresh / re-point an existing one.
-// Both return 201 with no useful body — the handle URL is fully
-// determined by `server + prefix + uuid`, so we synthesize it locally
-// on a successful response.
-//
-// Differences from v1 (libs/handles.js):
-//   - Functional + injectable-http factory shape.
-//   - Throws UpstreamError on transport errors instead of returning
-//     false. The worker needs the distinction between "service said no"
-//     and "couldn't even reach the service" to decide whether the row
-//     should retry or halt with INGEST_HALTED.
-//   - Returns { status, handle } on success so the caller has both the
-//     HTTP code and the built URL.
+/*
+ * Handle service client. DU's Handle.net front-end accepts POST to
+ * create a new handle and PUT to refresh / re-point an existing one.
+ * Both return 201 with no useful body — the handle URL is fully
+ * determined by `server + prefix + uuid`, so we synthesize it locally
+ * on a successful response.
+ * 
+ * Differences from v1 (libs/handles.js):
+ *   - Functional + injectable-http factory shape.
+ *   - Throws UpstreamError on transport errors instead of returning
+ *     false. The worker needs the distinction between "service said no"
+ *     and "couldn't even reach the service" to decide whether the row
+ *     should retry or halt with INGEST_HALTED.
+ *   - Returns { status, handle } on success so the caller has both the
+ *     HTTP code and the built URL.
+ */
 
 const http_default = require('axios');
 const app_config = require('../config/app');
@@ -27,8 +29,10 @@ function is_configured() {
 
 function build_handle_url(uuid) {
     const cfg = app_config().handles;
-    // server typically ends with `/`; prefix usually does not. Glue
-    // carefully so we never produce a double-slash or missing-slash.
+    /*
+     * server typically ends with `/`; prefix usually does not. Glue
+     * carefully so we never produce a double-slash or missing-slash.
+     */
     const server = cfg.server.endsWith('/') ? cfg.server : `${cfg.server}/`;
     const prefix = cfg.prefix.replace(/^\/+|\/+$/g, '');
     return `${server}${prefix}/${uuid}`;
@@ -45,9 +49,11 @@ function create_client(http = http_default) {
         is_configured,
         build_handle_url,
 
-        // Create a fresh handle for `uuid`. Returns the constructed
-        // public URL on HTTP 201. On any other status returns
-        // { status, handle: null } so the caller can log and decide.
+        /*
+         * Create a fresh handle for `uuid`. Returns the constructed
+         * public URL on HTTP 201. On any other status returns
+         * { status, handle: null } so the caller can log and decide.
+         */
         async create_handle(uuid) {
             const cfg = app_config().handles;
             const url = service_url(uuid);
@@ -67,10 +73,12 @@ function create_client(http = http_default) {
             }
         },
 
-        // Refresh / update an existing handle. The Handle service
-        // documents this as 'idempotent — safe to call on a missing
-        // handle' (it creates one), but we still surface non-201s so
-        // the worker can flag drift.
+        /*
+         * Refresh / update an existing handle. The Handle service
+         * documents this as 'idempotent — safe to call on a missing
+         * handle' (it creates one), but we still surface non-201s so
+         * the worker can flag drift.
+         */
         async update_handle(uuid) {
             const cfg = app_config().handles;
             const url = service_url(uuid);

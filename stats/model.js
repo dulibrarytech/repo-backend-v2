@@ -1,12 +1,14 @@
 'use strict';
 
-// Repository-level stats over tbl_objects.
-//
-// All queries are simple aggregates against indexed columns
-// (is_member_of_collection, is_published, is_active, created). Results
-// are cached in-process for 30 seconds — long enough to absorb a refresh
-// storm from a dashboard page reload, short enough that the numbers
-// feel live. Cache is invalidated by simply letting it expire.
+/*
+ * Repository-level stats over tbl_objects.
+ * 
+ * All queries are simple aggregates against indexed columns
+ * (is_member_of_collection, is_published, is_active, created). Results
+ * are cached in-process for 30 seconds — long enough to absorb a refresh
+ * storm from a dashboard page reload, short enough that the numbers
+ * feel live. Cache is invalidated by simply letting it expire.
+ */
 
 const { LRUCache } = require('lru-cache');
 
@@ -50,24 +52,26 @@ async function summary() {
     });
 }
 
-// Top N collections by object count.
-//
-// Two-query shape:
-//   1. Aggregate by `is_member_of_collection` → top N (pid, count, published).
-//   2. Look up each collection row's `display_record` and parse out
-//      `title` so the dashboard can render it instead of the raw PID.
-//
-// The title lookup is a single indexed `whereIn` on `pid`, capped at
-// the user-supplied limit (≤ 50). If a collection row doesn't exist
-// (orphaned membership) OR its display_record has no title, we leave
-// `title: null` so the consumer can fall back to the PID.
-//
-// Deliberately NOT filtering the title lookup on `is_active=1` — even
-// soft-deleted collections should display their title in the count
-// list because the count itself includes their children (the
-// aggregate is on `is_member_of_collection`, not on collection
-// activeness). Keeps the panel readable when a collection is in the
-// middle of being curated.
+/*
+ * Top N collections by object count.
+ * 
+ * Two-query shape:
+ *   1. Aggregate by `is_member_of_collection` → top N (pid, count, published).
+ *   2. Look up each collection row's `display_record` and parse out
+ *      `title` so the dashboard can render it instead of the raw PID.
+ * 
+ * The title lookup is a single indexed `whereIn` on `pid`, capped at
+ * the user-supplied limit (≤ 50). If a collection row doesn't exist
+ * (orphaned membership) OR its display_record has no title, we leave
+ * `title: null` so the consumer can fall back to the PID.
+ * 
+ * Deliberately NOT filtering the title lookup on `is_active=1` — even
+ * soft-deleted collections should display their title in the count
+ * list because the count itself includes their children (the
+ * aggregate is on `is_member_of_collection`, not on collection
+ * activeness). Keeps the panel readable when a collection is in the
+ * middle of being curated.
+ */
 async function by_collection({ limit = 5 } = {}) {
     const n = Number.parseInt(limit, 10);
     if (!Number.isFinite(n) || n < 1 || n > 50) {
@@ -100,9 +104,11 @@ async function by_collection({ limit = 5 } = {}) {
     });
 }
 
-// Resolve `pid → title` for a batch of collection-membership PIDs.
-// Returns a Map; missing/title-less rows are simply absent from the
-// Map (the caller falls back to the PID).
+/*
+ * Resolve `pid → title` for a batch of collection-membership PIDs.
+ * Returns a Map; missing/title-less rows are simply absent from the
+ * Map (the caller falls back to the PID).
+ */
 async function _titles_for_pids(pids) {
     const rows = await db()(tables.objects)
         .select('pid', 'display_record')
@@ -117,10 +123,12 @@ async function _titles_for_pids(pids) {
     return out;
 }
 
-// --- display_record helpers ---------------------------------------------
-//
-// Shared by by_collection() and recent_ingests(). Single parse + a
-// pair of extractors keeps both query paths consistent.
+/*
+ * --- display_record helpers ---------------------------------------------
+ * 
+ * Shared by by_collection() and recent_ingests(). Single parse + a
+ * pair of extractors keeps both query paths consistent.
+ */
 
 function _safe_parse_display_record(raw) {
     if (!raw) return null;
@@ -138,38 +146,18 @@ function _extract_title_from_dr(dr) {
     return title.length > 0 ? title : null;
 }
 
-// "Call number" in DU's metadata model is the local identifier —
-// `display_record.identifiers[*].type === 'local'` (see
-// libs/archivesspace_transform.js:_build_identifiers, which writes
-// the plugin's component_id / id_0.id_1... shape into this field).
-// Returns null when no local identifier is present.
-function _extract_call_number_from_dr(dr) {
-    if (!dr || typeof dr !== 'object') return null;
-    if (!Array.isArray(dr.identifiers)) return null;
-    for (const id of dr.identifiers) {
-        if (
-            id &&
-            id.type === 'local' &&
-            typeof id.identifier === 'string' &&
-            id.identifier.trim().length > 0
-        ) {
-            return id.identifier.trim();
-        }
-    }
-    return null;
-}
-
-// Latest N ingested objects (active only).
-//
-// Surfaces `title` + `call_number` parsed from `display_record` so
-// the home-page panel can render a human-readable label instead of
-// just the file path. Falls back to null for either field if the
-// display_record doesn't carry the value — the partial decides what
-// to show in that case.
-//
-// We strip the raw `display_record` blob from the response: it's
-// ~3KB per row and the dashboard partial only needs the two derived
-// fields.
+/*
+ * Latest N ingested objects (active only).
+ * 
+ * Surfaces `title` parsed from `display_record` so the home-page panel can
+ * render a human-readable label; `title` is null when the display_record
+ * has none, and the partial falls back to a shortened pid. (The card was
+ * simplified to title-only — the former call-number/file-path subtitle was
+ * dropped, so `call_number` / `file_name` are no longer derived here.)
+ * 
+ * We strip the raw `display_record` blob from the response (~3KB per row);
+ * the dashboard partial only needs the derived `title`.
+ */
 async function recent_ingests({ limit = 5 } = {}) {
     const n = Number.parseInt(limit, 10);
     if (!Number.isFinite(n) || n < 1 || n > 50) {
@@ -183,7 +171,6 @@ async function recent_ingests({ limit = 5 } = {}) {
                 'is_member_of_collection',
                 'object_type',
                 'is_published',
-                'file_name',
                 'display_record',
                 'created'
             )
@@ -198,26 +185,29 @@ async function recent_ingests({ limit = 5 } = {}) {
             return {
                 ...rest,
                 title: _extract_title_from_dr(dr),
-                call_number: _extract_call_number_from_dr(dr),
             };
         });
     });
 }
 
-// Full breakdown for the dedicated /dashboard/stats page. Mirrors v1's
-// 12-card layout: collections + objects subcounts, media-type counts,
-// current fiscal-year ingests. One query each, all against indexed
-// columns. Returned as a flat object keyed for easy template access.
-//
-// Fiscal year follows DU convention: July 1 → June 30. We compute the
-// boundary inside the call so a year rollover at midnight just works
-// without any cache busting beyond the normal 30s expiry.
+/*
+ * Full breakdown for the dedicated /dashboard/stats page. Mirrors v1's
+ * 12-card layout: collections + objects subcounts, media-type counts,
+ * current fiscal-year ingests. One query each, all against indexed
+ * columns. Returned as a flat object keyed for easy template access.
+ * 
+ * Fiscal year follows DU convention: July 1 → June 30. We compute the
+ * boundary inside the call so a year rollover at midnight just works
+ * without any cache busting beyond the normal 30s expiry.
+ */
 async function extended_summary() {
     return memoized('extended_summary', async () => {
-        // Eight count aggregates in two grouped queries — one COUNT
-        // per row, one big CASE-heavy aggregate for the rest. Keeps
-        // the DB roundtrips bounded regardless of how many cards we
-        // surface.
+        /*
+         * Eight count aggregates in two grouped queries — one COUNT
+         * per row, one big CASE-heavy aggregate for the rest. Keeps
+         * the DB roundtrips bounded regardless of how many cards we
+         * surface.
+         */
         const counts_row = await db()(tables.objects)
             .select(
                 db().raw(
@@ -239,8 +229,10 @@ async function extended_summary() {
             )
             .first();
 
-        // Media-type buckets. Same mime-type lists v1 used; preserving
-        // them so the v1 → v2 numbers compare directly.
+        /*
+         * Media-type buckets. Same mime-type lists v1 used; preserving
+         * them so the v1 → v2 numbers compare directly.
+         */
         const media_row = await db()(tables.objects)
             .select(
                 db().raw(
@@ -262,10 +254,12 @@ async function extended_summary() {
             )
             .first();
 
-        // Fiscal-year ingests: July 1 of (current FY start year) to
-        // June 30 of (current FY end year). For today = Aug 2026,
-        // FY 2027 = 2026-07-01 to 2027-06-30. For today = Mar 2026,
-        // FY 2026 = 2025-07-01 to 2026-06-30.
+        /*
+         * Fiscal-year ingests: July 1 of (current FY start year) to
+         * June 30 of (current FY end year). For today = Aug 2026,
+         * FY 2027 = 2026-07-01 to 2027-06-30. For today = Mar 2026,
+         * FY 2026 = 2025-07-01 to 2026-06-30.
+         */
         const { start, end } = _current_fiscal_year_bounds();
         const fy_row = await db()(tables.objects)
             .where({ is_active: 1 })
@@ -288,25 +282,29 @@ async function extended_summary() {
     });
 }
 
-// Ingests per calendar year, all object types, active + inactive
-// (v1 counted everything to show throughput, not just leaf objects).
-//
-// `min_year` defaults to 2020 to match v1's chart range. We pad
-// missing years with zero so the chart x-axis is contiguous —
-// the consumer (EJS template) doesn't need to fill gaps itself.
+/*
+ * Ingests per calendar year, all object types, active + inactive
+ * (v1 counted everything to show throughput, not just leaf objects).
+ * 
+ * `min_year` defaults to 2020 to match v1's chart range. We pad
+ * missing years with zero so the chart x-axis is contiguous —
+ * the consumer (EJS template) doesn't need to fill gaps itself.
+ */
 async function ingests_per_year({ min_year = 2020 } = {}) {
     const min = Number.parseInt(min_year, 10);
     if (!Number.isFinite(min) || min < 2000 || min > 2100) {
         throw new ValidationError('min_year must be 2000..2100');
     }
     return memoized(`ingests_per_year:${min}`, async () => {
-        // Year extraction SQL differs by driver:
-        //   MariaDB / MySQL: YEAR(created)
-        //   SQLite (tests):  CAST(strftime('%Y', created) AS INTEGER)
-        // Dispatch on the knex client name once at query time rather
-        // than try/catching — keeps the failure mode clean if the
-        // first form is rejected for an unrelated reason (perms,
-        // missing column, etc.).
+        /*
+         * Year extraction SQL differs by driver:
+         *   MariaDB / MySQL: YEAR(created)
+         *   SQLite (tests):  CAST(strftime('%Y', created) AS INTEGER)
+         * Dispatch on the knex client name once at query time rather
+         * than try/catching — keeps the failure mode clean if the
+         * first form is rejected for an unrelated reason (perms,
+         * missing column, etc.).
+         */
         const client = db().client.config.client;
         const year_sql =
             client === 'mysql' || client === 'mysql2'
@@ -319,10 +317,12 @@ async function ingests_per_year({ min_year = 2020 } = {}) {
             .groupByRaw(year_sql)
             .orderBy('year', 'asc');
 
-        // Pad gaps so the chart x-axis is contiguous from `min` to
-        // the latest data point. If there's no data at all, return
-        // a single zero row for the current year so the chart still
-        // renders sensibly.
+        /*
+         * Pad gaps so the chart x-axis is contiguous from `min` to
+         * the latest data point. If there's no data at all, return
+         * a single zero row for the current year so the chart still
+         * renders sensibly.
+         */
         const this_year = new Date().getFullYear();
         const by_year = new Map(
             rows.map((r) => [Number(r.year), Number(r.count || 0)])
@@ -337,15 +337,19 @@ async function ingests_per_year({ min_year = 2020 } = {}) {
 }
 
 function _current_fiscal_year_bounds(today = new Date()) {
-    // FY N runs from July 1 of (N-1) to June 30 of N. So if today is
-    // Jan-Jun, we're in FY (current calendar year). If Jul-Dec, we're
-    // in FY (current calendar year + 1).
+    /*
+     * FY N runs from July 1 of (N-1) to June 30 of N. So if today is
+     * Jan-Jun, we're in FY (current calendar year). If Jul-Dec, we're
+     * in FY (current calendar year + 1).
+     */
     const y = today.getFullYear();
     const in_second_half = today.getMonth() >= 6; // months are 0-indexed; July = 6
     const start_year = in_second_half ? y : y - 1;
     const end_year = in_second_half ? y + 1 : y;
-    // Use YYYY-MM-DD strings — DB drivers handle the timestamp
-    // comparison correctly without us picking a timezone for them.
+    /*
+     * Use YYYY-MM-DD strings — DB drivers handle the timestamp
+     * comparison correctly without us picking a timezone for them.
+     */
     return {
         start: `${start_year}-07-01 00:00:00`,
         end: `${end_year}-06-30 23:59:59`,
@@ -359,8 +363,10 @@ function _fy_label(start, end) {
     return `Jul 1, ${start.slice(0, 4)} – Jun 30, ${end.slice(0, 4)}`;
 }
 
-// Active user count. Cheap aggregate, but cached so the home page
-// doesn't ping tbl_users separately.
+/*
+ * Active user count. Cheap aggregate, but cached so the home page
+ * doesn't ping tbl_users separately.
+ */
 async function active_users() {
     return memoized('active_users', async () => {
         const row = await db()(tables.users).where({ is_active: 1 }).count({ n: '*' }).first();
@@ -368,8 +374,10 @@ async function active_users() {
     });
 }
 
-// Test-only — drops the in-process cache so independent tests don't
-// observe each other's reads.
+/*
+ * Test-only — drops the in-process cache so independent tests don't
+ * observe each other's reads.
+ */
 function _reset() {
     cache.clear();
 }

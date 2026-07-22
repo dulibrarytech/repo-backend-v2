@@ -1,19 +1,21 @@
 'use strict';
 
-// e2e for the system-wide metadata-refresh admin surface.
-//
-// Coverage:
-//   - GET /admin/metadata-refresh renders the page + status partial
-//   - POST .../start creates an active batch + toasts on success
-//   - POST .../start refuses a second concurrent batch
-//   - POST .../start refuses when transformer flag has changed without force=1
-//   - POST .../:uuid/cancel deletes pending rows + flips status
-//   - GET .../preview returns the eligible row count
-//
-// We don't drive the producer here — that's covered in
-// tests/integration/metadata/producer.test.js. The admin page is a
-// pure orchestration layer over batches.create_batch /
-// batches.request_cancel.
+/*
+ * e2e for the system-wide metadata-refresh admin surface.
+ * 
+ * Coverage:
+ *   - GET /admin/metadata-refresh renders the page + status partial
+ *   - POST .../start creates an active batch + toasts on success
+ *   - POST .../start refuses a second concurrent batch
+ *   - POST .../start refuses when transformer flag has changed without force=1
+ *   - POST .../:uuid/cancel deletes pending rows + flips status
+ *   - GET .../preview returns the eligible row count
+ * 
+ * We don't drive the producer here — that's covered in
+ * tests/integration/metadata/producer.test.js. The admin page is a
+ * pure orchestration layer over batches.create_batch /
+ * batches.request_cancel.
+ */
 
 const supertest = require('supertest');
 const { make_app } = require('../helpers/app');
@@ -59,14 +61,16 @@ describe('admin: metadata refresh — e2e', () => {
         expect(res.text).toMatch(/<h1[^>]*>Metadata Refresh<\/h1>/);
         expect(res.text).toMatch(/id="metadata-refresh-status"/);
         expect(res.text).toMatch(/hx-get="\/repo\/dashboard\/admin\/metadata-refresh\/status"/);
-        // The trigger MUST use the keyword `every` — dashboard.js's
-        // htmx:beforeRequest hook keys off that to identify polling
-        // requests it should pause while the confirm modal is open.
-        // If a future refactor changes "every 2s" to something
-        // exotic (e.g. a custom JS trigger or hx-trigger-poll-url),
-        // the JS pause will silently stop working and the confirm-
-        // mid-swap race will reappear. This assertion is the
-        // tripwire.
+        /*
+         * The trigger MUST use the keyword `every` — dashboard.js's
+         * htmx:beforeRequest hook keys off that to identify polling
+         * requests it should pause while the confirm modal is open.
+         * If a future refactor changes "every 2s" to something
+         * exotic (e.g. a custom JS trigger or hx-trigger-poll-url),
+         * the JS pause will silently stop working and the confirm-
+         * mid-swap race will reappear. This assertion is the
+         * tripwire.
+         */
         expect(res.text).toMatch(/hx-trigger="load, every 2s"/);
     });
 
@@ -82,8 +86,10 @@ describe('admin: metadata refresh — e2e', () => {
 
     it('GET .../status surfaces "Currently fetching" + in-flight URI when worker is mid-tick', async () => {
         const cookie = await cookie_for('mref-inflight');
-        // Seed a running batch with one IN_PROGRESS row (simulating
-        // the worker mid-fetch without actually running the worker).
+        /*
+         * Seed a running batch with one IN_PROGRESS row (simulating
+         * the worker mid-fetch without actually running the worker).
+         */
         const batch_uuid = await batches.create_batch();
         const a = await db_helper.seed_object({ uri: '/repositories/2/archival_objects/777' });
         const model = require('../../metadata/model');
@@ -138,12 +144,14 @@ describe('admin: metadata refresh — e2e', () => {
 
         const batch = await db_queue()(BATCHES).first();
         expect(batch.status).toBe('running');
-        // Actor capture: cookie_for() seeds a user with du_id +
-        // first_name='Ada' (default 'User' last name). The controller
-        // reads req.user.du_id from the JWT; the model resolves the
-        // display name via tbl_users. Regression guard for the
-        // "by unknown" bug — earlier the controller looked at
-        // res.locals.user (never populated) and dropped both fields.
+        /*
+         * Actor capture: cookie_for() seeds a user with du_id +
+         * first_name='Ada' (default 'User' last name). The controller
+         * reads req.user.du_id from the JWT; the model resolves the
+         * display name via tbl_users. Regression guard for the
+         * "by unknown" bug — earlier the controller looked at
+         * res.locals.user (never populated) and dropped both fields.
+         */
         expect(batch.actor).toBe('mref-start');
         expect(batch.actor_name).toBe('Ada User');
         // Page renders the active-batch panel now.
@@ -154,11 +162,13 @@ describe('admin: metadata refresh — e2e', () => {
     });
 
     it('status partial renders the resume checkbox with hx-preserve so it survives polling', async () => {
-        // Regression: the status partial polls every 5s. Without
-        // hx-preserve, the checkbox would be wiped from the DOM on
-        // each swap (a new unchecked <input> replaces the old one).
-        // The fix is hx-preserve + a stable id on the checkbox so
-        // htmx morphs across swaps.
+        /*
+         * Regression: the status partial polls every 5s. Without
+         * hx-preserve, the checkbox would be wiped from the DOM on
+         * each swap (a new unchecked <input> replaces the old one).
+         * The fix is hx-preserve + a stable id on the checkbox so
+         * htmx morphs across swaps.
+         */
         const cookie = await cookie_for('mref-checkbox-preserve');
         const res = await supertest(app)
             .get('/repo/dashboard/admin/metadata-refresh/status')
@@ -218,10 +228,12 @@ describe('admin: metadata refresh — e2e', () => {
     });
 
     it('POST .../start without resume defaults to a fresh-run cursor', async () => {
-        // Regression guard: prior tests don't accidentally rely on
-        // resume being on by default. Even with a cancelled batch
-        // sitting in the DB, an unchecked-resume start produces a
-        // fresh-cursor batch.
+        /*
+         * Regression guard: prior tests don't accidentally rely on
+         * resume being on by default. Even with a cancelled batch
+         * sitting in the DB, an unchecked-resume start produces a
+         * fresh-cursor batch.
+         */
         const cookie = await cookie_for('mref-no-resume');
         const cancelled_uuid = await batches.create_batch();
         await db_queue()(BATCHES)
@@ -244,8 +256,10 @@ describe('admin: metadata refresh — e2e', () => {
         const res = await supertest(app)
             .post('/repo/dashboard/admin/metadata-refresh/start')
             .set('Cookie', cookie);
-        // Still 200 — handler caught ValidationError and rendered the
-        // status partial with an error toast.
+        /*
+         * Still 200 — handler caught ValidationError and rendered the
+         * status partial with an error toast.
+         */
         expect(res.status).toBe(200);
         const trigger = JSON.parse(res.headers['hx-trigger']);
         expect(trigger.toast.level).toBe('error');
@@ -340,8 +354,10 @@ describe('admin: metadata refresh — e2e', () => {
 
     it('GETs require auth (no cookie → 401/redirect)', async () => {
         const res = await supertest(app).get('/repo/dashboard/admin/metadata-refresh');
-        // The shared require_dashboard_auth redirects unauthenticated
-        // requests to /login (302).
+        /*
+         * The shared require_dashboard_auth redirects unauthenticated
+         * requests to /login (302).
+         */
         expect([302, 401]).toContain(res.status);
     });
 });

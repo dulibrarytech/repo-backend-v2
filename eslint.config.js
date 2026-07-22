@@ -13,7 +13,12 @@ module.exports = [
             'logs/**',
             'tmp/**',
             'uploads/**',
-            'public/vendor/**',
+            /*
+             * Vendored minified bundles (htmx/bootstrap) — never lint or --fix
+             * these. (Was 'public/vendor/**', which matched nothing — the
+             * bundles live under public/assets/vendor/.)
+             */
+            'public/assets/vendor/**',
         ],
     },
     js.configs.recommended,
@@ -42,7 +47,16 @@ module.exports = [
                 ...vitest.environments.env.globals,
             },
         },
-        rules: vitest.configs.recommended.rules,
+        rules: {
+            ...vitest.configs.recommended.rules,
+            /*
+             * expect(value, message) is a valid vitest form — the second arg
+             * is a custom failure message (the a11y contrast tests use it to
+             * print the failing ratio + hexes). The rule defaults to
+             * maxArgs: 1, which flags it; allow the documented 2-arg form.
+             */
+            'vitest/valid-expect': ['error', { maxArgs: 2 }],
+        },
     },
     {
         // Browser-side assets — served as static files to the dashboard.
@@ -56,4 +70,13 @@ module.exports = [
         },
     },
     prettier,
+    {
+        // Comment style: narrative blocks use /* … */ with aligned stars, not
+        // runs of // lines. Placed AFTER eslint-config-prettier so nothing can
+        // switch it off. Auto-fixable — `npm run lint:fix` converts the whole
+        // tree, which is also how the style is applied to other checkouts.
+        rules: {
+            'multiline-comment-style': ['error', 'starred-block'],
+        },
+    },
 ];

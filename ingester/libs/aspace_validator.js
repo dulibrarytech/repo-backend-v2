@@ -1,35 +1,37 @@
 'use strict';
 
-// ArchivesSpace record validator. Direct port of v1's
-// libs/metadata_validation.js with one rename: the function is named
-// `validate_record` here (the v1 name `validate_record_metadata` was
-// confusing — the "record" IS metadata).
-//
-// This is the single source of truth for "is an AS record safe to
-// ingest?" Two consumers must agree:
-//
-//   1. The ingest worker's process_metadata stage (Phase 3). On any
-//      error returned here, the worker halts the row with
-//      AS_METADATA_INVALID and stops — no Archivematica activity
-//      happens, so no rollback is needed.
-//
-//   2. The dashboard's ASpace Description QA view. It runs the same
-//      validator pre-ingest so staff see the exact errors they'd hit
-//      at ingest time. The QA view's promise is "what you see here is
-//      what the ingest will check"; both callers MUST stay in sync.
-//
-// Rules (all v1-compatible; do NOT change without coordinating with
-// the dashboard QA view):
-//
-//   - title: required, non-empty
-//   - uri: required, non-empty
-//   - identifiers: required, non-empty array
-//   - notes: required, non-empty; among them an abstract + a
-//     userestrict (rights statement) note must each have content
-//   - dates[].expression: every date must have an expression
-//   - is_compound=true → parts.length >= 2
-//   - parts: required, non-empty; every part must have a non-empty
-//     type (mime type)
+/*
+ * ArchivesSpace record validator. Direct port of v1's
+ * libs/metadata_validation.js with one rename: the function is named
+ * `validate_record` here (the v1 name `validate_record_metadata` was
+ * confusing — the "record" IS metadata).
+ * 
+ * This is the single source of truth for "is an AS record safe to
+ * ingest?" Two consumers must agree:
+ * 
+ *   1. The ingest worker's process_metadata stage (Phase 3). On any
+ *      error returned here, the worker halts the row with
+ *      AS_METADATA_INVALID and stops — no Archivematica activity
+ *      happens, so no rollback is needed.
+ * 
+ *   2. The dashboard's ASpace Description QA view. It runs the same
+ *      validator pre-ingest so staff see the exact errors they'd hit
+ *      at ingest time. The QA view's promise is "what you see here is
+ *      what the ingest will check"; both callers MUST stay in sync.
+ * 
+ * Rules (all v1-compatible; do NOT change without coordinating with
+ * the dashboard QA view):
+ * 
+ *   - title: required, non-empty
+ *   - uri: required, non-empty
+ *   - identifiers: required, non-empty array
+ *   - notes: required, non-empty; among them an abstract + a
+ *     userestrict (rights statement) note must each have content
+ *   - dates[].expression: every date must have an expression
+ *   - is_compound=true → parts.length >= 2
+ *   - parts: required, non-empty; every part must have a non-empty
+ *     type (mime type)
+ */
 
 function validate_record(metadata) {
     const errors = [];

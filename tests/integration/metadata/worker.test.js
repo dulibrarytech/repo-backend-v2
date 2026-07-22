@@ -1,10 +1,12 @@
 'use strict';
 
-// Integration tests for metadata/worker.js. We drive a real worker
-// against a real sqlite DB but stub the ArchivesSpace client so the
-// tests run without network access. The stub is parameterized so each
-// test can script its own response sequence (success, 401, transport
-// error, etc.).
+/*
+ * Integration tests for metadata/worker.js. We drive a real worker
+ * against a real sqlite DB but stub the ArchivesSpace client so the
+ * tests run without network access. The stub is parameterized so each
+ * test can script its own response sequence (success, 401, transport
+ * error, etc.).
+ */
 
 const model = require('../../../metadata/model');
 const repo_model = require('../../../repository/model');
@@ -19,7 +21,7 @@ const QUEUE = tables.metadata_update_queue;
 function make_fake_aspace({ get_record, fail_token = false } = {}) {
     let token_count = 0;
     let destroy_count = 0;
-    let destroyed_tokens = [];
+    const destroyed_tokens = [];
     return {
         is_configured: () => true,
         async get_session_token() {
@@ -51,11 +53,13 @@ describe('metadata/worker — integration', () => {
     beforeEach(async () => {
         await db_helper.reset_data();
         await db_queue()(QUEUE).del();
-        // The legacy mark_failed semantics (single-shot terminal) are
-        // what these tests assert. Force max_attempts=1 so a single
-        // failure still flips the row terminal. The retry / dead-
-        // letter path is covered in tests/integration/metadata/
-        // model_retry.test.js.
+        /*
+         * The legacy mark_failed semantics (single-shot terminal) are
+         * what these tests assert. Force max_attempts=1 so a single
+         * failure still flips the row terminal. The retry / dead-
+         * letter path is covered in tests/integration/metadata/
+         * model_retry.test.js.
+         */
         original_env = { ...process.env };
         process.env.METADATA_MAX_ATTEMPTS = '1';
         require('../../../config/app')._reset();
@@ -92,9 +96,11 @@ describe('metadata/worker — integration', () => {
         expect(queue_row.is_complete).toBe(1);
         expect(queue_row.is_updated).toBe(1);
 
-        // The repository row was updated with the new metadata.
-        // PUBLIC_FIELDS hides `mods` from the projection so read it
-        // directly to confirm the worker wrote both columns.
+        /*
+         * The repository row was updated with the new metadata.
+         * PUBLIC_FIELDS hides `mods` from the projection so read it
+         * directly to confirm the worker wrote both columns.
+         */
         const refreshed = await repo_model.get(obj.pid);
         const dr = JSON.parse(refreshed.display_record);
         expect(dr.display_record.title).toBe('NEW from ASpace');
@@ -104,15 +110,19 @@ describe('metadata/worker — integration', () => {
             .where({ pid: obj.pid })
             .first();
         expect(JSON.parse(raw.mods).title).toBe('NEW from ASpace');
-        // The indexer flag is set so the next indexer cycle picks the
-        // row up.
+        /*
+         * The indexer flag is set so the next indexer cycle picks the
+         * row up.
+         */
         expect(Boolean(raw.is_updated)).toBe(true);
     });
 
     it('processes up to `concurrency` rows in parallel per tick', async () => {
-        // 4 rows enqueued, concurrency=3. First tick claims 3; second
-        // claims the remaining 1. We don't need to actually parallelize
-        // — just verify the claim arithmetic.
+        /*
+         * 4 rows enqueued, concurrency=3. First tick claims 3; second
+         * claims the remaining 1. We don't need to actually parallelize
+         * — just verify the claim arithmetic.
+         */
         const objs = [];
         for (let i = 0; i < 4; i++) {
             objs.push(await db_helper.seed_object({ uri: `/r/${i}` }));
@@ -172,8 +182,10 @@ describe('metadata/worker — integration', () => {
         expect(row.is_complete).toBe(1);
         expect(row.status).toBe('COMPLETE');
         expect(row.error).toBeNull();
-        // The token was refreshed (called twice: once at boot, once
-        // after the 401).
+        /*
+         * The token was refreshed (called twice: once at boot, once
+         * after the 401).
+         */
         expect(aspace.token_count()).toBeGreaterThanOrEqual(2);
     });
 
@@ -191,9 +203,11 @@ describe('metadata/worker — integration', () => {
     });
 
     it('skips CANCELLED rows added to the queue while a tick is running', async () => {
-        // Cancelled rows get is_complete=1 immediately, so claim_pending
-        // never picks them up. This test exercises that — the worker
-        // should leave the row alone and process only the live one.
+        /*
+         * Cancelled rows get is_complete=1 immediately, so claim_pending
+         * never picks them up. This test exercises that — the worker
+         * should leave the row alone and process only the live one.
+         */
         const live = await db_helper.seed_object({ uri: '/r/live' });
         const dead = await db_helper.seed_object({ uri: '/r/dead' });
         const { batch_uuid } = await model.enqueue_pids([live.pid, dead.pid]);
@@ -220,8 +234,10 @@ describe('metadata/worker — integration', () => {
         });
         const worker = create_worker({ aspace });
         await worker.start();
-        // start() runs reset_orphaned then arms the interval. We don't
-        // want to wait for the interval — drive a tick manually.
+        /*
+         * start() runs reset_orphaned then arms the interval. We don't
+         * want to wait for the interval — drive a tick manually.
+         */
         await worker.tick();
         await worker.stop();
 
@@ -239,8 +255,10 @@ describe('metadata/worker — integration', () => {
         });
         const worker = create_worker({
             aspace,
-            // Force the read step to throw so the worker hits its
-            // "db read failed" branch.
+            /*
+             * Force the read step to throw so the worker hits its
+             * "db read failed" branch.
+             */
             get_db_record: async () => {
                 throw new Error('disk full');
             },
@@ -252,15 +270,19 @@ describe('metadata/worker — integration', () => {
     });
 
     describe('session token rotation', () => {
-        // Rotation exists to mitigate the AS-side per-session cache
-        // buildup that dominates the slow-down curve on long-running
-        // refreshes. See config/app.js for the full rationale.
+        /*
+         * Rotation exists to mitigate the AS-side per-session cache
+         * buildup that dominates the slow-down curve on long-running
+         * refreshes. See config/app.js for the full rationale.
+         */
         it('rotates the AS session token after the configured request count', async () => {
             process.env.ARCHIVESPACE_TOKEN_ROTATE_AFTER_REQUESTS = '2';
             require('../../../config/app')._reset();
 
-            // Two objects → one tick claims both at default concurrency=3.
-            // Counter hits the threshold (2) post-tick → rotation fires.
+            /*
+             * Two objects → one tick claims both at default concurrency=3.
+             * Counter hits the threshold (2) post-tick → rotation fires.
+             */
             const objs = [];
             for (let i = 0; i < 2; i++) {
                 objs.push(await db_helper.seed_object({ uri: `/r/${i}` }));
@@ -303,9 +325,11 @@ describe('metadata/worker — integration', () => {
             process.env.ARCHIVESPACE_TOKEN_ROTATE_AFTER_REQUESTS = '0';
             require('../../../config/app')._reset();
 
-            // Many requests, threshold zero → never rotates (pre-fix
-            // behavior; preserved as an opt-out for operators who
-            // want a single token for the whole batch).
+            /*
+             * Many requests, threshold zero → never rotates (pre-fix
+             * behavior; preserved as an opt-out for operators who
+             * want a single token for the whole batch).
+             */
             const objs = [];
             for (let i = 0; i < 4; i++) {
                 objs.push(await db_helper.seed_object({ uri: `/r/${i}` }));
@@ -321,15 +345,48 @@ describe('metadata/worker — integration', () => {
             expect(aspace.destroy_count()).toBe(0);
         });
 
+        it('backs off token bootstrap when ArchivesSpace is unreachable', async () => {
+            /*
+             * get_session_token always fails → the worker must NOT re-attempt
+             * every tick; it backs off until the cooldown elapses.
+             */
+            const obj = await db_helper.seed_object({ uri: '/r/back' });
+            await model.enqueue_pids([obj.pid]);
+            let token_calls = 0;
+            const aspace = {
+                is_configured: () => true,
+                async get_session_token() {
+                    token_calls += 1;
+                    throw new Error('aspace down');
+                },
+                async get_record(uri) {
+                    return { status: 200, data: { uri }, headers: {} };
+                },
+                async destroy_session_token() {},
+            };
+            let clock = 0;
+            const worker = create_worker({ aspace, now: () => clock });
+
+            await worker.tick(); // attempt 1 → fails, cooldown set
+            await worker.tick(); // within cooldown → skipped
+            expect(token_calls).toBe(1);
+
+            clock += 60000; // cooldown elapses
+            await worker.tick(); // attempt 2
+            expect(token_calls).toBe(2);
+        });
+
         it('survives a failed rotation — counter resets, next tick re-bootstraps', async () => {
-            // Failure mode: destroy succeeds but get_session_token
-            // fails on the rotation. Worker must not crash; the next
-            // tick's bootstrap recovers.
-            //
-            // Setup: threshold=2 + 2 rows in tick 1 = exactly one
-            // rotation attempt (which fails). Tick 2 has 1 row which
-            // is below threshold, so no second rotation muddies the
-            // count.
+            /*
+             * Failure mode: destroy succeeds but get_session_token
+             * fails on the rotation. Worker must not crash; the next
+             * tick's bootstrap recovers.
+             * 
+             * Setup: threshold=2 + 2 rows in tick 1 = exactly one
+             * rotation attempt (which fails). Tick 2 has 1 row which
+             * is below threshold, so no second rotation muddies the
+             * count.
+             */
             process.env.ARCHIVESPACE_TOKEN_ROTATE_AFTER_REQUESTS = '2';
             require('../../../config/app')._reset();
 
@@ -342,9 +399,11 @@ describe('metadata/worker — integration', () => {
                 is_configured: () => true,
                 async get_session_token() {
                     token_calls += 1;
-                    // Call 1 (bootstrap) succeeds; call 2 (rotation
-                    // mint) fails; call 3 (next-tick bootstrap)
-                    // succeeds.
+                    /*
+                     * Call 1 (bootstrap) succeeds; call 2 (rotation
+                     * mint) fails; call 3 (next-tick bootstrap)
+                     * succeeds.
+                     */
                     if (token_calls === 2) throw new Error('aspace down');
                     return `tok-${token_calls}`;
                 },
@@ -355,14 +414,18 @@ describe('metadata/worker — integration', () => {
             };
 
             const worker = create_worker({ aspace });
-            // Tick 1: bootstrap + work for 2 rows + failed rotation.
-            // Worker should NOT throw despite the rotation failure.
+            /*
+             * Tick 1: bootstrap + work for 2 rows + failed rotation.
+             * Worker should NOT throw despite the rotation failure.
+             */
             await worker.tick();
             expect(token_calls).toBe(2);
 
-            // Re-enqueue one row. Tick 2 bootstrap recovers via
-            // call #3; the one row processed leaves the counter at
-            // 1 (below threshold=2) so no second rotation fires.
+            /*
+             * Re-enqueue one row. Tick 2 bootstrap recovers via
+             * call #3; the one row processed leaves the counter at
+             * 1 (below threshold=2) so no second rotation fires.
+             */
             const c = await db_helper.seed_object({ uri: '/r/3' });
             await model.enqueue_pids([c.pid]);
             await worker.tick();

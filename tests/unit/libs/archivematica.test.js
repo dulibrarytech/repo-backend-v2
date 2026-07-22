@@ -1,9 +1,11 @@
 'use strict';
 
-// Unit tests for libs/archivematica. Covers URL composition, auth
-// query-string assembly, request bodies for transfer/approve, and
-// error mapping. Real network calls happen in Phase 3 integration
-// tests against the live AM dev instance.
+/*
+ * Unit tests for libs/archivematica. Covers URL composition, auth
+ * query-string assembly, request bodies for transfer/approve, and
+ * error mapping. Real network calls happen in Phase 3 integration
+ * tests against the live AM dev instance.
+ */
 
 const am_module = require('../../../libs/archivematica');
 const app_config = require('../../../config/app');
@@ -114,8 +116,10 @@ describe('libs/archivematica', () => {
             const r = await client.health_api();
             expect(r).toEqual({ ok: true, status: 200, error: null });
             const url = http.calls.get[0].url;
-            // Representative endpoint the pipeline actually uses — NOT
-            // the fragile atom/levels one.
+            /*
+             * Representative endpoint the pipeline actually uses — NOT
+             * the fragile atom/levels one.
+             */
             expect(url).toContain('transfer/unapproved/');
             expect(url).not.toContain('atom/levels');
             expect(url).toContain('username=svc');
@@ -188,25 +192,31 @@ describe('libs/archivematica', () => {
         });
 
         it('uses the longer start_transfer_timeout_ms when set', async () => {
-            // Default for start_transfer_timeout_ms is 10 min; with
-            // the general timeout_ms at 5s, the call should send the
-            // 10-min budget to axios. This is the fix for the 60s
-            // timeout that bit large-media transfers in production.
+            /*
+             * Default for start_transfer_timeout_ms is 10 min; with
+             * the general timeout_ms at 5s, the call should send the
+             * 10-min budget to axios. This is the fix for the 60s
+             * timeout that bit large-media transfers in production.
+             */
             const http = make_fake_http();
             http.set_response({ status: 200, data: { transfer_id: 'tx-1' } });
             const client = am_module.create_client(http);
             await client.start_transfer('codu:1', 'package-A');
             const call = http.calls.post[0];
-            // ARCHIVEMATICA_TIMEOUT_MS=5000 (general), and the default
-            // start_transfer_timeout_ms=10*60*1000=600000 should win.
+            /*
+             * ARCHIVEMATICA_TIMEOUT_MS=5000 (general), and the default
+             * start_transfer_timeout_ms=10*60*1000=600000 should win.
+             */
             expect(call.opts.timeout).toBe(600000);
         });
 
         it('falls back to timeout_ms when start_transfer_timeout_ms is shorter', async () => {
-            // Defensive: if someone explicitly sets the start budget
-            // BELOW the general one (misconfiguration), the call
-            // should still use whichever is larger. Belt-and-braces
-            // so a typo can't shorten the budget by accident.
+            /*
+             * Defensive: if someone explicitly sets the start budget
+             * BELOW the general one (misconfiguration), the call
+             * should still use whichever is larger. Belt-and-braces
+             * so a typo can't shorten the budget by accident.
+             */
             process.env.ARCHIVEMATICA_TIMEOUT_MS = '120000';
             process.env.ARCHIVEMATICA_START_TRANSFER_TIMEOUT_MS = '5000';
             app_config._reset();
@@ -218,10 +228,12 @@ describe('libs/archivematica', () => {
         });
 
         it('honors a custom start_transfer_timeout_ms larger than the general one', async () => {
-            // The intended use: a 30-min budget for an environment
-            // with 100GB+ media. start_transfer should send 30 min
-            // to axios; the general timeout_ms (60s default) is
-            // unchanged for the other AM calls.
+            /*
+             * The intended use: a 30-min budget for an environment
+             * with 100GB+ media. start_transfer should send 30 min
+             * to axios; the general timeout_ms (60s default) is
+             * unchanged for the other AM calls.
+             */
             process.env.ARCHIVEMATICA_TIMEOUT_MS = '60000';
             process.env.ARCHIVEMATICA_START_TRANSFER_TIMEOUT_MS = String(30 * 60 * 1000);
             app_config._reset();
@@ -233,8 +245,10 @@ describe('libs/archivematica', () => {
         });
 
         it('keeps the short timeout for other AM calls', async () => {
-            // Confirm we didn't accidentally bump every call to the
-            // long budget — only start_transfer should change.
+            /*
+             * Confirm we didn't accidentally bump every call to the
+             * long budget — only start_transfer should change.
+             */
             process.env.ARCHIVEMATICA_TIMEOUT_MS = '5000';
             app_config._reset();
             const http = make_fake_http();
@@ -283,9 +297,11 @@ describe('libs/archivematica', () => {
 
     describe('get_dip_path', () => {
         it('parses the v2/file response into a slash-chunked path', async () => {
-            // Storage API returns a related_packages array whose last
-            // path segment is the DIP UUID; v1 chunks it into 4-char
-            // groups joined by '/' and appends the folder (sans .7z).
+            /*
+             * Storage API returns a related_packages array whose last
+             * path segment is the DIP UUID; v1 chunks it into 4-char
+             * groups joined by '/' and appends the folder (sans .7z).
+             */
             const dip_uuid = 'aaaa-bbbb-cccc-dddd-eeeeffff0000';
             const http = make_fake_http();
             http.set_response({
@@ -298,9 +314,11 @@ describe('libs/archivematica', () => {
             const client = am_module.create_client(http);
             const res = await client.get_dip_path('sip-1');
             expect(res.status).toBe(200);
-            // The dip_uuid above has 28 hex chars after stripping
-            // dashes; chunked by 4 that's 7 groups, plus the folder
-            // name = 8 path segments.
+            /*
+             * The dip_uuid above has 28 hex chars after stripping
+             * dashes; chunked by 4 that's 7 groups, plus the folder
+             * name = 8 path segments.
+             */
             const chunks = res.dip_path.split('/');
             expect(chunks).toHaveLength(8);
             expect(chunks[chunks.length - 1]).toBe('package-A');
@@ -366,6 +384,98 @@ describe('libs/archivematica', () => {
             await client.clear_ingest('uuid-y');
             expect(http.calls.delete[0].url).toContain('transfer/uuid-x/delete/');
             expect(http.calls.delete[1].url).toContain('ingest/uuid-y/delete/');
+        });
+    });
+
+    describe('list_packages', () => {
+        it('GETs v2/file/ with package_type/limit/offset + storage auth, parses meta+objects', async () => {
+            const http = make_fake_http();
+            http.set_response({
+                status: 200,
+                data: {
+                    meta: { total_count: 2, limit: 100, offset: 0 },
+                    objects: [{ uuid: 'a' }, { uuid: 'b' }],
+                },
+            });
+            const client = am_module.create_client(http);
+            const res = await client.list_packages({ package_type: 'AIP', limit: 100, offset: 0 });
+            expect(res.status).toBe(200);
+            expect(res.meta.total_count).toBe(2);
+            expect(res.objects.map((o) => o.uuid)).toEqual(['a', 'b']);
+            const url = http.calls.get[0].url;
+            expect(url).toContain('v2/file/');
+            expect(url).toContain('package_type=AIP');
+            expect(url).toContain('limit=100');
+            expect(url).toContain('offset=0');
+            // storage_url appends the storage credentials as query string
+            expect(url).toContain('username=storage-svc');
+            expect(url).toContain('api_key=storage-key');
+        });
+
+        it('includes a status filter when provided', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 200, data: { meta: {}, objects: [] } });
+            const client = am_module.create_client(http);
+            await client.list_packages({ package_type: 'AIP', status: 'UPLOADED' });
+            expect(http.calls.get[0].url).toContain('status=UPLOADED');
+        });
+
+        it('returns empty objects + null meta on a non-200', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 503, data: null });
+            const client = am_module.create_client(http);
+            const res = await client.list_packages({ package_type: 'AIP' });
+            expect(res.status).toBe(503);
+            expect(res.meta).toBeNull();
+            expect(res.objects).toEqual([]);
+        });
+
+        it('tolerates a response missing the objects array', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 200, data: { meta: { total_count: 0 } } });
+            const client = am_module.create_client(http);
+            const res = await client.list_packages({ package_type: 'AIP' });
+            expect(res.objects).toEqual([]);
+        });
+
+        it('throws UpstreamError on a transport error (so the caller can retry the page)', async () => {
+            const http = make_fake_http();
+            http.set_response({ throw: new Error('ECONNREFUSED') });
+            const client = am_module.create_client(http);
+            await expect(client.list_packages({ package_type: 'AIP' })).rejects.toBeInstanceOf(
+                UpstreamError
+            );
+        });
+    });
+
+    describe('get_pointer_file', () => {
+        it('GETs v2/file/<uuid>/pointer_file/ and returns the XML body on 200', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 200, data: '<mets:mets>…</mets:mets>' });
+            const client = am_module.create_client(http);
+            const res = await client.get_pointer_file('uuid-1');
+            expect(res.status).toBe(200);
+            expect(res.xml).toContain('mets:mets');
+            const call = http.calls.get[0];
+            expect(call.url).toContain('v2/file/uuid-1/pointer_file/');
+            expect(call.url).toContain('username=storage-svc');
+            expect(call.opts.responseType).toBe('text');
+        });
+
+        it('returns empty xml on a non-200', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 404, data: 'not found' });
+            const client = am_module.create_client(http);
+            const res = await client.get_pointer_file('missing');
+            expect(res.status).toBe(404);
+            expect(res.xml).toBe('');
+        });
+
+        it('throws UpstreamError on a transport error', async () => {
+            const http = make_fake_http();
+            http.set_response({ throw: new Error('ETIMEDOUT') });
+            const client = am_module.create_client(http);
+            await expect(client.get_pointer_file('u')).rejects.toBeInstanceOf(UpstreamError);
         });
     });
 

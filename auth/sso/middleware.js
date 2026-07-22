@@ -1,15 +1,17 @@
 'use strict';
 
-// Layer 1: source IP allowlist for the SSO callback.
-//
-// Compiles SSO_TRUSTED_IPS (IPs and/or CIDRs) into a node:net BlockList
-// once at boot, then matches every incoming SSO request's req.ip
-// against it. Empty allowlist disables the layer entirely (useful in
-// dev). Production should always populate.
-//
-// req.ip comes from Express; trust-proxy must be configured correctly
-// at the app level for this to reflect the real client. We set
-// `trust proxy = 1` in production in config/express.js.
+/*
+ * Layer 1: source IP allowlist for the SSO callback.
+ * 
+ * Compiles SSO_TRUSTED_IPS (IPs and/or CIDRs) into a node:net BlockList
+ * once at boot, then matches every incoming SSO request's req.ip
+ * against it. Empty allowlist disables the layer entirely (useful in
+ * dev). Production should always populate.
+ * 
+ * req.ip comes from Express; trust-proxy must be configured correctly
+ * at the app level for this to reflect the real client. We set
+ * `trust proxy = 1` in production in config/express.js.
+ */
 
 const { BlockList } = require('node:net');
 
@@ -58,9 +60,11 @@ function ip_family(ip) {
     return ip && ip.includes(':') ? 'ipv6' : 'ipv4';
 }
 
-// Middleware: rejects requests whose source IP is not in the allowlist.
-// If the allowlist is empty, the layer is disabled and every request
-// passes through (still logged at debug level for auditability).
+/*
+ * Middleware: rejects requests whose source IP is not in the allowlist.
+ * If the allowlist is empty, the layer is disabled and every request
+ * passes through (still logged at debug level for auditability).
+ */
 function require_trusted_source(req, _res, next) {
     const cfg = app_config();
     const allowlist = cfg.sso.trusted_ips || [];

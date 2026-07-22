@@ -1,10 +1,12 @@
 'use strict';
 
-// Unit tests for libs/duracloud — URL composition, auth header,
-// and the is_configured() gate. The actual stream-fetch path is
-// exercised in the e2e tests with axios mocked there (axios isn't
-// safely stub-able at the module level without uglier tooling
-// than this codebase needs).
+/*
+ * Unit tests for libs/duracloud — URL composition, auth header,
+ * and the is_configured() gate. The actual stream-fetch path is
+ * exercised in the e2e tests with axios mocked there (axios isn't
+ * safely stub-able at the module level without uglier tooling
+ * than this codebase needs).
+ */
 
 const duracloud = require('../../../libs/duracloud');
 const app_config = require('../../../config/app');
@@ -59,8 +61,10 @@ describe('libs/duracloud', () => {
         });
 
         it('strips an existing https:// prefix from DURACLOUD_API', () => {
-            // v1 stored DURACLOUD_API without scheme, but operators
-            // sometimes paste a full URL. Don't double up.
+            /*
+             * v1 stored DURACLOUD_API without scheme, but operators
+             * sometimes paste a full URL. Don't double up.
+             */
             process.env.DURACLOUD_API = 'https://duracloud.example/durastore/';
             app_config._reset();
             expect(duracloud.build_endpoint('foo.jpg')).toBe(
@@ -77,9 +81,11 @@ describe('libs/duracloud', () => {
         });
 
         it('strips leading slashes from the path tail', () => {
-            // Belt-and-braces against an accidentally absolute-looking
-            // path. Without this we'd build .../dip-store//foo which
-            // some upstreams treat as a different resource.
+            /*
+             * Belt-and-braces against an accidentally absolute-looking
+             * path. Without this we'd build .../dip-store//foo which
+             * some upstreams treat as a different resource.
+             */
             process.env.DURACLOUD_API = 'duracloud.example/durastore/';
             app_config._reset();
             expect(duracloud.build_endpoint('/foo.jpg')).toBe(
@@ -128,12 +134,14 @@ describe('libs/duracloud', () => {
     });
 
     describe('ping (Services Health probe)', () => {
-        // Like the stream-fetch path, ping's HTTP behavior is left to
-        // the e2e tier (axios isn't cleanly stub-able at the module
-        // level here — see file header). What we CAN assert without a
-        // network is the is_configured() short-circuit: an unconfigured
-        // DuraCloud must resolve false, never throw, and never attempt
-        // a request.
+        /*
+         * Like the stream-fetch path, ping's HTTP behavior is left to
+         * the e2e tier (axios isn't cleanly stub-able at the module
+         * level here — see file header). What we CAN assert without a
+         * network is the is_configured() short-circuit: an unconfigured
+         * DuraCloud must resolve false, never throw, and never attempt
+         * a request.
+         */
         it('returns false when DuraCloud is not configured', async () => {
             // env vars cleared in beforeEach.
             await expect(duracloud.ping()).resolves.toBe(false);

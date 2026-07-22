@@ -24,8 +24,10 @@ describe('ingester/libs/qa_service', () => {
     let original_env;
     beforeEach(() => {
         original_env = { ...process.env };
-        // Wipe every overlapping name so legacy fallbacks from a
-        // host shell can't pollute the tests.
+        /*
+         * Wipe every overlapping name so legacy fallbacks from a
+         * host shell can't pollute the tests.
+         */
         delete process.env.QA_SERVICE;
         delete process.env.QA_SERVICE_API_KEY;
         delete process.env.QA_SERVICE_TIMEOUT_MS;
@@ -132,12 +134,14 @@ describe('ingester/libs/qa_service', () => {
     });
 
     describe('move_from_ingest_to_ready (rollback / cancel cleanup)', () => {
-        // Regression guard for a real production bug: the v2 client
-        // originally passed only `uuid` to a curation-API endpoint
-        // that requires uuid + folder + package. The curation service
-        // returned HTTP 400 and the folder was never moved back —
-        // queue rows lied about state. These tests pin all three
-        // params (and the optional actor) into the URL.
+        /*
+         * Regression guard for a real production bug: the v2 client
+         * originally passed only `uuid` to a curation-API endpoint
+         * that requires uuid + folder + package. The curation service
+         * returned HTTP 400 and the folder was never moved back —
+         * queue rows lied about state. These tests pin all three
+         * params (and the optional actor) into the URL.
+         */
         it('passes uuid + folder + package in the URL', async () => {
             const http = make_fake_http();
             http.set_response({ status: 200, data: { result: 'ok' } });
@@ -207,9 +211,11 @@ describe('ingester/libs/qa_service', () => {
     });
 
     describe('health_wasabi', () => {
-        // The /health/wasabi endpoint lives at the app root, not
-        // under /api/v2/qa/. Confirm the URL is built correctly and
-        // the X-API-Key header is set.
+        /*
+         * The /health/wasabi endpoint lives at the app root, not
+         * under /api/v2/qa/. Confirm the URL is built correctly and
+         * the X-API-Key header is set.
+         */
         it('hits /health/wasabi with X-API-Key', async () => {
             const http = make_fake_http();
             http.set_response({
@@ -226,9 +232,11 @@ describe('ingester/libs/qa_service', () => {
         });
 
         it('passes through 200-with-body.ok=false (Wasabi probe failed server-side)', async () => {
-            // The curation route always returns 200; the body's `ok`
-            // field is the actual signal. Client should not throw —
-            // dashboard renders based on body.ok.
+            /*
+             * The curation route always returns 200; the body's `ok`
+             * field is the actual signal. Client should not throw —
+             * dashboard renders based on body.ok.
+             */
             const http = make_fake_http();
             http.set_response({
                 status: 200,

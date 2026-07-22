@@ -1,15 +1,17 @@
 'use strict';
 
-// Express 5 application factory.
-//
-// Phase 1: wires security middleware (helmet/CORS/body-limits/sanitize/
-// request_id), cookie parser for JWT cookies, structured logging, the
-// /health and /version endpoints, and a central error handler. Domain
-// routes (auth, users, repository, indexer, dashboard, ingester, ...)
-// land in Phase 3+.
-//
-// Does NOT call `listen()` — that's the entry point's job. Returning a
-// bare app makes the factory directly usable from supertest in tests.
+/*
+ * Express 5 application factory.
+ *
+ * Phase 1: wires security middleware (helmet/CORS/body-limits/sanitize/
+ * request_id), cookie parser for JWT cookies, structured logging, the
+ * /health and /version endpoints, and a central error handler. Domain
+ * routes (auth, users, repository, indexer, dashboard, ingester, ...)
+ * land in Phase 3+.
+ *
+ * Does NOT call `listen()` — that's the entry point's job. Returning a
+ * bare app makes the factory directly usable from supertest in tests.
+ */
 
 const express = require('express');
 const helmet = require('helmet');
@@ -31,14 +33,18 @@ module.exports = function create_app() {
     const cfg = app_config();
     const app = express();
 
-    // Register DB liveness checks against the health registry. Idempotent
-    // — repeated factory calls (e.g. in tests) just overwrite the entries.
+    /*
+     * Register DB liveness checks against the health registry. Idempotent
+     * — repeated factory calls (e.g. in tests) just overwrite the entries.
+     */
     db_health.register_all();
 
     app.disable('x-powered-by');
     if (cfg.is_prod) {
-        // Single proxy hop (e.g. ALB / nginx). Required for accurate
-        // client IPs in rate-limit and CORS logging.
+        /*
+         * Single proxy hop (e.g. ALB / nginx). Required for accurate
+         * client IPs in rate-limit and CORS logging.
+         */
         app.set('trust proxy', 1);
         app.use(compression());
     }
@@ -74,13 +80,15 @@ module.exports = function create_app() {
     // Static assets — mounted under the app path so /repo/static/* works.
     app.use(`${cfg.path}/static`, express.static('./public'));
 
-    // Thumbnails — uploaded JPEGs live outside ./public so the upload
-    // path can be relocated (NFS, S3FS, etc.) without restructuring the
-    // static tree. Mount them under /repo/static/tn so URLs stored in
-    // tbl_objects.thumbnail remain stable. `fallthrough: false` makes a
-    // missing thumbnail return a clean 404 instead of cascading into the
-    // 404-handling middleware below — keeps logs less noisy for the
-    // (very) common case of an object that doesn't have one yet.
+    /*
+     * Thumbnails — uploaded JPEGs live outside ./public so the upload
+     * path can be relocated (NFS, S3FS, etc.) without restructuring the
+     * static tree. Mount them under /repo/static/tn so URLs stored in
+     * tbl_objects.thumbnail remain stable. `fallthrough: false` makes a
+     * missing thumbnail return a clean 404 instead of cascading into the
+     * 404-handling middleware below — keeps logs less noisy for the
+     * (very) common case of an object that doesn't have one yet.
+     */
     app.use(
         `${cfg.path}/static/tn`,
         express.static(cfg.thumbnail_upload_path, {
@@ -89,14 +97,18 @@ module.exports = function create_app() {
         })
     );
 
-    // Browsers request /favicon.ico unconditionally as a fallback even
-    // when the page declares one via <link rel="icon">. Return 204 so
-    // the browser stops retrying and the dev console stops complaining.
+    /*
+     * Browsers request /favicon.ico unconditionally as a fallback even
+     * when the page declares one via <link rel="icon">. Return 204 so
+     * the browser stops retrying and the dev console stops complaining.
+     */
     app.get('/favicon.ico', (_req, res) => res.status(204).end());
 
-    // Bare app path → dashboard. Without this, hitting the deployed
-    // base URL (e.g. https://host/repo) falls through to the 404
-    // handler since no route is registered at exactly `cfg.path`.
+    /*
+     * Bare app path → dashboard. Without this, hitting the deployed
+     * base URL (e.g. https://host/repo) falls through to the 404
+     * handler since no route is registered at exactly `cfg.path`.
+     */
     app.get(cfg.path, (_req, res) => res.redirect(`${cfg.path}/dashboard`));
 
     // ----- Routes (Phase 1 surface) -----
@@ -138,20 +150,34 @@ module.exports = function create_app() {
 
     // Dashboard (HTMX-driven HTML).
     require('../dashboard/routes')(app);
-    // Metadata refresh queue endpoints — share the dashboard auth
-    // middleware. Mounted after the main dashboard routes so the
-    // existing /objects/:pid/metadata (the MODAL display) still wins;
-    // the new routes are /objects/:pid/metadata/refresh which has an
-    // extra path segment so there's no ambiguity.
+    /*
+     * Metadata refresh queue endpoints — share the dashboard auth
+     * middleware. Mounted after the main dashboard routes so the
+     * existing /objects/:pid/metadata (the MODAL display) still wins;
+     * the new routes are /objects/:pid/metadata/refresh which has an
+     * extra path segment so there's no ambiguity.
+     */
     require('../metadata/routes')(app);
-    // Indexer admin endpoints (status, reindex-all, reindex-collection,
-    // reindex-pid). All staff-only.
+    /*
+     * Indexer admin endpoints (status, reindex-all, reindex-collection,
+     * reindex-pid). All staff-only.
+     */
     require('../indexer/routes')(app);
+    /*
+     * TIFF→JPG conversion — admin page + status partial + start/preview,
+     * plus the single-object /objects/:pid/convert action. Mounted after
+     * the dashboard routes for the same reason metadata is: the per-
+     * object POST has an extra path segment so it can't shadow the
+     * existing /objects/:pid/* routes. Staff-only.
+     */
+    require('../convert/dashboard_routes')(app);
 
-    // Public API v1 — ES-backed search + object detail + thumbnail proxy +
-    // collections list. NO auth, wide-open CORS, separate rate-limit
-    // bucket. Mounted AFTER the dashboard so the dashboard's stricter
-    // CORS + auth wiring is what governs /repo/dashboard/* requests.
+    /*
+     * Public API v1 — ES-backed search + object detail + thumbnail proxy +
+     * collections list. NO auth, wide-open CORS, separate rate-limit
+     * bucket. Mounted AFTER the dashboard so the dashboard's stricter
+     * CORS + auth wiring is what governs /repo/dashboard/* requests.
+     */
     require('../api/routes')(app);
 
     // 404 fallthrough — must come after all routes, before error handler.

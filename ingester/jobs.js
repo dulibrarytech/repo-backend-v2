@@ -1,22 +1,24 @@
 'use strict';
 
-// Job-history model. Records workflow-level actions (Make Digital
-// Objects, ASpace Description QA, Submit to Ingest) into
-// tbl_ingest_jobs and exposes a paginated list for the dashboard
-// history view.
-//
-// Why this is a separate table:
-//
-//   The 5-stage worker writes per-package state into tbl_ingest_queue
-//   and per-row state transitions into tbl_ingest_events. Neither
-//   captures the "staff submitted an MDO run on this folder" event
-//   — they're both per-package. tbl_ingest_jobs sits above both with
-//   one row per action submission, which is what staff browse from
-//   the history view.
-//
-//   Actor name is denormalized at write time (looked up in tbl_users
-//   then stored) so the list query is a single indexed SELECT — no
-//   cross-DB join required.
+/*
+ * Job-history model. Records workflow-level actions (Make Digital
+ * Objects, ASpace Description QA, Submit to Ingest) into
+ * tbl_ingest_jobs and exposes a paginated list for the dashboard
+ * history view.
+ * 
+ * Why this is a separate table:
+ * 
+ *   The 5-stage worker writes per-package state into tbl_ingest_queue
+ *   and per-row state transitions into tbl_ingest_events. Neither
+ *   captures the "staff submitted an MDO run on this folder" event
+ *   — they're both per-package. tbl_ingest_jobs sits above both with
+ *   one row per action submission, which is what staff browse from
+ *   the history view.
+ * 
+ *   Actor name is denormalized at write time (looked up in tbl_users
+ *   then stored) so the list query is a single indexed SELECT — no
+ *   cross-DB join required.
+ */
 
 const { randomUUID } = require('node:crypto');
 const { db, db_queue } = require('../config/db');
@@ -34,17 +36,21 @@ const JOB_TYPES = new Set([
 
 const STATUSES = new Set(['SUCCESSFUL', 'FAILED']);
 
-// Resolve a human-readable name for the audit row. The actor is
-// usually a du_id (JWT principal); we look that up in tbl_users
-// and stitch first + last into a single display string. Returns ''
-// when the user can't be resolved — better than blocking the job
-// record on a failed lookup.
+/*
+ * Resolve a human-readable name for the audit row. The actor is
+ * usually a du_id (JWT principal); we look that up in tbl_users
+ * and stitch first + last into a single display string. Returns ''
+ * when the user can't be resolved — better than blocking the job
+ * record on a failed lookup.
+ */
 async function _resolve_actor_name(actor) {
     if (!actor) return '';
-    // Actor strings come from the JWT principal — usually a du_id,
-    // sometimes an email, occasionally `staff (ip)` for unidentified
-    // sessions. Look the du_id case up in tbl_users; otherwise just
-    // store the actor string unchanged (it's already human-readable).
+    /*
+     * Actor strings come from the JWT principal — usually a du_id,
+     * sometimes an email, occasionally `staff (ip)` for unidentified
+     * sessions. Look the du_id case up in tbl_users; otherwise just
+     * store the actor string unchanged (it's already human-readable).
+     */
     try {
         const user = await users_model.get_by_du_id(actor).catch(() => null);
         if (user) {
@@ -60,12 +66,14 @@ async function _resolve_actor_name(actor) {
     return '';
 }
 
-// Record one job-history row. Used by the dashboard action handlers
-// (make_digital_objects_action, aspace_qa_check_action,
-// submit_ingest_action). All inputs are validated; a malformed call
-// fails loudly rather than write a corrupt row.
-//
-// Returns the inserted job_uuid.
+/*
+ * Record one job-history row. Used by the dashboard action handlers
+ * (make_digital_objects_action, aspace_qa_check_action,
+ * submit_ingest_action). All inputs are validated; a malformed call
+ * fails loudly rather than write a corrupt row.
+ * 
+ * Returns the inserted job_uuid.
+ */
 async function record_job({
     job_type,
     status,
@@ -91,8 +99,10 @@ async function record_job({
             ? resolved_actor_name
             : await _resolve_actor_name(actor);
 
-    // Truncate the error text — staff don't need a 100KB stack trace
-    // on a list view, and the column is plain TEXT (no built-in cap).
+    /*
+     * Truncate the error text — staff don't need a 100KB stack trace
+     * on a list view, and the column is plain TEXT (no built-in cap).
+     */
     const error_text = typeof error === 'string' && error.length > 0 ? error.slice(0, 1000) : null;
 
     // Stringify packages as JSON. Tolerate already-stringified input.
@@ -117,20 +127,22 @@ async function record_job({
     return job_uuid;
 }
 
-// List jobs newest-first with optional filtering. Used by the
-// dashboard history page.
-//
-// `filters`:
-//   q                — substring match against collection_folder or job_uuid
-//   job_type         — exact match
-//   status           — 'SUCCESSFUL' | 'FAILED'
-//   collection_folder — exact match (deep-link from a workspace row)
-//
-// `opts`:
-//   limit, offset — default 50 / 0; limit capped at 200
-//
-// Returns `{ rows, total, limit, offset }`. Rows have packages
-// already parsed back to an array.
+/*
+ * List jobs newest-first with optional filtering. Used by the
+ * dashboard history page.
+ * 
+ * `filters`:
+ *   q                — substring match against collection_folder or job_uuid
+ *   job_type         — exact match
+ *   status           — 'SUCCESSFUL' | 'FAILED'
+ *   collection_folder — exact match (deep-link from a workspace row)
+ * 
+ * `opts`:
+ *   limit, offset — default 50 / 0; limit capped at 200
+ * 
+ * Returns `{ rows, total, limit, offset }`. Rows have packages
+ * already parsed back to an array.
+ */
 async function list_jobs(filters = {}, opts = {}) {
     const limit = Math.min(Math.max(parseInt(opts.limit, 10) || 50, 1), 200);
     const offset = Math.max(parseInt(opts.offset, 10) || 0, 0);
@@ -168,30 +180,34 @@ async function list_jobs(filters = {}, opts = {}) {
     };
 }
 
-// Compute the set of collection folders whose MOST RECENT job
-// (any job_type) is a SUCCESSFUL archivesspace_description_qa.
-//
-// Semantics chosen so the ASpace QA view auto-hides folders that
-// staff has already validated, AND naturally re-shows them after
-// any subsequent activity:
-//
-//   - Folder passes QA           → latest job is SUCCESSFUL QA      → HIDDEN
-//   - QA fails                   → latest job is FAILED QA          → shown (needs fix)
-//   - MDO re-run after QA pass   → latest job is MDO                → shown (re-verify)
-//   - Submit to ingest           → latest job is packaging_…        → shown
-//     (in practice the folder also drops off the curation-service's
-//      /processed listing once it's been submitted, so it
-//      disappears from the view regardless)
-//
-// Implementation: pull every QA job and every NON-QA job that's
-// MORE RECENT than the QA job for the same folder. A folder is
-// qa-passed iff its newest row in this filtered set is a successful
-// QA. We do this in JS (one indexed SELECT) rather than a window
-// function so it stays portable across MariaDB + sqlite (tests).
+/*
+ * Compute the set of collection folders whose MOST RECENT job
+ * (any job_type) is a SUCCESSFUL archivesspace_description_qa.
+ * 
+ * Semantics chosen so the ASpace QA view auto-hides folders that
+ * staff has already validated, AND naturally re-shows them after
+ * any subsequent activity:
+ * 
+ *   - Folder passes QA           → latest job is SUCCESSFUL QA      → HIDDEN
+ *   - QA fails                   → latest job is FAILED QA          → shown (needs fix)
+ *   - MDO re-run after QA pass   → latest job is MDO                → shown (re-verify)
+ *   - Submit to ingest           → latest job is packaging_…        → shown
+ *     (in practice the folder also drops off the curation-service's
+ *      /processed listing once it's been submitted, so it
+ *      disappears from the view regardless)
+ * 
+ * Implementation: pull every QA job and every NON-QA job that's
+ * MORE RECENT than the QA job for the same folder. A folder is
+ * qa-passed iff its newest row in this filtered set is a successful
+ * QA. We do this in JS (one indexed SELECT) rather than a window
+ * function so it stays portable across MariaDB + sqlite (tests).
+ */
 async function get_qa_passed_folders() {
-    // Single query, ordered newest first. Walk and take the first
-    // row per folder — that row is by definition the "most recent
-    // job" for that folder.
+    /*
+     * Single query, ordered newest first. Walk and take the first
+     * row per folder — that row is by definition the "most recent
+     * job" for that folder.
+     */
     const rows = await db_queue()(JOBS)
         .select('collection_folder', 'job_type', 'status')
         .orderBy([
@@ -230,8 +246,10 @@ module.exports = {
     JOB_TYPES,
     STATUSES,
     _resolve_actor_name,
-    // Test helper — direct access to the tables module so tests can
-    // reset the table between cases without re-importing.
+    /*
+     * Test helper — direct access to the tables module so tests can
+     * reset the table between cases without re-importing.
+     */
     _table_name: JOBS,
     _db_queue: db_queue,
     _db_repo: db,

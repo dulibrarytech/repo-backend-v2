@@ -1,8 +1,10 @@
 'use strict';
 
-// Express handlers for the users domain. Each is `async` and lets
-// errors propagate — Express 5 forwards rejected promises to the
-// central error handler in config/express.js.
+/*
+ * Express handlers for the users domain. Each is `async` and lets
+ * errors propagate — Express 5 forwards rejected promises to the
+ * central error handler in config/express.js.
+ */
 
 const user_model = require('./model');
 const { ValidationError } = require('../libs/errors');

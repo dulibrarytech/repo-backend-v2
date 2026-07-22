@@ -225,10 +225,12 @@ describe('ingester/jobs', () => {
     });
 
     describe('get_qa_passed_folders', () => {
-        // Source of truth for the ASpace QA view's "hide folders
-        // already QA'd" filter. The rule: a folder is qa-passed iff
-        // its MOST RECENT job (any job_type) is a SUCCESSFUL
-        // archivesspace_description_qa.
+        /*
+         * Source of truth for the ASpace QA view's "hide folders
+         * already QA'd" filter. The rule: a folder is qa-passed iff
+         * its MOST RECENT job (any job_type) is a SUCCESSFUL
+         * archivesspace_description_qa.
+         */
         async function record(folder, job_type, status, ms_ago = 0) {
             const uuid = await jobs.record_job({
                 job_type,
@@ -236,10 +238,12 @@ describe('ingester/jobs', () => {
                 collection_folder: folder,
                 actor: 'tester',
             });
-            // Backdate so newest-first ordering is deterministic.
-            // The model defaults `created` to now(); we override it
-            // here so consecutive inserts in the same millisecond
-            // don't tie-break by insertion order alone.
+            /*
+             * Backdate so newest-first ordering is deterministic.
+             * The model defaults `created` to now(); we override it
+             * here so consecutive inserts in the same millisecond
+             * don't tie-break by insertion order alone.
+             */
             if (ms_ago > 0) {
                 await db_queue()(tables.ingest_jobs)
                     .where({ job_uuid: uuid })
@@ -263,8 +267,10 @@ describe('ingester/jobs', () => {
         });
 
         it('excludes a folder whose latest job is a non-QA action (MDO re-run)', async () => {
-            // 5s ago: QA succeeded. Now: MDO re-run. Latest is MDO,
-            // not QA → folder should NOT be considered qa-passed.
+            /*
+             * 5s ago: QA succeeded. Now: MDO re-run. Latest is MDO,
+             * not QA → folder should NOT be considered qa-passed.
+             */
             await record('col-rerun', 'archivesspace_description_qa', 'SUCCESSFUL', 5000);
             await record('col-rerun', 'make_digital_objects', 'SUCCESSFUL', 0);
             const passed = await jobs.get_qa_passed_folders();

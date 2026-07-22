@@ -36,8 +36,10 @@ describe('ingester/lib/polling — poll', () => {
     it('respects an AbortSignal fired mid-poll', async () => {
         const controller = new AbortController();
         const check = async () => {
-            // Fire the abort during the first probe so the next sleep
-            // wakes immediately.
+            /*
+             * Fire the abort during the first probe so the next sleep
+             * wakes immediately.
+             */
             controller.abort();
             return { done: false };
         };

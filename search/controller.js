@@ -20,8 +20,10 @@ async function search_objects(req, res) {
     });
     res.json({
         ...result,
-        // API responses surface the enriched fields (title, handle,
-        // uri parsed from display_record) but never the raw blob.
+        /*
+         * API responses surface the enriched fields (title, handle,
+         * uri parsed from display_record) but never the raw blob.
+         */
         items: projection.enrich_all(result.items),
     });
 }

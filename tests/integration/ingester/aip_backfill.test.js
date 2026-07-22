@@ -1,9 +1,11 @@
 'use strict';
 
-// Integration tests for ingester/aip_backfill.js. Real sqlite via
-// the test harness; no Stage 6 execution (we cover the discovery +
-// enqueue + cancel + status paths only). End-to-end Stage 6
-// behavior is in tests/integration/ingester/aip_store_stage.test.js.
+/*
+ * Integration tests for ingester/aip_backfill.js. Real sqlite via
+ * the test harness; no Stage 6 execution (we cover the discovery +
+ * enqueue + cancel + status paths only). End-to-end Stage 6
+ * behavior is in tests/integration/ingester/aip_store_stage.test.js.
+ */
 
 const { randomUUID } = require('node:crypto');
 
@@ -58,11 +60,13 @@ describe('ingester/aip_backfill', () => {
         });
 
         it('excludes orphan (AM_NOT_FOUND) rows from eligibility so they aren\'t re-enqueued', async () => {
-            // Orphans are terminal-and-non-retryable. Stage 6 marks
-            // them is_migrated=8 when AM returns 404; the backfill
-            // must skip them on subsequent runs so the operator
-            // doesn't keep enqueuing the same dead ends every time
-            // they click Start.
+            /*
+             * Orphans are terminal-and-non-retryable. Stage 6 marks
+             * them is_migrated=8 when AM returns 404; the backfill
+             * must skip them on subsequent runs so the operator
+             * doesn't keep enqueuing the same dead ends every time
+             * they click Start.
+             */
             const a = await db_helper.seed_object({ sip_uuid: 'aip-a' });
             // Orphan: should NOT be eligible.
             const o = await db_helper.seed_object({ sip_uuid: 'aip-orphan' });
@@ -122,12 +126,14 @@ describe('ingester/aip_backfill', () => {
             expect(result.count).toBe(2);
             // 3 still missing after the first chunk.
             expect(await aip_backfill.count_missing_aips()).toBe(5);
-            // The 2 rows just enqueued are still in the queue, but
-            // count_missing_aips is based on the aip_store table —
-            // they only drop out once Stage 6 runs and writes a
-            // success row. (This is the documented "wait for the
-            // current backfill to finish before starting another"
-            // operator caveat.)
+            /*
+             * The 2 rows just enqueued are still in the queue, but
+             * count_missing_aips is based on the aip_store table —
+             * they only drop out once Stage 6 runs and writes a
+             * success row. (This is the documented "wait for the
+             * current backfill to finish before starting another"
+             * operator caveat.)
+             */
         });
     });
 
@@ -155,8 +161,10 @@ describe('ingester/aip_backfill', () => {
                     pipeline_state: 'AIP_STORE_COMPLETE',
                     is_complete: 1,
                 });
-            // A non-backfill row in AIP_STORE_PENDING must NOT count
-            // toward the backfill totals.
+            /*
+             * A non-backfill row in AIP_STORE_PENDING must NOT count
+             * toward the backfill totals.
+             */
             await db_queue()(QUEUE).insert({
                 package: 'real',
                 batch: 'real-batch',

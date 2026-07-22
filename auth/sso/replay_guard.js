@@ -1,27 +1,31 @@
 'use strict';
 
-// Layer 2: timestamp + nonce replay guard.
-//
-// Rejects SSO callbacks whose timestamp is older than max_skew_seconds
-// OR whose nonce has already been seen within the LRU's TTL window.
-// Re-using a nonce is treated as a replay attempt — even within the
-// skew window — so a captured POST can't be replayed back.
-//
-// Two-part defense:
-//   - freshness  → bounds *how old* a request can be
-//   - uniqueness → catches replays inside the freshness window
-//
-// Memory is in-process. Behind a load balancer with N instances this
-// reduces the effective replay window from "indefinite" to "N tries,
-// each on a different instance". To close that gap fully, swap the
-// LRU for Redis. The interface here doesn't change.
+/*
+ * Layer 2: timestamp + nonce replay guard.
+ * 
+ * Rejects SSO callbacks whose timestamp is older than max_skew_seconds
+ * OR whose nonce has already been seen within the LRU's TTL window.
+ * Re-using a nonce is treated as a replay attempt — even within the
+ * skew window — so a captured POST can't be replayed back.
+ * 
+ * Two-part defense:
+ *   - freshness  → bounds *how old* a request can be
+ *   - uniqueness → catches replays inside the freshness window
+ * 
+ * Memory is in-process. Behind a load balancer with N instances this
+ * reduces the effective replay window from "indefinite" to "N tries,
+ * each on a different instance". To close that gap fully, swap the
+ * LRU for Redis. The interface here doesn't change.
+ */
 
 const { LRUCache } = require('lru-cache');
 
 const { UnauthorizedError, ValidationError } = require('../../libs/errors');
 
-// LRU sized for ~10k unique nonces inside the TTL. At 100 req/s that's
-// a comfortable buffer. TTL is computed from app_config at first call.
+/*
+ * LRU sized for ~10k unique nonces inside the TTL. At 100 req/s that's
+ * a comfortable buffer. TTL is computed from app_config at first call.
+ */
 let cache = null;
 
 function build_cache(ttl_seconds) {
@@ -75,8 +79,10 @@ function check(timestamp, nonce, { max_skew_seconds, now = Date.now } = {}) {
     return true;
 }
 
-// Test-only. Drops the in-memory store so independent test cases don't
-// observe each other's nonces.
+/*
+ * Test-only. Drops the in-memory store so independent test cases don't
+ * observe each other's nonces.
+ */
 function _reset() {
     cache = null;
 }

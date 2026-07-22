@@ -1,23 +1,25 @@
 'use strict';
 
-// DuraCloud space-usage helper for the stats page.
-//
-// Two upstream calls (DIP + AIP) against AM's Storage Service API.
-// Each call can take 1-3s on a healthy AM, longer when AM is under
-// load. We:
-//   - Issue them in parallel (Promise.all) so the slowest one bounds
-//     latency, not the sum.
-//   - Cache the result for `CACHE_TTL_MS` (longer than the regular
-//     30s stats cache) because storage usage moves on the order of
-//     hours, not seconds, and the HTTP cost is meaningful.
-//   - Treat either call returning null (AM unreachable, missing
-//     storage UUID, transport error) as a partial result — the cards
-//     render '—' for the missing value, the dashboard doesn't break.
-//
-// The HTMX partial that renders these cards lives in
-// views/dashboard/partials/stats_duracloud.ejs and is loaded by the
-// stats page AFTER the main paint so a slow AM doesn't gate the
-// rest of the page.
+/*
+ * DuraCloud space-usage helper for the stats page.
+ * 
+ * Two upstream calls (DIP + AIP) against AM's Storage Service API.
+ * Each call can take 1-3s on a healthy AM, longer when AM is under
+ * load. We:
+ *   - Issue them in parallel (Promise.all) so the slowest one bounds
+ *     latency, not the sum.
+ *   - Cache the result for `CACHE_TTL_MS` (longer than the regular
+ *     30s stats cache) because storage usage moves on the order of
+ *     hours, not seconds, and the HTTP cost is meaningful.
+ *   - Treat either call returning null (AM unreachable, missing
+ *     storage UUID, transport error) as a partial result — the cards
+ *     render '—' for the missing value, the dashboard doesn't break.
+ * 
+ * The HTMX partial that renders these cards lives in
+ * views/dashboard/partials/stats_duracloud.ejs and is loaded by the
+ * stats page AFTER the main paint so a slow AM doesn't gate the
+ * rest of the page.
+ */
 
 const archivematica = require('../libs/archivematica');
 const log = require('../libs/log');
@@ -63,8 +65,10 @@ async function _fetch() {
         dip_bytes = _coerce_bytes(dip);
         aip_bytes = _coerce_bytes(aip);
     } catch (err) {
-        // Shouldn't happen — the inner catches handle per-call errors —
-        // but be defensive against future refactors.
+        /*
+         * Shouldn't happen — the inner catches handle per-call errors —
+         * but be defensive against future refactors.
+         */
         error = err.message;
         log.warn({ event: 'stats_duracloud_usage_failed', err: err.message });
     }

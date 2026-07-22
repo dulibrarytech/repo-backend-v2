@@ -1,10 +1,12 @@
 'use strict';
 
-// Unit tests for libs/object_projection — the row-enrichment helper
-// the dashboard runs on every list row. Covers display_record parsing
-// edge cases (the long tail of malformed JSON we've actually seen in
-// the v1 corpus) and the thumbnail-URL synthesis that decides whether
-// the row's <img src> points at the proxy or at a stored URL.
+/*
+ * Unit tests for libs/object_projection — the row-enrichment helper
+ * the dashboard runs on every list row. Covers display_record parsing
+ * edge cases (the long tail of malformed JSON we've actually seen in
+ * the v1 corpus) and the thumbnail-URL synthesis that decides whether
+ * the row's <img src> points at the proxy or at a stored URL.
+ */
 
 const projection = require('../../../libs/object_projection');
 const app_config = require('../../../config/app');
@@ -71,8 +73,10 @@ describe('libs/object_projection', () => {
         });
 
         it('returns null when the value is a path but pid is missing', () => {
-            // Without a pid we can't build a proxy URL, so the caller
-            // should render a placeholder rather than a broken link.
+            /*
+             * Without a pid we can't build a proxy URL, so the caller
+             * should render a placeholder rather than a broken link.
+             */
             expect(projection.thumbnail_src('foo/thumbnails/x.jpg', null)).toBeNull();
         });
 
@@ -82,6 +86,22 @@ describe('libs/object_projection', () => {
             expect(projection.thumbnail_src('foo.jpg', 'pid-1')).toBe(
                 '/something-else/dashboard/objects/pid-1/thumbnail/raw'
             );
+        });
+    });
+
+    describe('media_category', () => {
+        it('maps mime types to coarse categories', () => {
+            expect(projection.media_category('audio/mpeg')).toBe('audio');
+            expect(projection.media_category('video/mp4')).toBe('video');
+            expect(projection.media_category('application/pdf')).toBe('pdf');
+            expect(projection.media_category('image/tiff')).toBe('image');
+            expect(projection.media_category('IMAGE/JPEG')).toBe('image'); // case-insensitive
+        });
+        it('falls back to "file" for unknown or empty mime', () => {
+            expect(projection.media_category('application/zip')).toBe('file');
+            expect(projection.media_category('')).toBe('file');
+            expect(projection.media_category(null)).toBe('file');
+            expect(projection.media_category(undefined)).toBe('file');
         });
     });
 
@@ -102,6 +122,12 @@ describe('libs/object_projection', () => {
             expect(out.subjects).toEqual(['One', 'Two']);
         });
 
+        it('exposes media_category derived from the row mime_type', () => {
+            expect(projection.enrich({ pid: 'a', mime_type: 'audio/mpeg' }).media_category).toBe('audio');
+            expect(projection.enrich({ pid: 'b', mime_type: 'application/pdf' }).media_category).toBe('pdf');
+            expect(projection.enrich({ pid: 'c' }).media_category).toBe('file'); // no mime_type
+        });
+
         it('synthesizes a proxy URL for legacy dip-store thumbnails', () => {
             const out = projection.enrich({
                 pid: 'p2',
@@ -109,8 +135,10 @@ describe('libs/object_projection', () => {
                 display_record: null,
             });
             expect(out.thumbnail).toBe('/repo/dashboard/objects/p2/thumbnail/raw');
-            // Raw value preserved so the upload modal can still
-            // display what's stored.
+            /*
+             * Raw value preserved so the upload modal can still
+             * display what's stored.
+             */
             expect(out.thumbnail_raw).toBe('archivematica-dip/thumbnails/p2.jpg');
         });
 
@@ -124,9 +152,11 @@ describe('libs/object_projection', () => {
         });
 
         it('prefers display_record.thumbnail over the column value', () => {
-            // When the indexer wrote a newer URL into display_record
-            // we trust that copy over the lagging column. Matches the
-            // legacy behavior the comment in enrich() promises.
+            /*
+             * When the indexer wrote a newer URL into display_record
+             * we trust that copy over the lagging column. Matches the
+             * legacy behavior the comment in enrich() promises.
+             */
             const out = projection.enrich({
                 pid: 'p4',
                 thumbnail: 'stale-col.jpg',
@@ -144,4 +174,27 @@ describe('libs/object_projection', () => {
             expect(out.thumbnail_raw).toBeNull();
         });
     });
+
+    describe('is_empty_value', () => {
+        it('treats nullish + blank strings + empty/all-empty arrays & objects as empty', () => {
+            expect(projection.is_empty_value(null)).toBe(true);
+            expect(projection.is_empty_value(undefined)).toBe(true);
+            expect(projection.is_empty_value('')).toBe(true);
+            expect(projection.is_empty_value('   ')).toBe(true);
+            expect(projection.is_empty_value([])).toBe(true);
+            expect(projection.is_empty_value([null, '', '  '])).toBe(true);
+            expect(projection.is_empty_value({})).toBe(true);
+            expect(projection.is_empty_value({ a: '', b: null })).toBe(true);
+        });
+
+        it('treats real values (incl. 0 and false) as non-empty', () => {
+            expect(projection.is_empty_value('x')).toBe(false);
+            expect(projection.is_empty_value(0)).toBe(false);
+            expect(projection.is_empty_value(false)).toBe(false);
+            expect(projection.is_empty_value(['a'])).toBe(false);
+            expect(projection.is_empty_value({ a: 'b' })).toBe(false);
+            expect(projection.is_empty_value([{ k: 'v' }])).toBe(false);
+        });
+    });
+
 });

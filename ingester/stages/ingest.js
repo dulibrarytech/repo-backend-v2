@@ -1,33 +1,35 @@
 'use strict';
 
-// Stage 4 — Archivematica ingest + post-AM checks + DuraCloud wait.
-//
-//   entry:  TRANSFER_COMPLETE          (success path)
-//         | INGEST_IN_PROGRESS         (resume mid-ingest poll)
-//         | INGEST_COMPLETE            (resume after AM said done; needs DC)
-//         | WAITING_FOR_DURACLOUD      (resume mid-DC probe)
-//   exit:   MASTER_OBJECT_DATA_SAVED   (DC propagation confirmed)
-//         | INGEST_STATUS_TIMEOUT      (6 hr — post-AM rollback)
-//         | FAILED                     (AM reported failure mid-ingest)
-//         | AS_METADATA_DRIFT          (re-validation failed)
-//         | DURACLOUD_TIMEOUT          (1 hr — post-AM rollback)
-//         | INGEST_HALTED              (transport-level halt)
-//
-// Why so many entry states:
-//   Stage 4 has three substeps that each may take hours. Resume needs
-//   to land in the right substep instead of restarting the whole
-//   stage. The state machine flags which substep was in flight when
-//   the worker crashed.
-//
-// Substeps:
-//   1. Poll AM ingest_status(sip_uuid) every `ingest_poll_ms` until
-//      status === 'COMPLETE'. Halt at INGEST_STATUS_TIMEOUT or FAILED.
-//   2. Post-AM AS drift check: re-fetch the AS record + re-validate.
-//      The cached snapshot from stage 1 is the baseline. If staff
-//      edited the AS record while AM was processing, surface as
-//      AS_METADATA_DRIFT.
-//   3. DuraCloud wait: fetch get_dip_path(sip_uuid) to get the
-//      DC-side folder, then probe the METS file until it lands.
+/*
+ * Stage 4 — Archivematica ingest + post-AM checks + DuraCloud wait.
+ * 
+ *   entry:  TRANSFER_COMPLETE          (success path)
+ *         | INGEST_IN_PROGRESS         (resume mid-ingest poll)
+ *         | INGEST_COMPLETE            (resume after AM said done; needs DC)
+ *         | WAITING_FOR_DURACLOUD      (resume mid-DC probe)
+ *   exit:   MASTER_OBJECT_DATA_SAVED   (DC propagation confirmed)
+ *         | INGEST_STATUS_TIMEOUT      (6 hr — post-AM rollback)
+ *         | FAILED                     (AM reported failure mid-ingest)
+ *         | AS_METADATA_DRIFT          (re-validation failed)
+ *         | DURACLOUD_TIMEOUT          (1 hr — post-AM rollback)
+ *         | INGEST_HALTED              (transport-level halt)
+ * 
+ * Why so many entry states:
+ *   Stage 4 has three substeps that each may take hours. Resume needs
+ *   to land in the right substep instead of restarting the whole
+ *   stage. The state machine flags which substep was in flight when
+ *   the worker crashed.
+ * 
+ * Substeps:
+ *   1. Poll AM ingest_status(sip_uuid) every `ingest_poll_ms` until
+ *      status === 'COMPLETE'. Halt at INGEST_STATUS_TIMEOUT or FAILED.
+ *   2. Post-AM AS drift check: re-fetch the AS record + re-validate.
+ *      The cached snapshot from stage 1 is the baseline. If staff
+ *      edited the AS record while AM was processing, surface as
+ *      AS_METADATA_DRIFT.
+ *   3. DuraCloud wait: fetch get_dip_path(sip_uuid) to get the
+ *      DC-side folder, then probe the METS file until it lands.
+ */
 
 const am_default = require('../../libs/archivematica');
 const aspace_default = require('../../libs/archivesspace');
@@ -57,12 +59,16 @@ async function run(row, deps = {}) {
         return { ok: false, reason: 'missing_sip_uuid' };
     }
 
-    // --- Substep 1: poll ingest_status until terminal ----------------
-    //
-    // Skipped on resume from INGEST_COMPLETE or WAITING_FOR_DURACLOUD.
+    /*
+     * --- Substep 1: poll ingest_status until terminal ----------------
+     * 
+     * Skipped on resume from INGEST_COMPLETE or WAITING_FOR_DURACLOUD.
+     */
     if (row.pipeline_state === 'TRANSFER_COMPLETE' || row.pipeline_state === 'INGEST_IN_PROGRESS') {
-        // Move to INGEST_IN_PROGRESS on fresh entry so the dashboard
-        // shows the active substep.
+        /*
+         * Move to INGEST_IN_PROGRESS on fresh entry so the dashboard
+         * shows the active substep.
+         */
         if (row.pipeline_state === 'TRANSFER_COMPLETE') {
             await model.update_queue(
                 { id: row.id },
@@ -85,30 +91,38 @@ async function run(row, deps = {}) {
                 }
                 const am_status = res.data.status;
                 const microservice = res.data.microservice;
-                if (microservice && microservice !== row.micro_service) {
-                    row.micro_service = microservice;
-                    // AWAIT to avoid a race with the subsequent
-                    // INGEST_COMPLETE write — see the matching
-                    // comment in stages/transfer.js. MariaDB
-                    // optimistic-concurrency detects in-flight
-                    // unawaited updates and throws "Record has
-                    // changed since last read in table".
-                    try {
-                        await model.update_queue({ id: row.id }, { micro_service: microservice });
-                    } catch (err) {
-                        log.warn({
-                            event: 'ingest_microservice_write_failed',
-                            queue_id: row.id,
-                            microservice,
-                            err: err.message,
-                        });
-                    }
-                }
+
+                /*
+                 * Terminal FIRST so the terminal tick is write-free and can't
+                 * race the subsequent INGEST_COMPLETE write (MariaDB
+                 * optimistic-concurrency — see stages/transfer.js).
+                 */
                 if (am_status === 'FAILED' || am_status === 'REJECTED') {
                     return { done: true, value: { failed: true, am_status, microservice } };
                 }
                 if (am_status === 'COMPLETE') {
                     return { done: true, value: { microservice } };
+                }
+
+                /*
+                 * In progress — heartbeat (last_poll_at) every poll for the
+                 * dashboard's "checked Ns ago", plus the current microservice
+                 * on change. No status → no event.
+                 */
+                const progress = { last_poll_at: Date.now() };
+                if (microservice && microservice !== row.micro_service) {
+                    row.micro_service = microservice;
+                    progress.micro_service = microservice;
+                }
+                try {
+                    await model.update_queue({ id: row.id }, progress);
+                } catch (err) {
+                    log.warn({
+                        event: 'ingest_progress_write_failed',
+                        queue_id: row.id,
+                        microservice,
+                        err: err.message,
+                    });
                 }
                 return { done: false };
             },
@@ -159,19 +173,23 @@ async function run(row, deps = {}) {
             log.warn({ event: 'am_clear_ingest_failed', queue_id: row.id, err: err.message })
         );
 
-        // Refresh `row.pipeline_state` so the substep guards below
-        // see the post-update state.
+        /*
+         * Refresh `row.pipeline_state` so the substep guards below
+         * see the post-update state.
+         */
         row.pipeline_state = 'INGEST_COMPLETE';
     }
 
-    // --- Substep 2: post-AM AS drift check ---------------------------
-    //
-    // Re-fetch the AS record and re-validate. Use the cached snapshot
-    // from stage 1 (row.metadata) as a comparison baseline so we can
-    // detect drift (staff edited the record while AM was processing).
-    //
-    // Skipped on resume from WAITING_FOR_DURACLOUD — we already passed
-    // the drift check before going to DC wait.
+    /*
+     * --- Substep 2: post-AM AS drift check ---------------------------
+     * 
+     * Re-fetch the AS record and re-validate. Use the cached snapshot
+     * from stage 1 (row.metadata) as a comparison baseline so we can
+     * detect drift (staff edited the record while AM was processing).
+     * 
+     * Skipped on resume from WAITING_FOR_DURACLOUD — we already passed
+     * the drift check before going to DC wait.
+     */
     if (row.pipeline_state === 'INGEST_COMPLETE') {
         const drift_outcome = await check_for_drift(row, { aspace, validator });
         if (!drift_outcome.ok) {
@@ -186,15 +204,17 @@ async function run(row, deps = {}) {
         }
     }
 
-    // --- Substep 3: DuraCloud wait -----------------------------------
-    //
-    // Resolve the DC-side folder via AM, then probe the METS file
-    // until it returns 200.
-    //
-    // `dip_path` is persisted to the row on first resolve so resume
-    // doesn't need to re-call AM. (The path is deterministic from
-    // sip_uuid + AM's storage layout, but re-resolving costs a
-    // round-trip we don't need.)
+    /*
+     * --- Substep 3: DuraCloud wait -----------------------------------
+     * 
+     * Resolve the DC-side folder via AM, then probe the METS file
+     * until it returns 200.
+     * 
+     * `dip_path` is persisted to the row on first resolve so resume
+     * doesn't need to re-call AM. (The path is deterministic from
+     * sip_uuid + AM's storage layout, but re-resolving costs a
+     * round-trip we don't need.)
+     */
     let dip_path = row.dip_path && row.dip_path !== 'PENDING' ? row.dip_path : null;
     if (!dip_path) {
         let dp_res;
@@ -246,8 +266,23 @@ async function run(row, deps = {}) {
             if (res.status === 200 && typeof res.data === 'string' && res.data.length > 0) {
                 return { done: true, value: { mets_xml: res.data } };
             }
-            // 404 is the expected "not ready yet" signal during AIP
-            // propagation; log only the non-404 cases to avoid noise.
+            /*
+             * Not ready yet — heartbeat so the dashboard shows the DuraCloud
+             * wait is alive ("checked Ns ago"), not stalled. No status → no event.
+             */
+            try {
+                await model.update_queue({ id: row.id }, { last_poll_at: Date.now() });
+            } catch (err) {
+                log.warn({
+                    event: 'duracloud_heartbeat_write_failed',
+                    queue_id: row.id,
+                    err: err.message,
+                });
+            }
+            /*
+             * 404 is the expected "not ready yet" signal during AIP
+             * propagation; log only the non-404 cases to avoid noise.
+             */
             if (res.status !== 404) {
                 log.warn({
                     event: 'duracloud_probe_hiccup',
@@ -286,9 +321,11 @@ async function run(row, deps = {}) {
         return { ok: false, reason: 'duracloud_timeout' };
     }
 
-    // Success. Hand off to stage 5 (repository build). METADATA_PROCESSED
-    // signals "AM done + DC reachable + AS still valid" — the canonical
-    // entry point into the repository-build stage.
+    /*
+     * Success. Hand off to stage 5 (repository build). METADATA_PROCESSED
+     * signals "AM done + DC reachable + AS still valid" — the canonical
+     * entry point into the repository-build stage.
+     */
     await model.update_queue(
         { id: row.id },
         { status: 'METADATA_PROCESSED' },
@@ -308,23 +345,27 @@ async function run(row, deps = {}) {
     return { ok: true, sip_uuid, dip_path };
 }
 
-// Detect drift between the cached AS snapshot (taken at stage 1) and
-// the current AS state. We need a non-empty validator result OR a
-// structural change (different identifiers, different parts) to halt;
-// surface-level edits (title typo fix, etc.) we let through.
-//
-// v1's behavior was "re-run the same validator; if it now errors,
-// it's drift". We keep that contract — extra-strict drift detection
-// (e.g. structural diff) is a future enhancement.
+/*
+ * Detect drift between the cached AS snapshot (taken at stage 1) and
+ * the current AS state. We need a non-empty validator result OR a
+ * structural change (different identifiers, different parts) to halt;
+ * surface-level edits (title typo fix, etc.) we let through.
+ * 
+ * v1's behavior was "re-run the same validator; if it now errors,
+ * it's drift". We keep that contract — extra-strict drift detection
+ * (e.g. structural diff) is a future enhancement.
+ */
 async function check_for_drift(row, { aspace, validator }) {
     try {
         const token = await aspace.get_session_token();
         const res = await aspace.get_record(row.metadata_uri, token);
         if (res.status !== 200 || !res.data) {
-            // We couldn't re-fetch; treat that as a non-drift halt
-            // signal. Caller maps to AS_METADATA_DRIFT for staff
-            // visibility (the AM-side AIP exists, so this is a
-            // post-AM failure regardless).
+            /*
+             * We couldn't re-fetch; treat that as a non-drift halt
+             * signal. Caller maps to AS_METADATA_DRIFT for staff
+             * visibility (the AM-side AIP exists, so this is a
+             * post-AM failure regardless).
+             */
             return {
                 ok: false,
                 reason: 'aspace_unreachable_postingest',

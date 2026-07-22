@@ -137,16 +137,19 @@ describe('search + stats — e2e', () => {
 
     describe('GET /repo/stats/recent-ingests', () => {
         it('returns latest objects newest first', async () => {
-            const seeded = [];
             for (let i = 0; i < 4; i++) {
-                seeded.push(await db_helper.seed_object({ file_name: `r-${i}.dat` }));
+                await db_helper.seed_object({ pid: `codu:r-${i}` });
             }
             const res = await supertest(app)
                 .get('/repo/stats/recent-ingests?limit=2')
                 .set('Authorization', bearer)
                 .expect(200);
             expect(res.body.items).toHaveLength(2);
-            expect(res.body.items[0].file_name).toBe('r-3.dat');
+            /*
+             * Ordering asserted via pid — file_name is no longer returned by
+             * recent_ingests() (the home card is title-only).
+             */
+            expect(res.body.items[0].pid).toBe('codu:r-3');
         });
     });
 
@@ -210,12 +213,18 @@ describe('search + stats — e2e', () => {
 
         it('recent-ingests partial returns the list fragment', async () => {
             const cookie = await cookie_for('home-recent');
-            await db_helper.seed_object({ file_name: 'home-photo.jpg' });
+            /*
+             * Title-only card: seed a titled object and assert the title shows
+             * (file_name is no longer rendered).
+             */
+            await db_helper.seed_object({
+                display_record: JSON.stringify({ title: 'Home Photo' }),
+            });
             const res = await supertest(app)
                 .get('/repo/dashboard/_home/recent-ingests')
                 .set('Cookie', cookie)
                 .expect(200);
-            expect(res.text).toMatch(/home-photo\.jpg/);
+            expect(res.text).toMatch(/Home Photo/);
             expect(res.text).not.toMatch(/<html/);
         });
     });

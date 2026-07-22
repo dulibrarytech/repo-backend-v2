@@ -25,8 +25,10 @@ describe('libs/format', () => {
         });
 
         it('matches v1 dashboard format for the screenshot value', () => {
-            // 8.29 TB == ~9.11e12 bytes (1024^4 = 1.0995e12; 8.29 * that
-            // = 9.115e12). Picking exactly that yields '8.29 TB'.
+            /*
+             * 8.29 TB == ~9.11e12 bytes (1024^4 = 1.0995e12; 8.29 * that
+             * = 9.115e12). Picking exactly that yields '8.29 TB'.
+             */
             expect(format_bytes(8.29 * 1024 ** 4)).toBe('8.29 TB');
         });
 

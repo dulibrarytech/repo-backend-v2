@@ -2,7 +2,9 @@
 
 const user_model = require('../../../users/model');
 const db_helper = require('../../helpers/db');
-const { NotFoundError, ConflictError } = require('../../../libs/errors');
+const { db } = require('../../../config/db');
+const tables = require('../../../config/db_tables');
+const { NotFoundError, ConflictError, ValidationError } = require('../../../libs/errors');
 
 describe('users/model — DB integration', () => {
     beforeAll(async () => {
@@ -140,5 +142,129 @@ describe('users/model — DB integration', () => {
         await user_model.soft_delete(u.id);
         expect(await user_model.get_by_du_id('lookup')).toBeUndefined();
         expect((await user_model.get_by_du_id('lookup', { include_inactive: true })).id).toBe(u.id);
+    });
+
+    describe('actor_label (audit "Deleted by ..." label)', () => {
+        it('returns "First Last (du_id)" when the user resolves', async () => {
+            await db_helper.seed_user({
+                du_id: '871095226',
+                first_name: 'Fernando',
+                last_name: 'Reyes',
+            });
+            const label = await user_model.actor_label({
+                du_id: '871095226',
+                sub: '7',
+                email: 'f@du.edu',
+            });
+            expect(label).toBe('Fernando Reyes (871095226)');
+        });
+
+        it('resolves a just-deactivated (still-authenticated) user by name', async () => {
+            const u = await db_helper.seed_user({
+                du_id: 'gone',
+                first_name: 'Grace',
+                last_name: 'Hopper',
+            });
+            await user_model.soft_delete(u.id);
+            const label = await user_model.actor_label({ du_id: 'gone' });
+            expect(label).toBe('Grace Hopper (gone)');
+        });
+
+        it('falls back to the du_id when no matching user row exists', async () => {
+            const label = await user_model.actor_label({
+                du_id: 'ghost',
+                email: 'g@du.edu',
+                sub: '9',
+            });
+            expect(label).toBe('ghost');
+        });
+
+        it('falls back to the du_id when the row has no name', async () => {
+            // Direct insert — seed_user coerces empty names to defaults.
+            await db()(tables.users).insert({
+                du_id: 'noname',
+                email: 'n@du.edu',
+                first_name: '',
+                last_name: '',
+                is_active: 1,
+                token: '0',
+            });
+            const label = await user_model.actor_label({ du_id: 'noname' });
+            expect(label).toBe('noname');
+        });
+
+        it('falls back to email, then sub, when du_id is absent', async () => {
+            expect(await user_model.actor_label({ email: 'e@du.edu', sub: '5' })).toBe('e@du.edu');
+            expect(await user_model.actor_label({ sub: '5' })).toBe('5');
+        });
+
+        it('returns null for a missing principal', async () => {
+            expect(await user_model.actor_label(null)).toBeNull();
+            expect(await user_model.actor_label(undefined)).toBeNull();
+        });
+    });
+
+    describe('role (RBAC)', () => {
+        it('create persists a valid role', async () => {
+            const u = await user_model.create({
+                du_id: 'role-admin',
+                email: 'ra@du.edu',
+                first_name: 'R',
+                last_name: 'A',
+                role: 'admin',
+            });
+            expect(u.role).toBe('admin');
+            expect((await user_model.get_by_du_id('role-admin')).role).toBe('admin');
+        });
+
+        it('create defaults role to staff when omitted', async () => {
+            const u = await user_model.create({
+                du_id: 'role-default',
+                email: 'rd@du.edu',
+                first_name: 'R',
+                last_name: 'D',
+            });
+            expect(u.role).toBe('staff');
+        });
+
+        it('create rejects an unknown role', async () => {
+            await expect(
+                user_model.create({
+                    du_id: 'role-bad',
+                    email: 'rb@du.edu',
+                    first_name: 'R',
+                    last_name: 'B',
+                    role: 'superuser',
+                })
+            ).rejects.toBeInstanceOf(ValidationError);
+        });
+
+        it('update changes role; omitting role leaves it unchanged', async () => {
+            const u = await user_model.create({
+                du_id: 'role-upd',
+                email: 'ru@du.edu',
+                first_name: 'R',
+                last_name: 'U',
+                role: 'viewer',
+            });
+            const promoted = await user_model.update(u.id, { role: 'admin' });
+            expect(promoted.role).toBe('admin');
+            // A patch without role keeps the current role.
+            const renamed = await user_model.update(u.id, { first_name: 'Ray' });
+            expect(renamed.role).toBe('admin');
+            expect(renamed.first_name).toBe('Ray');
+        });
+
+        it('update rejects an unknown role', async () => {
+            const u = await user_model.create({
+                du_id: 'role-upd-bad',
+                email: 'rub@du.edu',
+                first_name: 'R',
+                last_name: 'U',
+            });
+            await expect(user_model.update(u.id, { role: 'root' })).rejects.toBeInstanceOf(
+                ValidationError
+            );
+        });
     });
 });

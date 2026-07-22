@@ -1,8 +1,10 @@
 'use strict';
 
-// Unit tests for the status → severity / suggested_action map and the
-// state → available-actions classifier. Pure functions, no DB; the
-// integration-tier model tests cover the model layer's *use* of these.
+/*
+ * Unit tests for the status → severity / suggested_action map and the
+ * state → available-actions classifier. Pure functions, no DB; the
+ * integration-tier model tests cover the model layer's *use* of these.
+ */
 
 const {
     STATUS_METADATA,
@@ -45,8 +47,10 @@ describe('ingester/state_metadata — get_status_metadata', () => {
     });
 
     it('does not return the prototype `toString` etc. as a status', () => {
-        // Defensive: the lookup uses hasOwnProperty so inherited keys
-        // don't leak through as fake states.
+        /*
+         * Defensive: the lookup uses hasOwnProperty so inherited keys
+         * don't leak through as fake states.
+         */
         const meta = get_status_metadata('toString');
         expect(meta).toEqual({ severity: 'INFO', suggested_action: null });
     });
@@ -66,8 +70,10 @@ describe('ingester/state_metadata — get_status_metadata', () => {
     });
 
     it('attaches a suggested_action to every WARN / ERROR state', () => {
-        // The dashboard relies on this: any non-INFO row must surface
-        // *some* guidance text, even if minimal.
+        /*
+         * The dashboard relies on this: any non-INFO row must surface
+         * *some* guidance text, even if minimal.
+         */
         const offenders = [];
         for (const [status, meta] of Object.entries(STATUS_METADATA)) {
             if (meta.severity === 'WARN' || meta.severity === 'ERROR') {
@@ -88,15 +94,19 @@ describe('ingester/state_metadata — available_actions', () => {
     });
 
     it('returns timeline-only for a terminal-success state', () => {
-        // COMPLETE has nothing actionable: no rollback target, no
-        // cancel target. The success path ends here.
+        /*
+         * COMPLETE has nothing actionable: no rollback target, no
+         * cancel target. The success path ends here.
+         */
         expect(available_actions('COMPLETE')).toEqual(['timeline']);
     });
 
     it('offers "cancel" for in-flight cancellable states', () => {
-        // PENDING is the entry state; staff can cancel before the
-        // worker picks it up. UPLOADING / TRANSFER_IN_PROGRESS are
-        // long-poll states — cancel signals the AbortController.
+        /*
+         * PENDING is the entry state; staff can cancel before the
+         * worker picks it up. UPLOADING / TRANSFER_IN_PROGRESS are
+         * long-poll states — cancel signals the AbortController.
+         */
         expect(available_actions('PENDING')).toEqual(['timeline', 'cancel']);
         expect(available_actions('UPLOADING')).toEqual(['timeline', 'cancel']);
         expect(available_actions('TRANSFER_IN_PROGRESS')).toEqual(['timeline', 'cancel']);
@@ -131,8 +141,10 @@ describe('ingester/state_metadata — available_actions', () => {
     });
 
     it('the three rollback sets are mutually exclusive', () => {
-        // Belt-and-braces — if anyone adds a state to two sets, the
-        // available_actions if/else chain silently picks just one.
+        /*
+         * Belt-and-braces — if anyone adds a state to two sets, the
+         * available_actions if/else chain silently picks just one.
+         */
         const pre = [...STATES_AT_PRE_AM_FAILURE];
         const am = [...STATES_AT_AM_FAILURE];
         const folder = [...STATES_PRE_FOLDER_MOVE_FAILURE];
@@ -146,9 +158,11 @@ describe('ingester/state_metadata — available_actions', () => {
     });
 
     it('returns rollback_to_packaging for CANCELLED_BY_USER with a pre-AM prior_state', () => {
-        // Both halves of PRE_AM_PRIOR_STATES (pre-upload AND
-        // post-upload-pre-AM) get the same action — the handler
-        // decides whether to call QA based on which half.
+        /*
+         * Both halves of PRE_AM_PRIOR_STATES (pre-upload AND
+         * post-upload-pre-AM) get the same action — the handler
+         * decides whether to call QA based on which half.
+         */
         for (const prev of PRE_AM_PRIOR_STATES) {
             const actions = available_actions('CANCELLED_BY_USER', prev);
             expect(actions).toContain('timeline');
@@ -168,12 +182,14 @@ describe('ingester/state_metadata — available_actions', () => {
     });
 
     it('CANCELLED_BY_USER always returns the single rollback_to_packaging follow-up', () => {
-        // Design decision: the kebab on a cancelled row shows ONE
-        // follow-up regardless of prev_state. The controller branches
-        // internally on prev_state to decide what cleanup runs (no
-        // QA call for pre-upload, QA move for post-upload-pre-AM,
-        // audit-only for AM-side). Keeps the staff UX predictable
-        // and avoids the word "rollback" entirely in the cancel flow.
+        /*
+         * Design decision: the kebab on a cancelled row shows ONE
+         * follow-up regardless of prev_state. The controller branches
+         * internally on prev_state to decide what cleanup runs (no
+         * QA call for pre-upload, QA move for post-upload-pre-AM,
+         * audit-only for AM-side). Keeps the staff UX predictable
+         * and avoids the word "rollback" entirely in the cancel flow.
+         */
         for (const prev of AM_PRIOR_STATES) {
             expect(available_actions('CANCELLED_BY_USER', prev)).toEqual([
                 'timeline',
@@ -191,9 +207,11 @@ describe('ingester/state_metadata — available_actions', () => {
     });
 
     it('never offers rollback_archivematica or reset from CANCELLED_BY_USER', () => {
-        // The cancel flow deliberately collapses all follow-ups into
-        // Return to Packaging. AM-side cleanup is a separate manual
-        // ops task (the audit trail flags it via needed_am_cleanup).
+        /*
+         * The cancel flow deliberately collapses all follow-ups into
+         * Return to Packaging. AM-side cleanup is a separate manual
+         * ops task (the audit trail flags it via needed_am_cleanup).
+         */
         for (const prev of [
             ...PRE_UPLOAD_PRIOR_STATES,
             ...POST_UPLOAD_PRE_AM_PRIOR_STATES,
@@ -214,9 +232,11 @@ describe('ingester/state_metadata — available_actions', () => {
     });
 
     it('does NOT offer cancel for halted / terminal states', () => {
-        // The cancel kebab item should never appear on a row that
-        // can't be cancelled — staff should see the rollback action
-        // instead. Spot-check the boundaries.
+        /*
+         * The cancel kebab item should never appear on a row that
+         * can't be cancelled — staff should see the rollback action
+         * instead. Spot-check the boundaries.
+         */
         expect(available_actions('COMPLETE')).not.toContain('cancel');
         expect(available_actions('INGEST_HALTED')).not.toContain('cancel');
         expect(available_actions('FAILED')).not.toContain('cancel');
@@ -225,8 +245,10 @@ describe('ingester/state_metadata — available_actions', () => {
     });
 
     it('every classified state is also present in STATUS_METADATA', () => {
-        // Catch typos: if you add 'INGSET_HALTED' to a rollback set,
-        // the row would never render the right suggested_action.
+        /*
+         * Catch typos: if you add 'INGSET_HALTED' to a rollback set,
+         * the row would never render the right suggested_action.
+         */
         const all = [
             ...STATES_AT_PRE_AM_FAILURE,
             ...STATES_AT_AM_FAILURE,

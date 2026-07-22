@@ -1,13 +1,15 @@
 'use strict';
 
-// Render the workspace_action_result partial directly with ejs and
-// inspect the resulting HTML. The previous implementation injected
-// an inline <script> tag for the deferred redirect; our CSP
-// (script-src 'self' jsdelivr only) blocks that, leaving the
-// redirect silently broken. This test pins the CSP-safe pattern:
-// no inline scripts under any rendering path, and a
-// .workspace-deferred-redirect sentinel <div> when a redirect is
-// requested so dashboard.js section 10 can pick it up.
+/*
+ * Render the workspace_action_result partial directly with ejs and
+ * inspect the resulting HTML. The previous implementation injected
+ * an inline <script> tag for the deferred redirect; our CSP
+ * (script-src 'self' only) blocks that, leaving the
+ * redirect silently broken. This test pins the CSP-safe pattern:
+ * no inline scripts under any rendering path, and a
+ * .workspace-deferred-redirect sentinel <div> when a redirect is
+ * requested so dashboard.js section 10 can pick it up.
+ */
 
 const path = require('node:path');
 const ejs = require('ejs');
@@ -23,12 +25,16 @@ function render(locals) {
 
 describe('workspace_action_result partial — CSP-safe deferred redirect', () => {
     it('never emits an inline <script> tag (CSP forbids inline scripts)', async () => {
-        // Cover both the success-with-redirect AND the bare-success
-        // paths — the inline <script> only ever rode the success
-        // branch, so that's where regressions land.
+        /*
+         * Cover both the success-with-redirect AND the bare-success
+         * paths — the inline <script> only ever rode the success
+         * branch, so that's where regressions land.
+         */
         const variants = [
-            // Success + redirect — the path that ALWAYS used to emit
-            // <script>.
+            /*
+             * Success + redirect — the path that ALWAYS used to emit
+             * <script>.
+             */
             {
                 ok: true,
                 action: 'Submit to Ingest',
@@ -87,9 +93,11 @@ describe('workspace_action_result partial — CSP-safe deferred redirect', () =>
     });
 
     it('skips the sentinel when !ok (even if redirect_to is set)', async () => {
-        // Defense-in-depth: the partial gate `ok && redirect_to`
-        // already excludes this combo, but tests pin both halves
-        // so a future edit can't accidentally redirect on failures.
+        /*
+         * Defense-in-depth: the partial gate `ok && redirect_to`
+         * already excludes this combo, but tests pin both halves
+         * so a future edit can't accidentally redirect on failures.
+         */
         const html = await render({
             ok: false,
             action: 'Submit to Ingest',

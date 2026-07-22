@@ -1,17 +1,19 @@
 'use strict';
 
-// WCAG 2.1 AA contrast regression guard.
-//
-// Reads the CSS tokens straight out of public/assets/styles.css and
-// computes the contrast ratio of each foreground / background pair
-// the dashboard actually renders. If any token drift drops a pair
-// below the AA threshold (4.5:1 for normal text), the test fails —
-// catching the next person who darkens an accent or lightens a
-// background without checking the math.
-//
-// Why parse the stylesheet rather than hard-code the hexes here? So
-// the test fails when *someone changes the CSS*, not when someone
-// changes the test. Single source of truth.
+/*
+ * WCAG 2.1 AA contrast regression guard.
+ * 
+ * Reads the CSS tokens straight out of public/assets/styles.css and
+ * computes the contrast ratio of each foreground / background pair
+ * the dashboard actually renders. If any token drift drops a pair
+ * below the AA threshold (4.5:1 for normal text), the test fails —
+ * catching the next person who darkens an accent or lightens a
+ * background without checking the math.
+ * 
+ * Why parse the stylesheet rather than hard-code the hexes here? So
+ * the test fails when *someone changes the CSS*, not when someone
+ * changes the test. Single source of truth.
+ */
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -21,15 +23,19 @@ const STYLES_PATH = path.join(__dirname, '..', '..', '..', 'public', 'assets', '
 function _read_tokens() {
     const text = fs.readFileSync(STYLES_PATH, 'utf8');
     const out = {};
-    // Match `--name: #xxxxxx;` inside any selector. We only care
-    // about top-level CSS variables (:root) but a global regex is
-    // fine — the dashboard doesn't redefine these tokens in nested
-    // scopes.
+    /*
+     * Match `--name: #xxxxxx;` inside any selector. We only care
+     * about top-level CSS variables (:root) but a global regex is
+     * fine — the dashboard doesn't redefine these tokens in nested
+     * scopes.
+     */
     const re = /(--[a-z][a-z0-9-]*)\s*:\s*(#[0-9a-fA-F]{3,8})\s*;/g;
     let m;
     while ((m = re.exec(text)) !== null) {
-        // Keep the FIRST hit only — :root declarations come before
-        // any later override.
+        /*
+         * Keep the FIRST hit only — :root declarations come before
+         * any later override.
+         */
         if (!(m[1] in out)) out[m[1]] = m[2];
     }
     return out;
@@ -44,8 +50,10 @@ function _hex_to_rgb(hex) {
     return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
 }
 
-// sRGB → relative luminance per WCAG 2.x:
-//   https://www.w3.org/TR/WCAG21/#dfn-relative-luminance
+/*
+ * sRGB → relative luminance per WCAG 2.x:
+ *   https://www.w3.org/TR/WCAG21/#dfn-relative-luminance
+ */
 function _relative_luminance(rgb) {
     const [r, g, b] = rgb.map((c) => {
         const cs = c / 255;
@@ -64,15 +72,19 @@ function _contrast_ratio(fg_hex, bg_hex) {
 describe('a11y — color contrast (WCAG 2.1 AA)', () => {
     const tokens = _read_tokens();
 
-    // AA threshold for normal text (small UI labels we render at
-    // 11–14px count as "normal" — AA's "large text" exemption only
-    // applies at ≥18px or ≥14px bold).
+    /*
+     * AA threshold for normal text (small UI labels we render at
+     * 11–14px count as "normal" — AA's "large text" exemption only
+     * applies at ≥18px or ≥14px bold).
+     */
     const AA_NORMAL = 4.5;
 
     it('parses the expected tokens from styles.css', () => {
-        // Sanity — the regex actually found the variables we care
-        // about. If someone restructures :root, the test fails loud
-        // here rather than silently passing every pair.
+        /*
+         * Sanity — the regex actually found the variables we care
+         * about. If someone restructures :root, the test fails loud
+         * here rather than silently passing every pair.
+         */
         for (const name of [
             '--text',
             '--text-muted',
@@ -95,9 +107,11 @@ describe('a11y — color contrast (WCAG 2.1 AA)', () => {
         }
     });
 
-    // Pairs the dashboard actually renders. Each row: foreground,
-    // background, label-for-failures. Extending this list as we add
-    // new surfaces is how we keep coverage honest.
+    /*
+     * Pairs the dashboard actually renders. Each row: foreground,
+     * background, label-for-failures. Extending this list as we add
+     * new surfaces is how we keep coverage honest.
+     */
     const PAIRS = [
         ['--text', '--surface', 'body text on white'],
         ['--text', '--surface-alt', 'body text on surface-alt'],
@@ -116,8 +130,10 @@ describe('a11y — color contrast (WCAG 2.1 AA)', () => {
     for (const [fg, bg, label] of PAIRS) {
         it(`${label} — ${fg} on ${bg} meets AA (≥${AA_NORMAL}:1)`, () => {
             const ratio = _contrast_ratio(tokens[fg], tokens[bg]);
-            // Helpful failure message — print the actual ratio + the
-            // hexes so the maintainer can see what the change did.
+            /*
+             * Helpful failure message — print the actual ratio + the
+             * hexes so the maintainer can see what the change did.
+             */
             expect(
                 ratio,
                 `${fg}=${tokens[fg]} on ${bg}=${tokens[bg]} → ${ratio.toFixed(2)}:1 (need ≥${AA_NORMAL}:1)`

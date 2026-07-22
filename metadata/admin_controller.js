@@ -1,27 +1,29 @@
 'use strict';
 
-// Admin-facing controllers for the system-wide metadata refresh.
-//
-// Surface:
-//
-//   GET  /dashboard/admin/metadata-refresh           — full admin page
-//   GET  /dashboard/admin/metadata-refresh/status    — status partial (HTMX-polled)
-//   POST /dashboard/admin/metadata-refresh/start     — start a new batch
-//   POST /dashboard/admin/metadata-refresh/:uuid/cancel — request cancel
-//
-// The flow mirrors the existing indexer admin page:
-//   - One status panel polls every 5s and shows active-batch progress
-//     + a short history of past batches.
-//   - "Start refresh" enqueues a new batch row; the producer timer
-//     picks it up within METADATA_REFRESH_PRODUCER_POLL_MS.
-//   - "Cancel" flips the cancel flag and hard-deletes pending rows.
-//
-// Pre-flight cutover guard: when the operator starts a batch, we
-// snapshot the current ASPACE_USE_TRANSFORMER flag. The admin page
-// shows the flag in effect at start, and the start handler refuses
-// to start if a previous batch's flag differs without an explicit
-// `?force=1`. Prevents a silent "I flipped the flag, then the cron
-// ran and re-stamped everything with the new transformer" sequence.
+/*
+ * Admin-facing controllers for the system-wide metadata refresh.
+ * 
+ * Surface:
+ * 
+ *   GET  /dashboard/admin/metadata-refresh           — full admin page
+ *   GET  /dashboard/admin/metadata-refresh/status    — status partial (HTMX-polled)
+ *   POST /dashboard/admin/metadata-refresh/start     — start a new batch
+ *   POST /dashboard/admin/metadata-refresh/:uuid/cancel — request cancel
+ * 
+ * The flow mirrors the existing indexer admin page:
+ *   - One status panel polls every 5s and shows active-batch progress
+ *     + a short history of past batches.
+ *   - "Start refresh" enqueues a new batch row; the producer timer
+ *     picks it up within METADATA_REFRESH_PRODUCER_POLL_MS.
+ *   - "Cancel" flips the cancel flag and hard-deletes pending rows.
+ * 
+ * Pre-flight cutover guard: when the operator starts a batch, we
+ * snapshot the current ASPACE_USE_TRANSFORMER flag. The admin page
+ * shows the flag in effect at start, and the start handler refuses
+ * to start if a previous batch's flag differs without an explicit
+ * `?force=1`. Prevents a silent "I flipped the flag, then the cron
+ * ran and re-stamped everything with the new transformer" sequence.
+ */
 
 const app_config = require('../config/app');
 
@@ -74,18 +76,20 @@ async function metadata_refresh_page(req, res) {
     });
 }
 
-// Compute rate / ETA / elapsed from the batch row's counters. Pure
-// function over a few numbers — exported as a test helper.
-//
-// rate_per_min: terminal rows per minute since started_at. Stable
-//   enough for a status panel (we're sampling >= ~12 rows/min once
-//   the worker hits steady state).
-// eta_seconds: time until total - sum more rows finish, given the
-//   current rate. Null while rate is 0 (avoid Infinity) or once the
-//   batch is enqueue_complete + drained.
-// elapsed_seconds: now - started_at, capped at 0 (clock skew).
-//
-// Returns floats — the partial decides display precision.
+/*
+ * Compute rate / ETA / elapsed from the batch row's counters. Pure
+ * function over a few numbers — exported as a test helper.
+ * 
+ * rate_per_min: terminal rows per minute since started_at. Stable
+ *   enough for a status panel (we're sampling >= ~12 rows/min once
+ *   the worker hits steady state).
+ * eta_seconds: time until total - sum more rows finish, given the
+ *   current rate. Null while rate is 0 (avoid Infinity) or once the
+ *   batch is enqueue_complete + drained.
+ * elapsed_seconds: now - started_at, capped at 0 (clock skew).
+ * 
+ * Returns floats — the partial decides display precision.
+ */
 function _compute_progress(active, now = Date.now()) {
     if (!active || !active.started_at) {
         return { elapsed_seconds: 0, rate_per_min: 0, eta_seconds: null, percent: 0 };
@@ -100,9 +104,11 @@ function _compute_progress(active, now = Date.now()) {
         const remaining = Math.max(0, Number(active.total) - sum);
         eta_seconds = remaining === 0 ? 0 : (remaining / rate_per_min) * 60;
     }
-    // Percent is meaningful only after enqueue_complete (until then
-    // `total` is a partial count). The partial uses this directly so
-    // the bar doesn't snap-back when more rows arrive.
+    /*
+     * Percent is meaningful only after enqueue_complete (until then
+     * `total` is a partial count). The partial uses this directly so
+     * the bar doesn't snap-back when more rows arrive.
+     */
     const percent =
         active.enqueue_complete && active.total > 0
             ? Math.min(100, Math.round((sum / active.total) * 100))
@@ -115,9 +121,11 @@ function _compute_progress(active, now = Date.now()) {
     };
 }
 
-// Build the state object the status partial renders. Resolved on the
-// server (rather than in the EJS) so the partial stays declarative
-// and we can unit-test the resolution if we add tests later.
+/*
+ * Build the state object the status partial renders. Resolved on the
+ * server (rather than in the EJS) so the partial stays declarative
+ * and we can unit-test the resolution if we add tests later.
+ */
 async function build_status() {
     const cfg = app_config();
     const active = await batches.get_active_batch();
@@ -127,10 +135,12 @@ async function build_status() {
         .count({ c: '*' })
         .first();
 
-    // Worker health hint — without these the queue will never drain.
-    // The admin page surfaces a warning so an operator doesn't sit
-    // watching a "running" batch that's actually stuck because the
-    // worker is disabled or ASpace creds are missing.
+    /*
+     * Worker health hint — without these the queue will never drain.
+     * The admin page surfaces a warning so an operator doesn't sit
+     * watching a "running" batch that's actually stuck because the
+     * worker is disabled or ASpace creds are missing.
+     */
     const worker_cfg = cfg.metadata_worker;
     const aspace_cfg = cfg.archivespace;
     const worker_health = {
@@ -143,9 +153,11 @@ async function build_status() {
         max_attempts: worker_cfg.max_attempts,
     };
 
-    // Activity snapshot — what's in flight + what just completed.
-    // Only fetched when there's an active batch; the history list
-    // already gives a long-view summary for past batches.
+    /*
+     * Activity snapshot — what's in flight + what just completed.
+     * Only fetched when there's an active batch; the history list
+     * already gives a long-view summary for past batches.
+     */
     let activity = { in_flight: [], recently_completed: [] };
     let progress = { elapsed_seconds: 0, rate_per_min: 0, eta_seconds: null, percent: 0 };
     if (active) {
@@ -159,10 +171,12 @@ async function build_status() {
         activity,
         progress,
         worker_health,
-        // Current flag/version, shown alongside the active batch's
-        // snapshot so an operator can see at a glance whether the
-        // production flag matches what's stamped on the in-flight
-        // batch.
+        /*
+         * Current flag/version, shown alongside the active batch's
+         * snapshot so an operator can see at a glance whether the
+         * production flag matches what's stamped on the in-flight
+         * batch.
+         */
         current_flag: cfg.archivespace.use_transformer ? '1' : '0',
         current_version: cfg.archivespace.transformer_version || '',
         pending_in_queue: pending_in_queue ? Number(pending_in_queue.c) : 0,
@@ -174,10 +188,12 @@ async function status_partial(req, res) {
     render_partial(req, res, 'dashboard/partials/metadata_refresh_status', status);
 }
 
-// Refuse to start a new batch when the transformer flag has flipped
-// since the last batch ran, unless `force=1` is in the request. The
-// guard exists so a silent "operator flipped flag without realizing,
-// then started a refresh" can't silently restamp every row.
+/*
+ * Refuse to start a new batch when the transformer flag has flipped
+ * since the last batch ran, unless `force=1` is in the request. The
+ * guard exists so a silent "operator flipped flag without realizing,
+ * then started a refresh" can't silently restamp every row.
+ */
 async function _check_transformer_continuity(req) {
     const cfg = app_config().archivespace;
     const current_flag = cfg.use_transformer ? '1' : '0';
@@ -194,19 +210,23 @@ async function _check_transformer_continuity(req) {
 }
 
 async function start_refresh(req, res) {
-    // Catch ValidationError locally so the HTMX request gets back a
-    // status partial + toast rather than the central handler's JSON
-    // error envelope. Anything non-ValidationError keeps bubbling.
+    /*
+     * Catch ValidationError locally so the HTMX request gets back a
+     * status partial + toast rather than the central handler's JSON
+     * error envelope. Anything non-ValidationError keeps bubbling.
+     */
     try {
         await _check_transformer_continuity(req);
         const actor = (req.user && req.user.du_id) || '';
 
-        // Resume opt-in. The start form has a "Resume from last
-        // cancelled batch" checkbox; when checked it POSTs
-        // `resume=1`. We look up the cursor BEFORE create_batch so
-        // the toast can honestly say what happened — and so we can
-        // distinguish "resumed cleanly" from "resume requested but
-        // no cancelled batch existed to resume from."
+        /*
+         * Resume opt-in. The start form has a "Resume from last
+         * cancelled batch" checkbox; when checked it POSTs
+         * `resume=1`. We look up the cursor BEFORE create_batch so
+         * the toast can honestly say what happened — and so we can
+         * distinguish "resumed cleanly" from "resume requested but
+         * no cancelled batch existed to resume from."
+         */
         const wants_resume = req.body && req.body.resume === '1';
         let resume_info = null;
         if (wants_resume) {
@@ -218,10 +238,12 @@ async function start_refresh(req, res) {
             inherit_cursor_id: resume_info ? resume_info.cursor_id : null,
         });
 
-        // ASCII-only message: HTTP header values can't carry the
-        // Unicode ellipsis (and `res.set('HX-Trigger', …)` round-
-        // trips through a header). Same gotcha that bit the indexer
-        // controller's toast strings.
+        /*
+         * ASCII-only message: HTTP header values can't carry the
+         * Unicode ellipsis (and `res.set('HX-Trigger', …)` round-
+         * trips through a header). Same gotcha that bit the indexer
+         * controller's toast strings.
+         */
         let msg;
         if (wants_resume && resume_info) {
             msg =
@@ -229,8 +251,10 @@ async function start_refresh(req, res) {
                 `resuming from cancelled batch ${resume_info.batch_uuid.slice(0, 8)}... ` +
                 `at cursor ${resume_info.cursor_id}. Producer will enqueue rows on its next tick.`;
         } else if (wants_resume) {
-            // Operator asked to resume but there's nothing to resume
-            // from — fall through to a fresh-start run and tell them.
+            /*
+             * Operator asked to resume but there's nothing to resume
+             * from — fall through to a fresh-start run and tell them.
+             */
             msg =
                 `Started system metadata refresh (batch ${batch_uuid.slice(0, 8)}...). ` +
                 `Resume requested but no prior cancelled batch was found, so this is a full rerun. ` +
@@ -271,9 +295,11 @@ async function cancel_refresh(req, res) {
     return status_partial(req, res);
 }
 
-// Best-effort, never throws. The admin page uses this to seed a
-// "preview" of how many rows the next batch would enqueue so the
-// operator can size expectations.
+/*
+ * Best-effort, never throws. The admin page uses this to seed a
+ * "preview" of how many rows the next batch would enqueue so the
+ * operator can size expectations.
+ */
 async function preview_total(req, res) {
     const { db } = require('../config/db');
     const row = await db()(tables.objects)

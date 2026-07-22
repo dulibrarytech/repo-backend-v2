@@ -1,11 +1,13 @@
 'use strict';
 
-// Auth-specific DB queries against tbl_users. Distinct from users/model.js
-// so the auth flow doesn't accidentally expose admin-only operations and
-// vice versa.
-//
-// Token column ("refresh token" in legacy terms) holds a per-user opaque
-// string set on login and cleared (set to "0") on logout.
+/*
+ * Auth-specific DB queries against tbl_users. Distinct from users/model.js
+ * so the auth flow doesn't accidentally expose admin-only operations and
+ * vice versa.
+ * 
+ * Token column ("refresh token" in legacy terms) holds a per-user opaque
+ * string set on login and cleared (set to "0") on logout.
+ */
 
 const { randomUUID } = require('node:crypto');
 const { db } = require('../config/db');
@@ -26,8 +28,10 @@ async function find_by_id(id) {
         .first();
 }
 
-// Stamp a fresh refresh token. Called on successful login. Returns the
-// new token value so the controller can include it in the response.
+/*
+ * Stamp a fresh refresh token. Called on successful login. Returns the
+ * new token value so the controller can include it in the response.
+ */
 async function rotate_refresh_token(user_id) {
     const token = randomUUID();
     const affected = await db()(tables.users)

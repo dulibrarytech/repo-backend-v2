@@ -13,10 +13,12 @@
 
 require('dotenv').config();
 
-// IMPORTANT: do NOT set NODE_TLS_REJECT_UNAUTHORIZED here. The legacy
-// repo.js set it globally and unconditionally — see
-// docs/MODERNIZATION_PLAN.md §1.1. If a dev host needs a self-signed
-// cert, add it to NODE_EXTRA_CA_CERTS instead.
+/*
+ * IMPORTANT: do NOT set NODE_TLS_REJECT_UNAUTHORIZED here. The legacy
+ * repo.js set it globally and unconditionally — see
+ * docs/MODERNIZATION_PLAN.md §1.1. If a dev host needs a self-signed
+ * cert, add it to NODE_EXTRA_CA_CERTS instead.
+ */
 
 const create_app = require('./config/express');
 const app_config = require('./config/app');
@@ -29,29 +31,43 @@ const {
     create_worker: create_ingest_worker,
     set_active_worker: set_active_ingest_worker,
 } = require('./ingester/worker');
+const { create_worker: create_convert_worker } = require('./convert/worker');
 
 const cfg = app_config();
 const app = create_app();
 
-// Three long-running workers: metadata-refresh syncs from
-// ArchivesSpace, indexer pushes to Elasticsearch, ingest drives
-// packages through the 5-stage Archivematica pipeline. All three
-// follow the same lifecycle (start after listen, stop before DB
-// drain). Concurrency is bounded independently — see config/app.js
-// metadata_worker, indexer, ingest_worker blocks.
+/*
+ * Three long-running workers: metadata-refresh syncs from
+ * ArchivesSpace, indexer pushes to Elasticsearch, ingest drives
+ * packages through the 5-stage Archivematica pipeline. All three
+ * follow the same lifecycle (start after listen, stop before DB
+ * drain). Concurrency is bounded independently — see config/app.js
+ * metadata_worker, indexer, ingest_worker blocks.
+ */
 const metadata_worker = create_metadata_worker();
-// Producer is the system-refresh sibling of the metadata worker. It's
-// idle until an admin starts a batch via the admin page; once active
-// it paces queue inserts so the table stays bounded regardless of
-// repo size. See metadata/producer.js for cadence + chunk size.
+/*
+ * Producer is the system-refresh sibling of the metadata worker. It's
+ * idle until an admin starts a batch via the admin page; once active
+ * it paces queue inserts so the table stays bounded regardless of
+ * repo size. See metadata/producer.js for cadence + chunk size.
+ */
 const metadata_producer = create_metadata_producer();
 const indexer_worker = create_indexer_worker();
 const ingest_worker = create_ingest_worker();
-// Register the live ingest worker so the dashboard controller can
-// signal mid-stage AbortControllers (staff Cancel button). See
-// ingester/worker.js — `set_active_worker` writes a module-level
-// reference, NOT a global; controller reads via `get_active_worker`.
+/*
+ * Register the live ingest worker so the dashboard controller can
+ * signal mid-stage AbortControllers (staff Cancel button). See
+ * ingester/worker.js — `set_active_worker` writes a module-level
+ * reference, NOT a global; controller reads via `get_active_worker`.
+ */
 set_active_ingest_worker(ingest_worker);
+/*
+ * TIFF→JPG conversion worker. Serial + paced (one POST every
+ * CONVERT_SERVICE_DELAY_MS) because the remote convert service is
+ * fragile under load. Idle until a collection/object batch is enqueued
+ * from the dashboard (/dashboard/admin/convert). See convert/worker.js.
+ */
+const convert_worker = create_convert_worker();
 
 let server = null;
 let shutting_down = false;
@@ -61,8 +77,10 @@ async function shutdown(signal) {
     shutting_down = true;
     log.info({ event: 'shutdown', signal, msg: 'graceful shutdown initiated' });
 
-    // 10s hard timeout — if anything hangs, exit non-zero so the process
-    // supervisor (systemd / PM2) restarts us.
+    /*
+     * 10s hard timeout — if anything hangs, exit non-zero so the process
+     * supervisor (systemd / PM2) restarts us.
+     */
     const timer = setTimeout(() => {
         log.error({ event: 'shutdown', msg: 'timeout exceeded, forcing exit' });
         process.exit(1);
@@ -76,18 +94,27 @@ async function shutdown(signal) {
             });
             log.info({ event: 'shutdown', msg: 'HTTP server closed' });
         }
-        // Drain workers BEFORE killing the DB pools — either may have
-        // an in-flight call whose result still needs to land in the
-        // DB. Drain in parallel; both bounded at 8s.
+        /*
+         * Drain workers BEFORE killing the DB pools — either may have
+         * an in-flight call whose result still needs to land in the
+         * DB. Drain in parallel; both bounded at 8s.
+         */
         await Promise.all([
             metadata_worker.stop({ timeout_ms: 8000 }),
             // Producer is DB-only — drains in milliseconds. 3s is plenty.
             metadata_producer.stop({ timeout_ms: 3000 }),
             indexer_worker.stop({ timeout_ms: 8000 }),
-            // Ingest worker gets a longer drain because its long polls
-            // (AM transfer-status, QA upload-status) need a beat to
-            // react to abort signals before the next cancel-loop tick.
+            /*
+             * Ingest worker gets a longer drain because its long polls
+             * (AM transfer-status, QA upload-status) need a beat to
+             * react to abort signals before the next cancel-loop tick.
+             */
             ingest_worker.stop({ timeout_ms: 12000 }),
+            /*
+             * Convert worker aborts its in-flight POST on stop; 8s is
+             * plenty for the abort + the row release to land.
+             */
+            convert_worker.stop({ timeout_ms: 8000 }),
         ]);
         log.info({ event: 'shutdown', msg: 'workers stopped' });
         await db_module.destroy_all();
@@ -115,15 +142,19 @@ process.on('uncaughtException', (err) => {
     shutdown('uncaughtException');
 });
 
-// Only listen when invoked directly. When required by tests (supertest
-// uses the bare app), we don't want to bind a port.
+/*
+ * Only listen when invoked directly. When required by tests (supertest
+ * uses the bare app), we don't want to bind a port.
+ */
 if (require.main === module) {
     server = app.listen(cfg.port);
 
-    // listen() is async — failures (EADDRINUSE, EACCES) arrive on the
-    // 'error' event, not via a thrown exception. Without this handler
-    // they'd surface as uncaughtException, which would race against the
-    // 'listening' callback below.
+    /*
+     * listen() is async — failures (EADDRINUSE, EACCES) arrive on the
+     * 'error' event, not via a thrown exception. Without this handler
+     * they'd surface as uncaughtException, which would race against the
+     * 'listening' callback below.
+     */
     server.on('error', (err) => {
         log.error({
             event: 'listen_error',
@@ -148,9 +179,11 @@ if (require.main === module) {
             `${cfg.name} v${cfg.version} listening on http://${cfg.host}:${(addr && addr.port) || cfg.port} ` +
                 `(NODE_ENV=${cfg.env})`
         );
-        // Start both workers once the HTTP server is up. Failures
-        // here don't block the rest of the app — workers log and
-        // stay idle until their upstream is reachable.
+        /*
+         * Start both workers once the HTTP server is up. Failures
+         * here don't block the rest of the app — workers log and
+         * stay idle until their upstream is reachable.
+         */
         metadata_worker.start().catch((err) => {
             log.error({ event: 'metadata_worker_start_failed', err: err.message });
         });
@@ -162,6 +195,9 @@ if (require.main === module) {
         });
         ingest_worker.start().catch((err) => {
             log.error({ event: 'ingest_worker_start_failed', err: err.message });
+        });
+        convert_worker.start().catch((err) => {
+            log.error({ event: 'convert_worker_start_failed', err: err.message });
         });
     });
 }

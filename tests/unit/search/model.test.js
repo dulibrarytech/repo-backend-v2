@@ -72,19 +72,23 @@ describe('search/model — closed sets', () => {
     });
 
     it('PUBLIC_FIELDS does not leak long-text columns', () => {
-        // display_record is intentionally fetched so the controller can
-        // enrich rows (title, handle, uri) and then strip it from the
-        // response. mods/transcript stay out entirely.
+        /*
+         * display_record is intentionally fetched so the controller can
+         * enrich rows (title, handle, uri) and then strip it from the
+         * response. mods/transcript stay out entirely.
+         */
         for (const f of ['mods', 'transcript', 'transcript_search']) {
             expect(search_model.PUBLIC_FIELDS).not.toContain(f);
         }
     });
 
     it('SEARCHABLE_COLUMNS includes display_record but excludes the heavy blobs', () => {
-        // display_record is intentionally searchable — it carries the
-        // title + all descriptive metadata, which is what staff search
-        // by. transcript/transcript_search/mods stay out: transcripts
-        // are huge + noisy, mods duplicates what display_record nests.
+        /*
+         * display_record is intentionally searchable — it carries the
+         * title + all descriptive metadata, which is what staff search
+         * by. transcript/transcript_search/mods stay out: transcripts
+         * are huge + noisy, mods duplicates what display_record nests.
+         */
         expect(search_model.SEARCHABLE_COLUMNS).toContain('display_record');
         for (const c of ['mods', 'transcript', 'transcript_search']) {
             expect(search_model.SEARCHABLE_COLUMNS).not.toContain(c);

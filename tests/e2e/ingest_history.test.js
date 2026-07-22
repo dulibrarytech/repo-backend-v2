@@ -52,17 +52,21 @@ describe('ingest Job History — e2e', () => {
             const res = await supertest(app)
                 .get('/repo/dashboard/ingest/history')
                 .set('Cookie', cookie);
-            // History icon is rendered + flagged active (both the
-            // visual .active class and SR-perceivable aria-current).
+            /*
+             * History icon is rendered + flagged active (both the
+             * visual .active class and SR-perceivable aria-current).
+             */
             expect(res.text).toMatch(
                 /<a[^>]*class="active"[^>]*aria-current="page"[^>]*aria-label="Job History"/
             );
-            // Focus mode: non-workflow items hidden — Collections,
-            // Objects, Users, Indexer, Metadata Refresh all gone.
-            // Home stays visible as the workflow's escape hatch (see
-            // task #114).
+            /*
+             * Focus mode: non-workflow items hidden — Collections,
+             * Objects, Users, Indexer, Metadata Refresh all gone.
+             * Home stays visible as the workflow's escape hatch (see
+             * task #114).
+             */
             expect(res.text).not.toContain('title="Collections"');
-            expect(res.text).not.toContain('title="Objects (flat browse)"');
+            expect(res.text).not.toContain('title="Objects"');
             expect(res.text).not.toContain('title="Users"');
             expect(res.text).toContain('title="Home"');
             // All four other workflow icons render alongside History.
@@ -160,8 +164,10 @@ describe('ingest Job History — e2e', () => {
         });
 
         it('sidebar History icon is rendered alongside the four workflow icons', async () => {
-            // Sanity check via the history page (the partial doesn't
-            // include the sidebar; the page wrapper does).
+            /*
+             * Sanity check via the history page (the partial doesn't
+             * include the sidebar; the page wrapper does).
+             */
             const cookie = await cookie_for('viewer-4');
             const res = await supertest(app)
                 .get('/repo/dashboard/ingest/history')

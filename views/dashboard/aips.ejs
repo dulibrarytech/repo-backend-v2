@@ -24,6 +24,7 @@
                  expected size (~20k legacy + ~hundreds/month from
                  Stage 6). */%>
             <input type="search" name="q" class="form-control"
+                   aria-label="Search AIPs"
                    placeholder="Search PID, AIP filename, key…"
                    value="<%= filters.q || '' %>"
                    autocomplete="off"
@@ -31,33 +32,15 @@
                    hx-get="<%= dashboard_base %>/aips/list"
                    hx-target="#aips-table"
                    hx-trigger="keyup changed delay:300ms, search"
-                   hx-include="[name=source], [name=status]">
+                   hx-include="[name=status]">
         </div>
 
         <div class="control-group">
-            <select name="source" class="form-select"
-                    hx-get="<%= dashboard_base %>/aips/list"
-                    hx-target="#aips-table"
-                    hx-trigger="change"
-                    hx-include="[name=q], [name=status]">
-                <option value="" <%= filters.source === '' ? 'selected' : '' %>>
-                    All sources
-                </option>
-                <option value="ingest_v2"
-                        <%= filters.source === 'ingest_v2' ? 'selected' : '' %>>
-                    v2 ingest
-                </option>
-                <option value="legacy_migration"
-                        <%= filters.source === 'legacy_migration' ? 'selected' : '' %>>
-                    Legacy migration
-                </option>
-            </select>
-
             <select name="status" class="form-select"
                     hx-get="<%= dashboard_base %>/aips/list"
                     hx-target="#aips-table"
                     hx-trigger="change"
-                    hx-include="[name=q], [name=source]">
+                    hx-include="[name=q]">
                 <option value="" <%= filters.status === '' ? 'selected' : '' %>>
                     All statuses
                 </option>
@@ -90,7 +73,7 @@
     <div id="aips-table"
          hx-get="<%= dashboard_base %>/aips/list"
          hx-trigger="load"
-         hx-include="[name=q], [name=source], [name=status]"
+         hx-include="[name=q], [name=status]"
          hx-swap="innerHTML"
          aria-live="polite"
          aria-atomic="false">

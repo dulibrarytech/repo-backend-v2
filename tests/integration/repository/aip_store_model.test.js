@@ -1,9 +1,11 @@
 'use strict';
 
-// Integration tests for repository/aip_store_model.js. Real sqlite
-// in-memory DB via the test harness; no curation-service or AM
-// contact — those are stubbed at the Stage 6 boundary, tested in
-// tests/integration/ingester/aip_store_stage.test.js.
+/*
+ * Integration tests for repository/aip_store_model.js. Real sqlite
+ * in-memory DB via the test harness; no curation-service or AM
+ * contact — those are stubbed at the Stage 6 boundary, tested in
+ * tests/integration/ingester/aip_store_stage.test.js.
+ */
 
 const { randomUUID } = require('node:crypto');
 
@@ -53,10 +55,12 @@ describe('repository/aip_store_model', () => {
             expect(model.is_failure({ is_migrated: 7 })).toBe(true);
         });
         it('treats AM_NOT_FOUND (8) as orphan, NOT as failure', () => {
-            // Critical contract: dashboard's failure filter must NOT
-            // include orphans (they need different UX — no Retry,
-            // separate "Orphan" badge). is_orphan is the dedicated
-            // predicate.
+            /*
+             * Critical contract: dashboard's failure filter must NOT
+             * include orphans (they need different UX — no Retry,
+             * separate "Orphan" badge). is_orphan is the dedicated
+             * predicate.
+             */
             expect(model.is_orphan({ is_migrated: 8 })).toBe(true);
             expect(model.is_failure({ is_migrated: 8 })).toBe(false);
             expect(model.is_terminal_success({ is_migrated: 8 })).toBe(false);
@@ -132,10 +136,12 @@ describe('repository/aip_store_model', () => {
         });
 
         it('backstops NOT NULL legacy columns with empty strings', async () => {
-            // The caller's patch doesn't include `aip` or `aip_legacy`,
-            // but the legacy schema declares them NOT NULL. The model
-            // fills them with '' so a Stage 6 row that failed before
-            // we knew the key still inserts cleanly.
+            /*
+             * The caller's patch doesn't include `aip` or `aip_legacy`,
+             * but the legacy schema declares them NOT NULL. The model
+             * fills them with '' so a Stage 6 row that failed before
+             * we knew the key still inserts cleanly.
+             */
             const pid = randomUUID();
             await model.upsert_by_uuid(pid, {
                 is_migrated: model.STATUS.INGEST_COPY_FAILED,
@@ -178,10 +184,12 @@ describe('repository/aip_store_model', () => {
         });
 
         it('status="failed" does NOT include orphans', async () => {
-            // Regression: the previous list filter included is_migrated=8
-            // in the "failed" bucket because the model didn't distinguish.
-            // Now orphans are a separate filter — staff filtering for
-            // retryable failures shouldn't see dead-end orphan rows.
+            /*
+             * Regression: the previous list filter included is_migrated=8
+             * in the "failed" bucket because the model didn't distinguish.
+             * Now orphans are a separate filter — staff filtering for
+             * retryable failures shouldn't see dead-end orphan rows.
+             */
             await db_helper.seed_aip_store({ is_migrated: 7 });
             await db_helper.seed_aip_store({ is_migrated: 8 });
             const result = await model.list({ status: 'failed' });
@@ -190,8 +198,10 @@ describe('repository/aip_store_model', () => {
         });
 
         it('filter source="legacy_migration" matches explicit AND null', async () => {
-            // One explicitly tagged legacy, one with source=null (the
-            // pre-migration ~20k case), one v2.
+            /*
+             * One explicitly tagged legacy, one with source=null (the
+             * pre-migration ~20k case), one v2.
+             */
             await db_helper.seed_aip_store({ source: 'legacy_migration' });
             await db_helper.seed_aip_store({ source: null });
             await db_helper.seed_aip_store({ source: 'ingest_v2' });
@@ -236,10 +246,12 @@ describe('repository/aip_store_model', () => {
         });
 
         it('falls back to basename(aip_legacy) with _transfer stripped when aip empty', () => {
-            // Regression: ~332 legacy rows have an empty `aip` column
-            // (the migration's basename-extraction pass never ran).
-            // derive_wasabi_key extracts the basename from aip_legacy
-            // at request time so downloads work without a DB migration.
+            /*
+             * Regression: ~332 legacy rows have an empty `aip` column
+             * (the migration's basename-extraction pass never ran).
+             * derive_wasabi_key extracts the basename from aip_legacy
+             * at request time so downloads work without a DB migration.
+             */
             const key = model.derive_wasabi_key({
                 wasabi_key: null,
                 aip: '',
@@ -273,20 +285,40 @@ describe('repository/aip_store_model', () => {
     });
 
     describe('reset_for_retry', () => {
-        it('clears attempts + next_attempt_at + error', async () => {
+        it('clears attempts + next_attempt_at + error + message, and resets is_migrated to INITIAL', async () => {
             const seeded = await db_helper.seed_aip_store({
                 is_migrated: 7,
                 attempts: 3,
                 next_attempt_at: new Date(Date.now() + 60_000),
                 error: 'wasabi timed out',
+                message: 'COPY_FAILED',
             });
             const after = await model.reset_for_retry(seeded.id);
             expect(after.attempts).toBe(0);
             expect(after.next_attempt_at).toBeNull();
             expect(after.error).toBeNull();
-            // is_migrated is intentionally NOT reset — Stage 6 will
-            // overwrite it on its next run.
-            expect(after.is_migrated).toBe(7);
+            expect(after.message).toBeNull();
+            /*
+             * is_migrated reset to INITIAL so Stage 6 re-evaluates from
+             * scratch — and so an orphan tag can't short-circuit the retry.
+             */
+            expect(after.is_migrated).toBe(model.STATUS.INITIAL);
+        });
+
+        it('clears an orphan tag (AM_NOT_FOUND → INITIAL) so "Re-check AM & retry" actually re-runs Stage 6', async () => {
+            const seeded = await db_helper.seed_aip_store({
+                is_migrated: model.STATUS.AM_NOT_FOUND,
+                message: 'ORPHAN_AM_NOT_FOUND',
+                error: 'AIP x not found in AM Storage Service',
+            });
+            expect(model.is_orphan(seeded)).toBe(true);
+            const after = await model.reset_for_retry(seeded.id);
+            /*
+             * No longer an orphan → the Stage 6 entry short-circuit won't
+             * fire, so the copy is actually attempted again.
+             */
+            expect(model.is_orphan(after)).toBe(false);
+            expect(after.is_migrated).toBe(model.STATUS.INITIAL);
         });
 
         it('throws NotFoundError on missing id', async () => {

@@ -53,13 +53,34 @@ describe('repository/model — DB integration', () => {
         expect(cols.total).toBe(1);
     });
 
+    it('list filters by created_since (recent-ingests window)', async () => {
+        /*
+         * Backs the Recent Ingests view: only objects created at/after the
+         * cutoff are returned. `created` defaults to now() on seed, so an
+         * explicit old created is excluded by a recent cutoff.
+         */
+        await db_helper.seed_object({ pid: 'codu:old', created: '2020-01-01 00:00:00' });
+        await db_helper.seed_object({ pid: 'codu:fresh' });
+        const cutoff = new Date(Date.now() - 30 * 86400000)
+            .toISOString()
+            .slice(0, 19)
+            .replace('T', ' ');
+        const r = await repo_model.list({ created_since: cutoff });
+        const pids = r.items.map((row) => row.pid);
+        expect(pids).toContain('codu:fresh');
+        expect(pids).not.toContain('codu:old');
+        expect(r.total).toBe(1);
+    });
+
     it('get by pid returns the public projection', async () => {
         const seeded = await db_helper.seed_object({ object_type: 'collection' });
         const found = await repo_model.get(seeded.pid);
         expect(found.pid).toBe(seeded.pid);
-        // Model layer returns display_record so the controller can
-        // enrich it; mods/transcript are NEVER returned. The controller
-        // strips display_record before responding — see the e2e test.
+        /*
+         * Model layer returns display_record so the controller can
+         * enrich it; mods/transcript are NEVER returned. The controller
+         * strips display_record before responding — see the e2e test.
+         */
         expect(found.mods).toBeUndefined();
         expect(found.transcript).toBeUndefined();
     });
@@ -110,8 +131,10 @@ describe('repository/model — DB integration', () => {
                 const row = await repo_model.get(pid);
                 expect(row.is_published).toBe(1);
             }
-            // Publish dirties: the indexer claims and INDEXes each
-            // row on its next tick. Single-click workflow.
+            /*
+             * Publish dirties: the indexer claims and INDEXes each
+             * row on its next tick. Single-click workflow.
+             */
             const { db } = require('../../../config/db');
             const raw = await db()('tbl_objects')
                 .select('pid', 'is_updated')
@@ -120,8 +143,10 @@ describe('repository/model — DB integration', () => {
         });
 
         it('bulk_suppress dirties for ES removal', async () => {
-            // Symmetric: suppress also dirties so the indexer claims
-            // and DELETEs each row from ES.
+            /*
+             * Symmetric: suppress also dirties so the indexer claims
+             * and DELETEs each row from ES.
+             */
             const a = await db_helper.seed_object({ is_published: 1 });
             const b = await db_helper.seed_object({ is_published: 1 });
             const result = await repo_model.bulk_suppress([a.pid, b.pid]);
@@ -168,16 +193,20 @@ describe('repository/model — DB integration', () => {
 
         it('bulk publish de-duplicates the pid list', async () => {
             const a = await db_helper.seed_object({ is_published: 0 });
-            // Pass the same pid twice; the model dedupes before the SQL
-            // so the affected count is 1, not 2.
+            /*
+             * Pass the same pid twice; the model dedupes before the SQL
+             * so the affected count is 1, not 2.
+             */
             const result = await repo_model.bulk_publish([a.pid, a.pid, a.pid]);
             expect(result.affected).toBe(1);
             expect(result.pids).toEqual([a.pid]);
         });
 
         it('bulk publish returns affected=0 when no pid matches an active row', async () => {
-            // Use real v4 UUIDs — validator.isUUID rejects the
-            // all-1s literal because its variant bits aren't valid.
+            /*
+             * Use real v4 UUIDs — validator.isUUID rejects the
+             * all-1s literal because its variant bits aren't valid.
+             */
             const result = await repo_model.bulk_publish([randomUUID(), randomUUID()]);
             expect(result.affected).toBe(0);
         });
@@ -220,14 +249,16 @@ describe('repository/model — DB integration', () => {
     });
 
     describe('delete contract (v1 parity)', () => {
-        // The 2026-05-26 work brought v2's delete in line with v1:
-        //   - delete_reason required
-        //   - published guard (no override)
-        //   - AM AIP deletion request fires for active rows with sip_uuid
-        //
-        // These tests pin those behaviors; AM is stubbed at the
-        // libs/archivematica boundary because we don't want real
-        // network calls in the suite.
+        /*
+         * The 2026-05-26 work brought v2's delete in line with v1:
+         *   - delete_reason required
+         *   - published guard (no override)
+         *   - AM AIP deletion request fires for active rows with sip_uuid
+         * 
+         * These tests pin those behaviors; AM is stubbed at the
+         * libs/archivematica boundary because we don't want real
+         * network calls in the suite.
+         */
 
         const archivematica = require('../../../libs/archivematica');
         const { ConflictError } = require('../../../libs/errors');
@@ -273,8 +304,10 @@ describe('repository/model — DB integration', () => {
                     actor: 'tester',
                 })
             ).rejects.toBeInstanceOf(ConflictError);
-            // CRITICAL: the published guard runs BEFORE the AM call.
-            // (v1 had this backwards and orphaned AM requests.)
+            /*
+             * CRITICAL: the published guard runs BEFORE the AM call.
+             * (v1 had this backwards and orphaned AM requests.)
+             */
             expect(archivematica.delete_aip_request).not.toHaveBeenCalled();
             // Row stays active — nothing was changed.
             const after = await repo_model.get(seeded.pid);
@@ -434,8 +467,10 @@ describe('repository/model — DB integration', () => {
             );
             expect(updated.thumbnail).toBe('https://example.com/repo/static/tn/abc.jpg');
 
-            // The JSON blob now carries the new thumbnail URL, AND keeps
-            // every field it had before — the patch is non-destructive.
+            /*
+             * The JSON blob now carries the new thumbnail URL, AND keeps
+             * every field it had before — the patch is non-destructive.
+             */
             const parsed = JSON.parse(updated.display_record);
             expect(parsed.thumbnail).toBe('https://example.com/repo/static/tn/abc.jpg');
             expect(parsed.title).toBe('Sample');
@@ -456,9 +491,11 @@ describe('repository/model — DB integration', () => {
         });
 
         it('recovers from corrupt display_record JSON', async () => {
-            // Garbage JSON in the column — set_thumbnail must not 500;
-            // it overwrites with a minimal { thumbnail } object. Losing
-            // a previously-corrupt blob is the correct trade-off here.
+            /*
+             * Garbage JSON in the column — set_thumbnail must not 500;
+             * it overwrites with a minimal { thumbnail } object. Losing
+             * a previously-corrupt blob is the correct trade-off here.
+             */
             const seeded = await db_helper.seed_object({
                 display_record: '{not valid json',
             });
@@ -473,9 +510,11 @@ describe('repository/model — DB integration', () => {
         });
 
         it('dirties is_updated so the indexer picks up the new thumbnail', async () => {
-            // Thumbnail is part of the indexed doc projection; a
-            // change should reach public search on the next worker
-            // tick. Single-click principle, same as publish.
+            /*
+             * Thumbnail is part of the indexed doc projection; a
+             * change should reach public search on the next worker
+             * tick. Single-click principle, same as publish.
+             */
             const seeded = await db_helper.seed_object({ is_updated: 0 });
             await repo_model.set_thumbnail(
                 seeded.pid,
@@ -541,9 +580,11 @@ describe('repository/model — DB integration', () => {
             });
 
             it('ignores non-collection rows even when their URI matches', async () => {
-                // A stray archival_object with the same URI must NOT
-                // satisfy the collection lookup — the object_type
-                // filter on the query is what makes the gate safe.
+                /*
+                 * A stray archival_object with the same URI must NOT
+                 * satisfy the collection lookup — the object_type
+                 * filter on the query is what makes the gate safe.
+                 */
                 await db_helper.seed_object({
                     object_type: 'object',
                     uri: '/repositories/2/resources/8000',
@@ -581,12 +622,14 @@ describe('repository/model — DB integration', () => {
             });
 
             it('hoists title + abstract from mods into the display_record envelope', async () => {
-                // The dashboard projection (libs/object_projection.js)
-                // reads dr.title / dr.abstract from the envelope's
-                // top level — NOT from the nested mods. Pre-flight
-                // gate must lay them out so the collection appears
-                // with its title immediately without a metadata
-                // refresh first.
+                /*
+                 * The dashboard projection (libs/object_projection.js)
+                 * reads dr.title / dr.abstract from the envelope's
+                 * top level — NOT from the nested mods. Pre-flight
+                 * gate must lay them out so the collection appears
+                 * with its title immediately without a metadata
+                 * refresh first.
+                 */
                 await repo_model.create_collection({
                     uri: '/repositories/2/resources/2000',
                     mods: { title: 'A Test Title', abstract: 'A Test Abstract.' },
@@ -611,19 +654,67 @@ describe('repository/model — DB integration', () => {
                 );
             });
 
+            it('nests under a parent (sub-collection) when parent_collection_pid is given', async () => {
+                const parent = await db_helper.seed_object({
+                    object_type: 'collection',
+                    uri: '/repositories/2/resources/3000',
+                });
+                const sub = await repo_model.create_collection({
+                    uri: '/repositories/2/resources/3001',
+                    mods: { title: 'Sub' },
+                    parent_collection_pid: parent.pid,
+                });
+                expect(sub.object_type).toBe('collection');
+                expect(sub.is_member_of_collection).toBe(parent.pid);
+            });
+
+            it('rejects a parent_collection_pid that is not an active collection', async () => {
+                // non-existent pid
+                await expect(
+                    repo_model.create_collection({
+                        uri: '/repositories/2/resources/3002',
+                        mods: { title: 'x' },
+                        parent_collection_pid: 'no-such-pid',
+                    })
+                ).rejects.toBeInstanceOf(ValidationError);
+                // a non-collection object
+                const obj = await db_helper.seed_object({ object_type: 'object' });
+                await expect(
+                    repo_model.create_collection({
+                        uri: '/repositories/2/resources/3003',
+                        mods: { title: 'x' },
+                        parent_collection_pid: obj.pid,
+                    })
+                ).rejects.toBeInstanceOf(ValidationError);
+                // a soft-deleted collection
+                const deleted = await db_helper.seed_object({
+                    object_type: 'collection',
+                    is_active: 0,
+                });
+                await expect(
+                    repo_model.create_collection({
+                        uri: '/repositories/2/resources/3004',
+                        mods: { title: 'x' },
+                        parent_collection_pid: deleted.pid,
+                    })
+                ).rejects.toBeInstanceOf(ValidationError);
+            });
+
             it('survives a concurrent-duplicate-insert race by returning the existing row', async () => {
-                // With the partial unique index in place (migration
-                // 20260524000001_unique_collection_uri), the SECOND
-                // call to create_collection hits a duplicate-key
-                // error on the DB insert. The function's try/catch
-                // recognizes /duplicate|unique/ in the error message,
-                // re-fetches the row that already exists, and returns
-                // it instead of bubbling the error up.
-                //
-                // End-to-end effect: two concurrent submits for the
-                // same folder both succeed and both end up linking
-                // packages to the SAME collection row — no orphans,
-                // no duplicate collection mirrors.
+                /*
+                 * With the partial unique index in place (migration
+                 * 20260524000001_unique_collection_uri), the SECOND
+                 * call to create_collection hits a duplicate-key
+                 * error on the DB insert. The function's try/catch
+                 * recognizes /duplicate|unique/ in the error message,
+                 * re-fetches the row that already exists, and returns
+                 * it instead of bubbling the error up.
+                 * 
+                 * End-to-end effect: two concurrent submits for the
+                 * same folder both succeed and both end up linking
+                 * packages to the SAME collection row — no orphans,
+                 * no duplicate collection mirrors.
+                 */
                 const uri = '/repositories/2/resources/race';
                 const first = await repo_model.create_collection({
                     uri,
@@ -635,8 +726,10 @@ describe('repository/model — DB integration', () => {
                     mods: { title: 'Race' },
                 });
                 expect(second.pid).toBe(first.pid);
-                // Sanity: the table holds exactly one collection row
-                // for this URI.
+                /*
+                 * Sanity: the table holds exactly one collection row
+                 * for this URI.
+                 */
                 const { db } = require('../../../config/db');
                 const tables = require('../../../config/db_tables');
                 const rows = await db()(tables.objects)
@@ -646,11 +739,13 @@ describe('repository/model — DB integration', () => {
             });
 
             it('does NOT constrain non-collection rows sharing the same URI', async () => {
-                // The unique index is partial — it only applies to
-                // collection rows. Two object rows can share a URI
-                // (rare but legitimate: e.g. two archival_objects
-                // pointing at the same AS resource URI before staff
-                // cleans up). Likewise, an empty uri is allowed.
+                /*
+                 * The unique index is partial — it only applies to
+                 * collection rows. Two object rows can share a URI
+                 * (rare but legitimate: e.g. two archival_objects
+                 * pointing at the same AS resource URI before staff
+                 * cleans up). Likewise, an empty uri is allowed.
+                 */
                 const uri = '/repositories/2/resources/shared';
                 await db_helper.seed_object({ object_type: 'object', uri });
                 await expect(

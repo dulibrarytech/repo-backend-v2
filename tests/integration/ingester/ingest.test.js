@@ -1,7 +1,9 @@
 'use strict';
 
-// Stage 4 (ingest + DC wait) integration tests. Fake AM + ASpace +
-// validator + DuraCloud clients.
+/*
+ * Stage 4 (ingest + DC wait) integration tests. Fake AM + ASpace +
+ * validator + DuraCloud clients.
+ */
 
 const app_config = require('../../../config/app');
 const db_helper = require('../../helpers/db');
@@ -37,8 +39,10 @@ function make_am(script) {
     };
 }
 
-// Accepts a flat URI → response map (matches the call shape used
-// throughout these tests).
+/*
+ * Accepts a flat URI → response map (matches the call shape used
+ * throughout these tests).
+ */
 function make_aspace(records = {}) {
     return {
         async get_session_token() {

@@ -1,17 +1,19 @@
 'use strict';
 
-// Two-pool DB layer.
-//
-//   db()       — knex instance for the `repo` schema (tbl_objects, tbl_users)
-//   db_queue() — knex instance for the `repo_queue` schema (queue + jobs)
-//
-// In production, both use mysql2 with explicit pool sizing (pre-empts the
-// "wait, why are we leaking connections?" failure mode the legacy app had —
-// see MODERNIZATION_PLAN §4.2 and the ingest-service's existing config).
-//
-// In test (NODE_ENV=test), both fall back to a sqlite-in-memory pool via
-// better-sqlite3. Each test process gets its own clean store; integration
-// tests call `migrate()` to materialize the schema.
+/*
+ * Two-pool DB layer.
+ * 
+ *   db()       — knex instance for the `repo` schema (tbl_objects, tbl_users)
+ *   db_queue() — knex instance for the `repo_queue` schema (queue + jobs)
+ * 
+ * In production, both use mysql2 with explicit pool sizing (pre-empts the
+ * "wait, why are we leaking connections?" failure mode the legacy app had —
+ * see MODERNIZATION_PLAN §4.2 and the ingest-service's existing config).
+ * 
+ * In test (NODE_ENV=test), both fall back to a sqlite-in-memory pool via
+ * better-sqlite3. Each test process gets its own clean store; integration
+ * tests call `migrate()` to materialize the schema.
+ */
 
 const knex = require('knex');
 const log = require('../libs/log');
@@ -51,8 +53,10 @@ function build_sqlite() {
         client: 'better-sqlite3',
         connection: { filename: ':memory:' },
         useNullAsDefault: true,
-        // No pool: better-sqlite3 is synchronous; knex wraps it as a
-        // single connection. Set min/max to 1 to make that explicit.
+        /*
+         * No pool: better-sqlite3 is synchronous; knex wraps it as a
+         * single connection. Set min/max to 1 to make that explicit.
+         */
         pool: { min: 1, max: 1 },
     });
 }
@@ -74,8 +78,10 @@ function db_queue() {
     return _db_queue;
 }
 
-// Tear down both pools. Idempotent. Used by the entry-point shutdown
-// hook and by test cleanup.
+/*
+ * Tear down both pools. Idempotent. Used by the entry-point shutdown
+ * hook and by test cleanup.
+ */
 async function destroy_all() {
     const errors = [];
     for (const [name, get] of [
@@ -100,8 +106,10 @@ async function destroy_all() {
     }
 }
 
-// Internal — for tests only. Swap in a custom knex instance (e.g. an
-// isolated sqlite pool per test file) without rewiring callers.
+/*
+ * Internal — for tests only. Swap in a custom knex instance (e.g. an
+ * isolated sqlite pool per test file) without rewiring callers.
+ */
 function _set_for_test({ repo, repo_queue } = {}) {
     if (repo !== undefined) _db = repo;
     if (repo_queue !== undefined) _db_queue = repo_queue;

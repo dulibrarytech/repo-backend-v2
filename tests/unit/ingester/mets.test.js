@@ -3,8 +3,10 @@
 const { parse_mets } = require('../../../ingester/libs/mets');
 const { ValidationError } = require('../../../libs/errors');
 
-// Minimal METS doc — one amdSec (RDF-flavor PREMIS) + one fileSec
-// with two files. Covers the happy path used by the worker.
+/*
+ * Minimal METS doc — one amdSec (RDF-flavor PREMIS) + one fileSec
+ * with two files. Covers the happy path used by the worker.
+ */
 function rdf_amdsec(mime) {
     return `
     <mets:amdSec>
@@ -167,8 +169,10 @@ describe('ingester/libs/mets — parse_mets', () => {
     });
 
     it('falls back to the last mime type when fewer amdSecs than files', async () => {
-        // One amdSec, two files — second file inherits the same mime
-        // (per v1's positional fallback behavior).
+        /*
+         * One amdSec, two files — second file inherits the same mime
+         * (per v1's positional fallback behavior).
+         */
         const xml = wrap(`
             ${rdf_amdsec('image/tiff')}
             <mets:fileSec>

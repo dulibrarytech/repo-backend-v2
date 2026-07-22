@@ -1,16 +1,18 @@
 'use strict';
 
-// Retry + dead-letter behavior on mark_failed. Separate file from the
-// legacy model.test.js so we can run it under the new default
-// (max_attempts > 1) without contradicting the older single-shot
-// assertions there.
-//
-// Coverage:
-//   - attempts increments on failure, status returns to PENDING
-//     until the cap is reached
-//   - cap reached → DEAD_LETTERED with error + last_error set
-//   - mark_complete after a retry-PENDING row is normal
-//   - claim_pending respects (priority ASC, id ASC) ordering
+/*
+ * Retry + dead-letter behavior on mark_failed. Separate file from the
+ * legacy model.test.js so we can run it under the new default
+ * (max_attempts > 1) without contradicting the older single-shot
+ * assertions there.
+ * 
+ * Coverage:
+ *   - attempts increments on failure, status returns to PENDING
+ *     until the cap is reached
+ *   - cap reached → DEAD_LETTERED with error + last_error set
+ *   - mark_complete after a retry-PENDING row is normal
+ *   - claim_pending respects (priority ASC, id ASC) ordering
+ */
 
 const model = require('../../../metadata/model');
 const db_helper = require('../../helpers/db');
@@ -26,15 +28,19 @@ describe('metadata/model — retry + dead-letter', () => {
     });
     beforeEach(async () => {
         await db_helper.reset_data();
-        // Default: 3 attempts (matches production default). Some tests
-        // override to 2 for terser scenarios.
+        /*
+         * Default: 3 attempts (matches production default). Some tests
+         * override to 2 for terser scenarios.
+         */
         original_env = { ...process.env };
         process.env.METADATA_MAX_ATTEMPTS = '3';
-        // Disable retry backoff for these tests. They drive
-        // mark_failed -> claim_pending in immediate succession; with
-        // backoff on, the second claim would skip the row until the
-        // backoff elapsed. Backoff behavior itself is covered by the
-        // dedicated test below ('mark_failed retry backoff').
+        /*
+         * Disable retry backoff for these tests. They drive
+         * mark_failed -> claim_pending in immediate succession; with
+         * backoff on, the second claim would skip the row until the
+         * backoff elapsed. Backoff behavior itself is covered by the
+         * dedicated test below ('mark_failed retry backoff').
+         */
         process.env.METADATA_RETRY_BASE_BACKOFF_MS = '0';
         require('../../../config/app')._reset();
     });
@@ -59,16 +65,20 @@ describe('metadata/model — retry + dead-letter', () => {
             expect(row.is_complete).toBe(0);
             expect(row.attempts).toBe(1);
             expect(row.last_error).toBe('ASpace 502');
-            // `error` column stays null on retries (reserved for the
-            // final dead-letter message).
+            /*
+             * `error` column stays null on retries (reserved for the
+             * final dead-letter message).
+             */
             expect(row.error).toBeNull();
         });
 
         it('increments attempts on each retry until the cap fires', async () => {
             const a = await db_helper.seed_object({ uri: '/a' });
             await model.enqueue_pids([a.pid]);
-            // 3 attempts total; first two should be retries, third
-            // dead-letters.
+            /*
+             * 3 attempts total; first two should be retries, third
+             * dead-letters.
+             */
             for (let i = 1; i <= 2; i++) {
                 const [claimed] = await model.claim_pending(1);
                 const r = await model.mark_failed(claimed.id, `attempt ${i}`);
@@ -103,8 +113,10 @@ describe('metadata/model — retry + dead-letter', () => {
 
     describe('mark_failed retry backoff', () => {
         it('stamps next_attempt_at in the future on retry when backoff is configured', async () => {
-            // Override backoff for this test only — the suite-wide
-            // default is 0 (see beforeEach).
+            /*
+             * Override backoff for this test only — the suite-wide
+             * default is 0 (see beforeEach).
+             */
             process.env.METADATA_RETRY_BASE_BACKOFF_MS = '60000';
             process.env.METADATA_RETRY_MAX_BACKOFF_MS = '300000';
             require('../../../config/app')._reset();
@@ -115,8 +127,10 @@ describe('metadata/model — retry + dead-letter', () => {
             const before = Date.now();
             await model.mark_failed(claimed.id, 'first try');
             const row = await db_queue()(QUEUE).where({ id: claimed.id }).first();
-            // Stored as a string (sqlite) or Date (mariadb depending on
-            // driver); coerce through Date to normalize.
+            /*
+             * Stored as a string (sqlite) or Date (mariadb depending on
+             * driver); coerce through Date to normalize.
+             */
             const next_at = new Date(row.next_attempt_at).getTime();
             // 60s ± a couple of seconds of test slop.
             expect(next_at - before).toBeGreaterThanOrEqual(55_000);
@@ -124,9 +138,11 @@ describe('metadata/model — retry + dead-letter', () => {
         });
 
         it('skips backed-off rows in claim_pending until next_attempt_at elapses', async () => {
-            // Stamp a future next_attempt_at directly and verify the
-            // claim skips it; then rewind the timestamp and verify it
-            // becomes claimable. Avoids real-time waiting in the test.
+            /*
+             * Stamp a future next_attempt_at directly and verify the
+             * claim skips it; then rewind the timestamp and verify it
+             * becomes claimable. Avoids real-time waiting in the test.
+             */
             const a = await db_helper.seed_object({ uri: '/blocked' });
             await model.enqueue_pids([a.pid]);
             // Stamp into the future.
@@ -159,8 +175,10 @@ describe('metadata/model — retry + dead-letter', () => {
             expect(delta).toBeGreaterThanOrEqual(55_000);
             expect(delta).toBeLessThanOrEqual(70_000);
 
-            // Move the row into the past so the second claim picks it
-            // up without a wall-clock sleep.
+            /*
+             * Move the row into the past so the second claim picks it
+             * up without a wall-clock sleep.
+             */
             await db_queue()(QUEUE)
                 .where({ id: claimed.id })
                 .update({ next_attempt_at: new Date(Date.now() - 1000) });
@@ -178,9 +196,11 @@ describe('metadata/model — retry + dead-letter', () => {
 
     describe('claim_pending priority ordering', () => {
         it('claims priority=0 (on-demand) before priority=5 (system) regardless of id', async () => {
-            // System rows enqueued FIRST (lower ids) — without
-            // priority ordering they'd drain first. With priority,
-            // the on-demand row jumps ahead.
+            /*
+             * System rows enqueued FIRST (lower ids) — without
+             * priority ordering they'd drain first. With priority,
+             * the on-demand row jumps ahead.
+             */
             const sys_a = await db_helper.seed_object({ uri: '/sys-a' });
             const sys_b = await db_helper.seed_object({ uri: '/sys-b' });
             const on_demand = await db_helper.seed_object({ uri: '/od' });

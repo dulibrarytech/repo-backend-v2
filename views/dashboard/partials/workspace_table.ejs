@@ -16,6 +16,10 @@
     var view = locals.view || 'make-digital-objects';
     var has_actions = actions.length > 0;
     var col_count = has_actions ? 4 : 3;
+    // Ingest-in-progress gate (packaging view only). Defaulted defensively
+    // — the MDO / QA views render this same partial without these locals.
+    var ingest_in_progress = (typeof locals.ingest_in_progress !== 'undefined') && locals.ingest_in_progress;
+    var ingest_in_progress_count = locals.ingest_in_progress_count || 0;
     var empty_message = {
         'make-digital-objects': 'No folders are awaiting Make Digital Objects.',
         'aspace-qa': 'No folders have completed Make Digital Objects yet.',
@@ -26,6 +30,29 @@
 <% if (locals.error) { %>
     <div class="content-card sev-error" style="padding: 12px 16px; margin-bottom: 12px;">
         <strong>Error:</strong> <%= error %>
+    </div>
+<% } %>
+
+<% if (view === 'packaging-and-ingesting' && ingest_in_progress) { %>
+    <%/* One ingest at a time: Archivematica serializes transfers, so while
+         an ingest is moving through the pipeline the submit buttons below
+         are disabled and this banner explains why. Auto-clears on the next
+         30s list refresh once the active ingest finishes. */%>
+    <div class="content-card sev-warn" role="status" aria-live="polite"
+         style="padding: 12px 16px; margin-bottom: 12px; display: flex; align-items: center; gap: 12px;">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+             stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"
+             aria-hidden="true" style="flex: none;">
+            <circle cx="12" cy="12" r="9"/>
+            <polyline points="12 7 12 12 15 14"/>
+        </svg>
+        <div>
+            <strong>Ingest in progress.</strong>
+            An ingest is currently being processed
+            (<%= ingest_in_progress_count %> package<%= ingest_in_progress_count === 1 ? '' : 's' %> in the pipeline).
+            Archivematica handles one ingest at a time — wait until it finishes
+            before submitting another. This list refreshes automatically.
+        </div>
     </div>
 <% } %>
 
@@ -151,25 +178,44 @@
 
                                     <% if (actions.indexOf('submit_ingest') !== -1) { %>
                                         <li>
-                                            <a href="#" class="dropdown-item"
-                                               style="color: var(--du-crimson);"
-                                               hx-post="<%= dashboard_base %>/ingest/workspace/<%= encodeURIComponent(folder.name) %>/submit-ingest"
-                                               hx-target="#workspace-action-result"
-                                               hx-swap="innerHTML"
-                                               hx-indicator="#workspace-action-spinner"
-                                               data-confirm-title="Submit to Ingest"
-                                               data-confirm-severity="danger"
-                                               data-confirm-proceed="Submit"
-                                               hx-confirm="Submit &ldquo;<%= folder.name %>&rdquo; to the ingest pipeline? This will queue all archival packages and start Archivematica processing.">
-                                                <%/* upload-cloud icon — "send to pipeline" */%>
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                                    <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>
-                                                    <polyline points="16 16 12 12 8 16"/>
-                                                    <line x1="12" y1="12" x2="12" y2="21"/>
-                                                </svg>
-                                                Submit to Ingest
-                                            </a>
+                                            <% if (ingest_in_progress) { %>
+                                                <%/* An ingest is already in the pipeline — AM runs one
+                                                     at a time, so submit is disabled until it finishes.
+                                                     The server also rejects a submit in this state (see
+                                                     ingester/dashboard.js submit_ingest_action), so this
+                                                     is UI affordance, not the enforcement. */%>
+                                                <span class="dropdown-item disabled"
+                                                      aria-disabled="true"
+                                                      title="An ingest is already in progress — wait until it completes.">
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                                        <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>
+                                                        <polyline points="16 16 12 12 8 16"/>
+                                                        <line x1="12" y1="12" x2="12" y2="21"/>
+                                                    </svg>
+                                                    Submit to Ingest
+                                                </span>
+                                            <% } else { %>
+                                                <a href="#" class="dropdown-item"
+                                                   style="color: var(--du-crimson);"
+                                                   hx-post="<%= dashboard_base %>/ingest/workspace/<%= encodeURIComponent(folder.name) %>/submit-ingest"
+                                                   hx-target="#workspace-action-result"
+                                                   hx-swap="innerHTML"
+                                                   hx-indicator="#workspace-action-spinner"
+                                                   data-confirm-title="Submit to Ingest"
+                                                   data-confirm-severity="danger"
+                                                   data-confirm-proceed="Submit"
+                                                   hx-confirm="Submit &ldquo;<%= folder.name %>&rdquo; to the ingest pipeline? This will queue all archival packages and start Archivematica processing.">
+                                                    <%/* upload-cloud icon — "send to pipeline" */%>
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                                        <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>
+                                                        <polyline points="16 16 12 12 8 16"/>
+                                                        <line x1="12" y1="12" x2="12" y2="21"/>
+                                                    </svg>
+                                                    Submit to Ingest
+                                                </a>
+                                            <% } %>
                                         </li>
                                     <% } %>
 

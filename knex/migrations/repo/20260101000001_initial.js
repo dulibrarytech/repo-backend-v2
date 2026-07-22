@@ -1,18 +1,20 @@
 'use strict';
 
-// Initial schema for the `repo` database — tbl_objects + tbl_users.
-//
-// Idempotent: each createTable is gated by hasTable. This matters
-// because the v2 codebase rolled into production with the legacy v1
-// schema already in place (created from /repo-db-schema.sql), and the
-// initial migration needs to be a no-op on a DB that already has the
-// tables. The migration is recorded as applied either way; subsequent
-// migrations are linear and don't need guards.
-//
-// New schema changes (add column, add index, alter type) go in NEW
-// migration files with timestamps after this one. Don't edit this
-// file once it's in production — that'd silently desync envs that
-// have already applied it.
+/*
+ * Initial schema for the `repo` database — tbl_objects + tbl_users.
+ * 
+ * Idempotent: each createTable is gated by hasTable. This matters
+ * because the v2 codebase rolled into production with the legacy v1
+ * schema already in place (created from /repo-db-schema.sql), and the
+ * initial migration needs to be a no-op on a DB that already has the
+ * tables. The migration is recorded as applied either way; subsequent
+ * migrations are linear and don't need guards.
+ * 
+ * New schema changes (add column, add index, alter type) go in NEW
+ * migration files with timestamps after this one. Don't edit this
+ * file once it's in production — that'd silently desync envs that
+ * have already applied it.
+ */
 
 const tables = require('../../../config/db_tables');
 
@@ -71,9 +73,11 @@ exports.up = async function up(knex) {
 };
 
 exports.down = async function down(knex) {
-    // Drop in dependency-safe order. There are no FK relationships
-    // between these tables today, but the order still matters for
-    // future maintainers.
+    /*
+     * Drop in dependency-safe order. There are no FK relationships
+     * between these tables today, but the order still matters for
+     * future maintainers.
+     */
     await knex.schema.dropTableIfExists(tables.users);
     await knex.schema.dropTableIfExists(tables.objects);
 };

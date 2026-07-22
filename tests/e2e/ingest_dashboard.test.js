@@ -1,7 +1,9 @@
 'use strict';
 
-// E2E tests for the ingest dashboard pages. Exercises page + partials
-// against the live Express stack with in-memory sqlite.
+/*
+ * E2E tests for the ingest dashboard pages. Exercises page + partials
+ * against the live Express stack with in-memory sqlite.
+ */
 
 const supertest = require('supertest');
 const { make_app } = require('../helpers/app');
@@ -55,19 +57,29 @@ describe('ingest dashboard — e2e', () => {
             const res = await supertest(app).get('/repo/dashboard/ingest').set('Cookie', cookie);
             expect(res.status).toBe(200);
             expect(res.text).toContain('Ingest queue');
-            // Filter dropdowns are rendered.
-            expect(res.text).toContain('PROCESSING_METADATA');
-            expect(res.text).toContain('UPLOAD_TIMEOUT');
+            /*
+             * Filter chrome is rendered: the batch search box + the "Show"
+             * (is_complete) dropdown. The per-state "State" dropdown was
+             * removed — staff filter by batch + open/closed, not by raw
+             * pipeline state.
+             */
+            expect(res.text).toContain('name="batch"');
+            expect(res.text).toContain('name="is_complete"');
+            expect(res.text).toContain('Open only');
             expect(res.text).toContain('hx-get');
+            // The State dropdown is gone.
+            expect(res.text).not.toContain('name="status"');
         });
 
         it('mutation kebab items use hx-indicator on the row for in-flight feedback', async () => {
-            // Regression: before this, the row sat unchanged for the
-            // 1-5 second window while the cancel / return-to-packaging
-            // request was in flight (the curation-API call is slow).
-            // hx-indicator="closest tr" makes HTMX add the
-            // htmx-request class to the row, which CSS uses to fade
-            // the row and surface a "Working…" pill.
+            /*
+             * Regression: before this, the row sat unchanged for the
+             * 1-5 second window while the cancel / return-to-packaging
+             * request was in flight (the curation-API call is slow).
+             * hx-indicator="closest tr" makes HTMX add the
+             * htmx-request class to the row, which CSS uses to fade
+             * the row and surface a "Working…" pill.
+             */
             const id = await seed('UPLOADING');
             const cookie = await cookie_for('hx-indicator');
             const res = await supertest(app)
@@ -75,23 +87,27 @@ describe('ingest dashboard — e2e', () => {
                 .set('Cookie', cookie);
             // Cancel + the four rollback wrappers all need it.
             const matches = res.text.match(/hx-indicator="closest tr"/g) || [];
-            // Cancel kebab is the only mutation visible on an UPLOADING
-            // row (rollback / reset / return don't appear until a
-            // halt/cancel happens). One occurrence is the minimum
-            // floor for this state — the others render on the
-            // CANCELLED_BY_USER / *_TIMEOUT / *_INVALID rows.
+            /*
+             * Cancel kebab is the only mutation visible on an UPLOADING
+             * row (rollback / reset / return don't appear until a
+             * halt/cancel happens). One occurrence is the minimum
+             * floor for this state — the others render on the
+             * CANCELLED_BY_USER / *_TIMEOUT / *_INVALID rows.
+             */
             expect(matches.length).toBeGreaterThanOrEqual(1);
             void id;
         });
 
         it('queue table has periodic poll + body refresh trigger', async () => {
-            // Regression guard: an earlier version of this page
-            // listened for `ingest:refresh` while the row-mutation
-            // handlers emitted `queue:refresh`, and there was no
-            // periodic poll. Net effect: a freshly submitted row
-            // appeared stuck on PENDING because the worker's state
-            // transitions never made it to the browser. Both the
-            // emit/listen name and the every-5s poll are pinned here.
+            /*
+             * Regression guard: an earlier version of this page
+             * listened for `ingest:refresh` while the row-mutation
+             * handlers emitted `queue:refresh`, and there was no
+             * periodic poll. Net effect: a freshly submitted row
+             * appeared stuck on PENDING because the worker's state
+             * transitions never made it to the browser. Both the
+             * emit/listen name and the every-5s poll are pinned here.
+             */
             const cookie = await cookie_for('queue-poll');
             const res = await supertest(app).get('/repo/dashboard/ingest').set('Cookie', cookie);
             expect(res.text).toContain('queue:refresh from:body');
@@ -101,10 +117,12 @@ describe('ingest dashboard — e2e', () => {
         it('the sidebar marks Queue as the active nav item', async () => {
             const cookie = await cookie_for('ingest-dash-2');
             const res = await supertest(app).get('/repo/dashboard/ingest').set('Cookie', cookie);
-            // The sidebar partial uses `active === 'queue'` for the
-            // queue page (workspace pages flag MDO / QA / Packaging
-            // instead). Match on aria-label (which matches the title)
-            // and check both the visual + a11y signals land together.
+            /*
+             * The sidebar partial uses `active === 'queue'` for the
+             * queue page (workspace pages flag MDO / QA / Packaging
+             * instead). Match on aria-label (which matches the title)
+             * and check both the visual + a11y signals land together.
+             */
             expect(res.text).toMatch(
                 /<a[^>]*class="active"[^>]*aria-current="page"[^>]*aria-label="Queue/
             );
@@ -135,10 +153,12 @@ describe('ingest dashboard — e2e', () => {
             expect(res.text).toContain('Rollback AIP');
             // Every row carries a Timeline kebab item.
             expect(res.text).toContain('Timeline');
-            // PENDING (state) shouldn't get any halt-state rollback
-            // link in its row block. (PENDING gets Cancel + Timeline
-            // only; Return-to-Packaging only appears post-cancel /
-            // post-halt.)
+            /*
+             * PENDING (state) shouldn't get any halt-state rollback
+             * link in its row block. (PENDING gets Cancel + Timeline
+             * only; Return-to-Packaging only appears post-cancel /
+             * post-halt.)
+             */
             expect(res.text).not.toMatch(/PENDING[\s\S]*?Return to Packaging/);
             expect(res.text).not.toMatch(/PENDING[\s\S]*?Rollback AIP/);
         });
@@ -167,10 +187,12 @@ describe('ingest dashboard — e2e', () => {
         });
 
         it('hides terminal (is_complete=1) rows by default', async () => {
-            // Reproduces the "duplicate after re-submit" scenario from
-            // task #125: a RETURNED_TO_PACKAGING row from a prior cancel
-            // + a fresh PENDING row from a re-submit. Staff should
-            // see only the live PENDING row by default.
+            /*
+             * Reproduces the "duplicate after re-submit" scenario from
+             * task #125: a RETURNED_TO_PACKAGING row from a prior cancel
+             * + a fresh PENDING row from a re-submit. Staff should
+             * see only the live PENDING row by default.
+             */
             await seed('PENDING', { package: 'live-row' });
             await seed('RETURNED_TO_PACKAGING', {
                 package: 'old-row',
@@ -281,10 +303,12 @@ describe('ingest dashboard — e2e', () => {
     });
 
     describe('POST dashboard row mutations (HTML responses)', () => {
-        // Regression guard for task #125: the kebab items previously
-        // posted to /api/ingest/:id/... which returns JSON. HTMX swap
-        // outerHTML then dumped the JSON literal into the row. The
-        // dashboard wrappers must return rendered HTML.
+        /*
+         * Regression guard for task #125: the kebab items previously
+         * posted to /api/ingest/:id/... which returns JSON. HTMX swap
+         * outerHTML then dumped the JSON literal into the row. The
+         * dashboard wrappers must return rendered HTML.
+         */
         it('cancel_row_action returns the rendered row partial (HTML, not JSON)', async () => {
             const id = await seed('UPLOADING');
             const cookie = await cookie_for('cancel-html');
@@ -299,11 +323,13 @@ describe('ingest dashboard — e2e', () => {
         });
 
         it("cancel suggested_action names the kebab item ('Return to Packaging') for pre-AM cancel", async () => {
-            // Regression: an earlier version's static suggested_action
-            // said "Use the rollback action" but the kebab item is
-            // labeled "Return to Packaging" — staff couldn't find the
-            // promised "Rollback". The dashboard's decorate path now
-            // emits state-aware copy that names the actual kebab item.
+            /*
+             * Regression: an earlier version's static suggested_action
+             * said "Use the rollback action" but the kebab item is
+             * labeled "Return to Packaging" — staff couldn't find the
+             * promised "Rollback". The dashboard's decorate path now
+             * emits state-aware copy that names the actual kebab item.
+             */
             const id = await seed('UPLOADING'); // pre-AM prior state
             const cookie = await cookie_for('cancel-text-pre');
             await supertest(app)
@@ -314,16 +340,20 @@ describe('ingest dashboard — e2e', () => {
                 .get('/repo/dashboard/ingest/list?is_complete=all')
                 .set('Cookie', cookie);
             expect(res.text).toContain('Return to Packaging');
-            // The old "Use the rollback action" wording must NOT show
-            // up in the row hint anymore (it caused user confusion).
+            /*
+             * The old "Use the rollback action" wording must NOT show
+             * up in the row hint anymore (it caused user confusion).
+             */
             expect(res.text).not.toMatch(/Use the rollback action/);
         });
 
         it("cancel suggested_action names 'Return to Packaging' for AM-side cancel too", async () => {
-            // Design: the kebab shows ONE follow-up regardless of
-            // prev_state. Hint text never says "rollback" — for AM
-            // cancels the audit log carries needed_am_cleanup=true
-            // for the ops separation.
+            /*
+             * Design: the kebab shows ONE follow-up regardless of
+             * prev_state. Hint text never says "rollback" — for AM
+             * cancels the audit log carries needed_am_cleanup=true
+             * for the ops separation.
+             */
             const id = await seed('INGEST_IN_PROGRESS'); // AM prior state
             const cookie = await cookie_for('cancel-text-am');
             await supertest(app)
@@ -339,8 +369,10 @@ describe('ingest dashboard — e2e', () => {
         });
 
         it('return_to_packaging_action returns the rendered row partial', async () => {
-            // Set up a CANCELLED_BY_USER row with a PROCESSING_METADATA
-            // prev_state so the action is allowed and no QA call needed.
+            /*
+             * Set up a CANCELLED_BY_USER row with a PROCESSING_METADATA
+             * prev_state so the action is allowed and no QA call needed.
+             */
             const id = await seed('UPLOADING');
             const cookie = await cookie_for('rtp-html');
             await supertest(app)
@@ -354,8 +386,10 @@ describe('ingest dashboard — e2e', () => {
             expect(res.headers['content-type']).toMatch(/html/);
             expect(res.text).toContain('queue-row-' + id);
             expect(res.text).toContain('RETURNED_TO_PACKAGING');
-            // The new row should be marked terminal (is_complete=1)
-            // so it won't reappear in the default queue view.
+            /*
+             * The new row should be marked terminal (is_complete=1)
+             * so it won't reappear in the default queue view.
+             */
             const fresh = await model.get_queue_row({ id });
             expect(fresh.is_complete).toBe(1);
         });
@@ -392,18 +426,22 @@ describe('ingest dashboard — e2e', () => {
             const res = await supertest(app)
                 .post(`/repo/dashboard/ingest/${id}/cancel`)
                 .set('Cookie', cookie);
-            // model.cancel returns 409 (already_terminal) for COMPLETE.
-            // The wrapper passes through whatever the API controller wrote.
+            /*
+             * model.cancel returns 409 (already_terminal) for COMPLETE.
+             * The wrapper passes through whatever the API controller wrote.
+             */
             expect([403, 409]).toContain(res.status);
         });
     });
 
     describe('GET /dashboard/admin/services (Services Health page)', () => {
-        // Smoke test: the page itself must render. This existed
-        // because an earlier rev shipped without `qa_service` imported
-        // in the controller — the page rendered fine but the Wasabi
-        // partial 500'd with `qa_service is not defined` at first
-        // poll. We don't want to repeat that.
+        /*
+         * Smoke test: the page itself must render. This existed
+         * because an earlier rev shipped without `qa_service` imported
+         * in the controller — the page rendered fine but the Wasabi
+         * partial 500'd with `qa_service is not defined` at first
+         * poll. We don't want to repeat that.
+         */
 
         it('redirects unauthed users to login', async () => {
             const res = await supertest(app).get('/repo/dashboard/admin/services');
@@ -425,9 +463,11 @@ describe('ingest dashboard — e2e', () => {
     });
 
     describe('GET /dashboard/admin/services/wasabi (HTMX partial)', () => {
-        // No curation-API in the test env → qa_service.health_wasabi
-        // throws UpstreamError. The partial MUST render gracefully —
-        // staff see a red "curation unreachable" card, not a 500.
+        /*
+         * No curation-API in the test env → qa_service.health_wasabi
+         * throws UpstreamError. The partial MUST render gracefully —
+         * staff see a red "curation unreachable" card, not a 500.
+         */
 
         it('redirects unauthed users to login', async () => {
             const res = await supertest(app).get('/repo/dashboard/admin/services/wasabi');
@@ -439,14 +479,18 @@ describe('ingest dashboard — e2e', () => {
             const res = await supertest(app)
                 .get('/repo/dashboard/admin/services/wasabi')
                 .set('Cookie', cookie);
-            // The catch path returns 200 with the partial — staff
-            // see a clear failure card, not an error page.
+            /*
+             * The catch path returns 200 with the partial — staff
+             * see a clear failure card, not an error page.
+             */
             expect(res.status).toBe(200);
             expect(res.text).toMatch(/curation unreachable/i);
-            // The `qa_service is not defined` regression check: if
-            // the controller's import is dropped again, the partial
-            // would 500. A 200 with the unreachable state is the
-            // pass condition.
+            /*
+             * The `qa_service is not defined` regression check: if
+             * the controller's import is dropped again, the partial
+             * would 500. A 200 with the unreachable state is the
+             * pass condition.
+             */
             expect(res.text).not.toMatch(/qa_service is not defined/i);
         });
     });

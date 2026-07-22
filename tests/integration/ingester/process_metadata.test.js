@@ -1,8 +1,10 @@
 'use strict';
 
-// Stage 1 (process_metadata) integration tests. Uses the real model
-// against in-memory sqlite + fake aspace + fake validator so we can
-// assert end-to-end state transitions + audit events.
+/*
+ * Stage 1 (process_metadata) integration tests. Uses the real model
+ * against in-memory sqlite + fake aspace + fake validator so we can
+ * assert end-to-end state transitions + audit events.
+ */
 
 const stage = require('../../../ingester/stages/process_metadata');
 const db_helper = require('../../helpers/db');
@@ -109,8 +111,10 @@ describe('ingester/stages/process_metadata', () => {
         const fresh = await db_queue()(tables.ingest_queue).where({ id: row.id }).first();
         expect(fresh.pipeline_state).toBe('AS_METADATA_INVALID');
         expect(fresh.error).toContain('Title field is missing');
-        // Severity should auto-populate as ERROR (set by the model
-        // from state_metadata).
+        /*
+         * Severity should auto-populate as ERROR (set by the model
+         * from state_metadata).
+         */
         expect(fresh.severity).toBe('ERROR');
     });
 

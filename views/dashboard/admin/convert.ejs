@@ -1,0 +1,97 @@
+<%/* Admin: TIFF → JPG derivative conversion.
+
+     Submits repo objects to DU's remote convert service (libspec02),
+     one at a time, paced ~20s apart — the service is fragile under
+     load. A Node port of the legacy post_tiff_convert.py script.
+
+     The status panel (#convert-status) polls every 3s and also renders
+     after Start. Preview is a dry run: it shows exactly what WOULD be
+     sent without enqueuing anything. */%>
+<h1 class="page-title">TIFF → JPG Conversion</h1>
+<p class="page-subtitle">
+    Generate JPG derivatives for archival TIFFs by submitting objects to
+    the convert service. Work runs in the background, <strong>one object
+    at a time, paced ~20 seconds apart</strong> — the service doesn't
+    tolerate heavy load — so a full collection can take a while. Use
+    <strong>Preview</strong> first to see exactly what will be sent.
+</p>
+
+<div class="content-card mb-3">
+    <div class="content-card-header">
+        <h2 style="font-size: 18px; margin: 0;">Start a conversion</h2>
+    </div>
+    <div class="p-3">
+        <form id="convert-form">
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label small mb-1" for="convert-collection">
+                        Collection UUID
+                    </label>
+                    <input id="convert-collection" name="collection" type="text"
+                           class="form-control form-control-sm font-monospace"
+                           placeholder="a5b3c885-71fd-4096-9deb-7cd6a1431bb7"
+                           autocomplete="off">
+                    <div class="form-text">Converts every member that has a source file.</div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small mb-1" for="convert-sip">
+                        …or a single SIP UUID
+                    </label>
+                    <input id="convert-sip" name="sip_uuid" type="text"
+                           class="form-control form-control-sm font-monospace"
+                           placeholder="2a3e16ca-5aa0-428e-97ab-a189c40b29fc"
+                           autocomplete="off">
+                    <div class="form-text">Takes precedence over the collection.</div>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small mb-1" for="convert-limit">
+                        Limit (optional)
+                    </label>
+                    <input id="convert-limit" name="limit" type="number" min="1"
+                           class="form-control form-control-sm"
+                           placeholder="all">
+                    <div class="form-text">Cap the object count — handy for a test run.</div>
+                </div>
+            </div>
+
+            <div class="control-group mt-3">
+                <button type="submit"
+                        class="btn btn-sm btn-outline-secondary"
+                        hx-post="<%= dashboard_base %>/admin/convert/preview"
+                        hx-target="#convert-preview"
+                        hx-swap="innerHTML">
+                    Preview
+                </button>
+                <button type="submit"
+                        class="btn btn-sm btn-primary ms-2"
+                        hx-post="<%= dashboard_base %>/admin/convert/start"
+                        hx-target="#convert-status"
+                        hx-swap="innerHTML"
+                        data-confirm="Queue these objects for conversion? They'll be posted to the convert service one at a time in the background."
+                        data-confirm-title="Start conversion?"
+                        data-confirm-label="Start">
+                    Start conversion
+                </button>
+            </div>
+        </form>
+
+        <div id="convert-preview" class="mt-3"></div>
+    </div>
+</div>
+
+<div class="content-card">
+    <div class="content-card-header">
+        <h2 style="font-size: 18px; margin: 0;">Status</h2>
+        <div class="control-group">
+            <span class="htmx-indicator">
+                <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+            </span>
+        </div>
+    </div>
+    <div id="convert-status"
+         hx-get="<%= dashboard_base %>/admin/convert/status"
+         hx-trigger="load, every 3s"
+         hx-swap="innerHTML">
+        <div class="text-muted small p-3">Loading…</div>
+    </div>
+</div>

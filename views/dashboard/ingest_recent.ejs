@@ -1,0 +1,35 @@
+<nav class="small text-muted mb-2" aria-label="Breadcrumb">
+    <a href="<%= dashboard_base %>/collections" style="color: inherit;">← Collection Management</a>
+</nav>
+
+<h1 class="page-title">Digital Preservation Jobs — Recent Ingests</h1>
+<p class="page-subtitle">
+    Objects ingested in the last <%= days %> days — newest first. Review
+    metadata, publish, or suppress directly from each row's actions menu (⋮).
+</p>
+
+<%/* Reuses the Objects table (partials/object_row.ejs) filtered to the
+     recent window, so every Objects action — Metadata, Refresh metadata,
+     Publish / Suppress, Convert, Delete, and the bulk toolbar — works here
+     with the same RBAC and modals, no duplication.
+
+     The hidden `recent_days` input is the load-bearing bit: HTMX hx-include
+     inheritance carries it to /objects/list AND to the pagination + the
+     `objects:refresh` re-fetch the row actions emit, so the table stays
+     scoped to the window across paging and after an action. */%>
+<input type="hidden" name="recent_days" value="<%= days %>">
+
+<div class="content-card">
+    <div id="objects-table"
+         hx-get="<%= dashboard_base %>/objects/list?recent_days=<%= days %>"
+         hx-trigger="load, objects:refresh from:body"
+         hx-include="[name=recent_days]"
+         hx-swap="innerHTML"
+         aria-live="polite"
+         aria-atomic="false">
+        <div class="empty-state">
+            <span class="spinner-border spinner-border-sm text-muted me-2"></span>
+            Loading…
+        </div>
+    </div>
+</div>

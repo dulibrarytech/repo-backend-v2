@@ -1,0 +1,52 @@
+<nav class="small text-muted mb-2" aria-label="Breadcrumb">
+    <% if (parent) { %>
+        <a href="<%= dashboard_base %>/collections/<%= parent.pid %>" style="color: inherit;">← <%= parent.title || parent.pid %></a>
+    <% } else { %>
+        <a href="<%= dashboard_base %>/collections" style="color: inherit;">← Collections</a>
+    <% } %>
+</nav>
+
+<h1 class="page-title"><%= parent ? 'Create Sub-collection' : 'New Collection' %></h1>
+<p class="page-subtitle">
+    <% if (parent) { %>
+        New sub-collection under <strong><%= parent.title || parent.pid %></strong>, bound to an ArchivesSpace resource.
+    <% } else { %>
+        Create a top-level collection bound to an ArchivesSpace resource.
+    <% } %>
+</p>
+
+<div class="content-card" style="max-width: 760px;">
+    <% if (error) { %>
+        <div class="content-card sev-error" role="alert" style="padding: 12px 16px; margin-bottom: 16px;">
+            <strong>Couldn't create the collection:</strong> <%= error %>
+        </div>
+    <% } %>
+
+    <%/* Plain form POST (same pattern as the logout form) — the controller
+         redirects to the new collection on success, or re-renders this page
+         with `error` set. No HTMX needed; this is a one-shot create. */%>
+    <form method="POST" action="<%= dashboard_base %>/collections">
+        <% if (parent) { %>
+            <input type="hidden" name="parent_collection_pid" value="<%= parent.pid %>">
+        <% } %>
+        <div class="mb-3">
+            <label for="coll-uri" class="form-label">ArchivesSpace URI</label>
+            <input type="text" id="coll-uri" name="uri" class="form-control"
+                   placeholder="/repositories/2/resources/1204  or  /repositories/2/archival_objects/426"
+                   value="<%= form.uri || '' %>"
+                   autocomplete="off" spellcheck="false" required>
+            <div class="form-text">
+                The full URI of an ArchivesSpace <strong>resource</strong> or
+                <strong>archival object</strong>. The collection mirrors that record
+                (title, abstract, subjects) and binds to it. One collection per URI.
+            </div>
+        </div>
+        <div class="d-flex align-items-center" style="gap: 8px;">
+            <button type="submit" class="btn btn-sm btn-primary">
+                <%= parent ? 'Create sub-collection' : 'Create collection' %>
+            </button>
+            <a href="<%= parent ? `${dashboard_base}/collections/${parent.pid}` : `${dashboard_base}/collections` %>"
+               class="btn btn-sm btn-link">Cancel</a>
+        </div>
+    </form>
+</div>

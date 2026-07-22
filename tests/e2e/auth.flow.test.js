@@ -38,8 +38,10 @@ describe('auth — full login → me → logout → refresh flow', () => {
         const res = await agent.post('/repo/auth/login').send({ du_id: 'nobody' });
         expect(res.status).toBe(401);
         expect(res.body.code).toBe('UNAUTHORIZED');
-        // The error message MUST NOT distinguish "no such user" from
-        // "wrong password" — would leak existence of du_ids.
+        /*
+         * The error message MUST NOT distinguish "no such user" from
+         * "wrong password" — would leak existence of du_ids.
+         */
         expect(res.body.error).toBe('Invalid credentials');
     });
 

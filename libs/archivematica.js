@@ -1,38 +1,40 @@
 'use strict';
 
-// Archivematica HTTP client. Ports v1's libs/archivematica.js but
-// narrows the surface to the calls the v2 ingest worker actually makes:
-//
-//   - start_transfer(collection_uuid, package_name)
-//   - approve_transfer(transfer_folder)
-//   - get_transfer_status(uuid)
-//   - get_ingest_status(uuid)
-//   - get_dip_path(sip_uuid)          ← storage API; used post-ingest
-//   - delete_aip_request({ uuid, delete_reason })  ← storage API; rollback
-//   - clear_transfer(uuid) / clear_ingest(uuid)    ← post-success cleanup
-//   - ping_api() / ping_storage_api()              ← health endpoints
-//
-// Differences from v1:
-//   1. Functional + factory shape — `create_client(http)` so tests can
-//      inject a fake without monkey-patching axios. Matches the
-//      pattern in libs/archivesspace.js.
-//   2. Returns a structured `{ status, data }` for success cases instead
-//      of `data | false | undefined`. Callers can branch on status
-//      without re-mapping.
-//   3. Throws UpstreamError on transport-level failure (timeout, DNS,
-//      TLS). v1 swallowed-and-logged; the worker would then see
-//      `undefined` and have no signal to retry. v2 distinguishes a
-//      bad upstream response (data + non-2xx) from a dropped call.
-//   4. Bounded timeout via app config rather than an env value read
-//      per call. Single source of truth.
-//
-// The Archivematica REST API speaks two dialects:
-//   - The "main" dashboard API (transfer / ingest endpoints) auths via
-//     ?username= & api_key=  query string.
-//   - The Storage Service API (file / space endpoints) auths via
-//     Authorization: ApiKey user:key  header.
-// Both base URLs need a trailing slash so URL building stays simple —
-// the config block enforces that contract documentaionally.
+/*
+ * Archivematica HTTP client. Ports v1's libs/archivematica.js but
+ * narrows the surface to the calls the v2 ingest worker actually makes:
+ * 
+ *   - start_transfer(collection_uuid, package_name)
+ *   - approve_transfer(transfer_folder)
+ *   - get_transfer_status(uuid)
+ *   - get_ingest_status(uuid)
+ *   - get_dip_path(sip_uuid)          ← storage API; used post-ingest
+ *   - delete_aip_request({ uuid, delete_reason })  ← storage API; rollback
+ *   - clear_transfer(uuid) / clear_ingest(uuid)    ← post-success cleanup
+ *   - ping_api() / ping_storage_api()              ← health endpoints
+ * 
+ * Differences from v1:
+ *   1. Functional + factory shape — `create_client(http)` so tests can
+ *      inject a fake without monkey-patching axios. Matches the
+ *      pattern in libs/archivesspace.js.
+ *   2. Returns a structured `{ status, data }` for success cases instead
+ *      of `data | false | undefined`. Callers can branch on status
+ *      without re-mapping.
+ *   3. Throws UpstreamError on transport-level failure (timeout, DNS,
+ *      TLS). v1 swallowed-and-logged; the worker would then see
+ *      `undefined` and have no signal to retry. v2 distinguishes a
+ *      bad upstream response (data + non-2xx) from a dropped call.
+ *   4. Bounded timeout via app config rather than an env value read
+ *      per call. Single source of truth.
+ * 
+ * The Archivematica REST API speaks two dialects:
+ *   - The "main" dashboard API (transfer / ingest endpoints) auths via
+ *     ?username= & api_key=  query string.
+ *   - The Storage Service API (file / space endpoints) auths via
+ *     Authorization: ApiKey user:key  header.
+ * Both base URLs need a trailing slash so URL building stays simple —
+ * the config block enforces that contract documentaionally.
+ */
 
 const http_default = require('axios');
 const app_config = require('../config/app');
@@ -49,9 +51,11 @@ function is_storage_configured() {
     return Boolean(cfg && cfg.storage_api && cfg.storage_username && cfg.storage_api_key);
 }
 
-// Build a query string with main-API username + api_key already glued
-// on, so call sites stay readable. Trailing slash on the path part is
-// the caller's responsibility (Archivematica is picky about that).
+/*
+ * Build a query string with main-API username + api_key already glued
+ * on, so call sites stay readable. Trailing slash on the path part is
+ * the caller's responsibility (Archivematica is picky about that).
+ */
 function main_url(path) {
     const cfg = app_config().archivematica;
     const base = cfg.api.replace(/\/+$/, '');
@@ -66,9 +70,11 @@ function storage_url(path) {
     return `${base}/${path}${sep}username=${encodeURIComponent(cfg.storage_username)}&api_key=${encodeURIComponent(cfg.storage_api_key)}`;
 }
 
-// `Authorization: ApiKey user:key` header for storage-API calls that
-// need to authenticate via header (vs the query-string variant most
-// storage endpoints accept both).
+/*
+ * `Authorization: ApiKey user:key` header for storage-API calls that
+ * need to authenticate via header (vs the query-string variant most
+ * storage endpoints accept both).
+ */
 function storage_auth_header() {
     const cfg = app_config().archivematica;
     return { Authorization: `ApiKey ${cfg.storage_username}:${cfg.storage_api_key}` };
@@ -79,10 +85,12 @@ function create_client(http = http_default) {
         is_configured,
         is_storage_configured,
 
-        // Health probe — pings administration/dips/atom/levels (an
-        // endpoint that exists on every AM instance) and returns true
-        // on HTTP 200. Used by /health and by the worker's boot self-
-        // check to surface AM-down conditions early.
+        /*
+         * Health probe — pings administration/dips/atom/levels (an
+         * endpoint that exists on every AM instance) and returns true
+         * on HTTP 200. Used by /health and by the worker's boot self-
+         * check to surface AM-down conditions early.
+         */
         async ping_api() {
             const cfg = app_config().archivematica;
             const url = main_url('administration/dips/atom/levels/');
@@ -115,31 +123,33 @@ function create_client(http = http_default) {
             }
         },
 
-        // Diagnostic liveness probe for the Services Health admin card.
-        // Unlike ping_api() (boolean), this returns the actual HTTP
-        // status AND any transport error so the dashboard can show WHY
-        // a probe failed instead of a useless "no HTTP 200":
-        //   - HTTP 401/403  → username/api_key wrong (check ARCHIVEMATICA_*)
-        //   - HTTP 404      → ARCHIVEMATICA_API base URL wrong (missing
-        //                     trailing slash / wrong /api path)
-        //   - error string like "self-signed certificate" / "unable to
-        //     verify the first certificate" → TLS trust. v1 disabled TLS
-        //     verification globally (NODE_TLS_REJECT_UNAUTHORIZED=0); v2
-        //     does NOT — point NODE_EXTRA_CA_CERTS at the AM host's CA.
-        //
-        // Endpoint choice: transfer/unapproved/ — the SAME endpoint the
-        // transfer stage polls during approval. It's guaranteed present
-        // on every AM install and returns 200 with valid query auth.
-        // The previous probe used administration/dips/atom/levels/,
-        // which depends on AtoM DIP-upload being configured and can
-        // return non-200 on instances that don't use AtoM even when the
-        // transfer/ingest API the pipeline needs is perfectly healthy —
-        // i.e. it failed the card while ingest worked fine.
-        //
-        // Returns: { ok, status, error }
-        //   ok=true            → HTTP 200
-        //   ok=false + status  → got an HTTP response, just not 200
-        //   ok=false + error   → transport failure (timeout/DNS/TLS); status=null
+        /*
+         * Diagnostic liveness probe for the Services Health admin card.
+         * Unlike ping_api() (boolean), this returns the actual HTTP
+         * status AND any transport error so the dashboard can show WHY
+         * a probe failed instead of a useless "no HTTP 200":
+         *   - HTTP 401/403  → username/api_key wrong (check ARCHIVEMATICA_*)
+         *   - HTTP 404      → ARCHIVEMATICA_API base URL wrong (missing
+         *                     trailing slash / wrong /api path)
+         *   - error string like "self-signed certificate" / "unable to
+         *     verify the first certificate" → TLS trust. v1 disabled TLS
+         *     verification globally (NODE_TLS_REJECT_UNAUTHORIZED=0); v2
+         *     does NOT — point NODE_EXTRA_CA_CERTS at the AM host's CA.
+         * 
+         * Endpoint choice: transfer/unapproved/ — the SAME endpoint the
+         * transfer stage polls during approval. It's guaranteed present
+         * on every AM install and returns 200 with valid query auth.
+         * The previous probe used administration/dips/atom/levels/,
+         * which depends on AtoM DIP-upload being configured and can
+         * return non-200 on instances that don't use AtoM even when the
+         * transfer/ingest API the pipeline needs is perfectly healthy —
+         * i.e. it failed the card while ingest worked fine.
+         * 
+         * Returns: { ok, status, error }
+         *   ok=true            → HTTP 200
+         *   ok=false + status  → got an HTTP response, just not 200
+         *   ok=false + error   → transport failure (timeout/DNS/TLS); status=null
+         */
         async health_api() {
             const cfg = app_config().archivematica;
             const url = main_url('transfer/unapproved/');
@@ -156,16 +166,18 @@ function create_client(http = http_default) {
             }
         },
 
-        // Kicks off a transfer. AM expects the source as base64(
-        //   "<source_uuid>:<remote_path>/<collection_uuid>/<package>")
-        // and the body as form-encoded `name=…&type=standard&accession=&
-        // paths[]=<base64>&rows_ids[]=[""]`. The v1 string was reverse-
-        // engineered against AM 1.13; we keep the exact same encoding
-        // so a v1 → v2 cutover doesn't change the wire format.
-        //
-        // Returns `{ status, data }` so the caller can read
-        // `data.transfer_id` (UUID assigned by AM) and the status code
-        // to confirm 200.
+        /*
+         * Kicks off a transfer. AM expects the source as base64(
+         *   "<source_uuid>:<remote_path>/<collection_uuid>/<package>")
+         * and the body as form-encoded `name=…&type=standard&accession=&
+         * paths[]=<base64>&rows_ids[]=[""]`. The v1 string was reverse-
+         * engineered against AM 1.13; we keep the exact same encoding
+         * so a v1 → v2 cutover doesn't change the wire format.
+         * 
+         * Returns `{ status, data }` so the caller can read
+         * `data.transfer_id` (UUID assigned by AM) and the status code
+         * to confirm 200.
+         */
         async start_transfer(collection_uuid, package_name) {
             const cfg = app_config().archivematica;
             const location = `${cfg.transfer_source}:${cfg.sftp_remote_path}/${collection_uuid}/${package_name}`;
@@ -178,12 +190,14 @@ function create_client(http = http_default) {
                 `&accession=` +
                 `&paths%5B%5D=${encodeURIComponent(encoded_location)}` +
                 `&rows_ids%5B%5D=%5B%22%22%5D`;
-            // start_transfer gets the LONG timeout (default 10 min) —
-            // AM does a filesystem probe of every staged file before
-            // ACKing, and large media (multi-GB .mov / .mp4) can push
-            // that probe well past the default 60s timeout_ms. See
-            // config/app.js → archivematica.start_transfer_timeout_ms
-            // for the env knob.
+            /*
+             * start_transfer gets the LONG timeout (default 10 min) —
+             * AM does a filesystem probe of every staged file before
+             * ACKing, and large media (multi-GB .mov / .mp4) can push
+             * that probe well past the default 60s timeout_ms. See
+             * config/app.js → archivematica.start_transfer_timeout_ms
+             * for the env knob.
+             */
             const timeout =
                 cfg.start_transfer_timeout_ms && cfg.start_transfer_timeout_ms > cfg.timeout_ms
                     ? cfg.start_transfer_timeout_ms
@@ -191,9 +205,11 @@ function create_client(http = http_default) {
             return _post_form(http, url, body, timeout, 'start_transfer');
         },
 
-        // Returns the list of transfers AM hasn't approved yet. v2 uses
-        // it during the APPROVE_TIMEOUT path to confirm the transfer is
-        // actually queued before retrying / surfacing the error.
+        /*
+         * Returns the list of transfers AM hasn't approved yet. v2 uses
+         * it during the APPROVE_TIMEOUT path to confirm the transfer is
+         * actually queued before retrying / surfacing the error.
+         */
         async get_unapproved_transfer_list() {
             const cfg = app_config().archivematica;
             const url = main_url('transfer/unapproved/');
@@ -220,12 +236,14 @@ function create_client(http = http_default) {
             return _get_json(http, url, cfg.timeout_ms, 'get_ingest_status');
         },
 
-        // Resolves the DIP-store path for a given SIP UUID. AM stores
-        // its DIPs at a UUID-derived path inside DuraCloud; we need
-        // that path to fetch the METS file. The string-mangling here
-        // is a direct port of v1's logic (regex-split UUID on `-`,
-        // chunk into 4-char groups, join with `/`, append the folder
-        // basename minus the `.7z` extension).
+        /*
+         * Resolves the DIP-store path for a given SIP UUID. AM stores
+         * its DIPs at a UUID-derived path inside DuraCloud; we need
+         * that path to fetch the METS file. The string-mangling here
+         * is a direct port of v1's logic (regex-split UUID on `-`,
+         * chunk into 4-char groups, join with `/`, append the folder
+         * basename minus the `.7z` extension).
+         */
         async get_dip_path(sip_uuid) {
             const cfg = app_config().archivematica;
             const url = storage_url(`v2/file/${encodeURIComponent(sip_uuid)}/`);
@@ -257,14 +275,88 @@ function create_client(http = http_default) {
             }
         },
 
-        // POST a deletion request to the Storage Service. AM responds:
-        //   - 202: request submitted, awaiting Storage Service admin
-        //          approval in the AM UI. Returns the request id.
-        //   - 200 with `message: 'A deletion request already exists for
-        //          this AIP.'`: idempotent; treat as success but flag.
-        //   - anything else: surface to the caller for halt + audit.
-        //
-        // `obj` shape: { uuid, delete_reason }
+        /*
+         * List Storage Service packages, ONE page at a time. Mirrors
+         * get_dip_path's auth/transport but hits the COLLECTION endpoint
+         * (v2/file/) instead of a single package, so callers can paginate
+         * the whole inventory (used by the AM-orphan reconciliation in
+         * scripts/am_orphans.js). Read-only — no AM state is changed.
+         * 
+         * Options { package_type, status, limit=100, offset=0 } map to the
+         * Storage Service query params. Returns { status, meta, objects }:
+         *   meta    — AM's paginator { limit, offset, total_count, next, previous }
+         *   objects — package records (uuid, package_type, status,
+         *             current_path, current_location, size, ...).
+         * A non-200 yields { status, meta: null, objects: [] }; a transport
+         * error throws UpstreamError so the caller can retry that page.
+         */
+        async list_packages({ package_type, status, limit = 100, offset = 0 } = {}) {
+            const cfg = app_config().archivematica;
+            const qs = new URLSearchParams();
+            if (package_type) qs.set('package_type', package_type);
+            if (status) qs.set('status', status);
+            qs.set('limit', String(limit));
+            qs.set('offset', String(offset));
+            const url = storage_url(`v2/file/?${qs.toString()}`);
+            try {
+                const res = await http.get(url, {
+                    timeout: cfg.timeout_ms,
+                    headers: { 'Content-Type': 'application/json' },
+                    validateStatus: () => true,
+                });
+                if (res.status !== 200 || !res.data) {
+                    return { status: res.status, meta: null, objects: [] };
+                }
+                return {
+                    status: res.status,
+                    meta: res.data.meta || null,
+                    objects: Array.isArray(res.data.objects) ? res.data.objects : [],
+                };
+            } catch (err) {
+                log.warn({ event: 'am_list_packages_failed', offset, err: err.message });
+                throw new UpstreamError(`Archivematica list_packages failed: ${err.message}`);
+            }
+        },
+
+        /*
+         * Fetch an AIP's PREMIS pointer file (METS XML). The Storage Service
+         * package list does NOT carry an ingest date for legacy AIPs
+         * (stored_date is null), but the pointer file does — METS
+         * `CREATEDATE` + premis:eventDateTime. Used by the AM-orphan year
+         * report to recover each AIP's true ingest year. Read-only.
+         * 
+         * Returns { status, xml } (xml = '' on a non-200). responseType
+         * 'text' so axios doesn't try to JSON-parse the XML body. Transport
+         * errors throw UpstreamError so the caller can retry/skip per AIP.
+         */
+        async get_pointer_file(uuid) {
+            const cfg = app_config().archivematica;
+            const url = storage_url(`v2/file/${encodeURIComponent(uuid)}/pointer_file/`);
+            try {
+                const res = await http.get(url, {
+                    timeout: cfg.timeout_ms,
+                    headers: { 'Content-Type': 'application/xml' },
+                    responseType: 'text',
+                    validateStatus: () => true,
+                });
+                const xml = typeof res.data === 'string' ? res.data : res.data ? String(res.data) : '';
+                return { status: res.status, xml: res.status === 200 ? xml : '' };
+            } catch (err) {
+                log.warn({ event: 'am_get_pointer_file_failed', uuid, err: err.message });
+                throw new UpstreamError(`Archivematica get_pointer_file failed: ${err.message}`);
+            }
+        },
+
+        /*
+         * POST a deletion request to the Storage Service. AM responds:
+         *   - 202: request submitted, awaiting Storage Service admin
+         *          approval in the AM UI. Returns the request id.
+         *   - 200 with `message: 'A deletion request already exists for
+         *          this AIP.'`: idempotent; treat as success but flag.
+         *   - anything else: surface to the caller for halt + audit.
+         * 
+         * `obj` shape: { uuid, delete_reason }
+         */
         async delete_aip_request(obj) {
             const cfg = app_config().archivematica;
             const url = storage_url(`v2/file/${encodeURIComponent(obj.uuid)}/delete_aip/`);
@@ -287,10 +379,12 @@ function create_client(http = http_default) {
             }
         },
 
-        // Cleanup helpers — fire-and-forget after a successful pipeline
-        // run so AM's queue doesn't grow unbounded with terminal rows.
-        // We don't care about the response body, just whether the
-        // request landed.
+        /*
+         * Cleanup helpers — fire-and-forget after a successful pipeline
+         * run so AM's queue doesn't grow unbounded with terminal rows.
+         * We don't care about the response body, just whether the
+         * request landed.
+         */
         async clear_transfer(uuid) {
             const cfg = app_config().archivematica;
             const url = main_url(`transfer/${encodeURIComponent(uuid)}/delete/`);
@@ -303,9 +397,11 @@ function create_client(http = http_default) {
             return _delete(http, url, cfg.timeout_ms, 'clear_ingest');
         },
 
-        // Storage-usage stats. The Storage Service exposes per-space
-        // metrics under v2/space/<uuid>. v2 surfaces these on the
-        // /api/ingest/health endpoint for staff visibility.
+        /*
+         * Storage-usage stats. The Storage Service exposes per-space
+         * metrics under v2/space/<uuid>. v2 surfaces these on the
+         * /api/ingest/health endpoint for staff visibility.
+         */
         async get_dip_storage_usage() {
             const cfg = app_config().archivematica;
             const url = `${cfg.storage_api.replace(/\/+$/, '')}/v2/space/${cfg.storage_dip_uuid || ''}`;

@@ -1,3 +1,12 @@
+<%/* Lazy, non-blocking degraded-services banner: fetched AFTER paint
+     (hx-trigger="load") so a slow/timing-out service probe can't delay this
+     landing page. Renders nothing when every service is reachable — the
+     outerHTML swap then removes this mount entirely. */%>
+<div id="services-banner"
+     hx-get="<%= dashboard_base %>/_services/banner"
+     hx-trigger="load"
+     hx-swap="outerHTML"></div>
+
 <h1 class="page-title">Welcome, <%= user.first_name || user.du_id %>.</h1>
 <p class="page-subtitle">
     Quick view of repository activity. Use the sidebar to manage
@@ -6,25 +15,25 @@
 
 <div class="row g-3 mb-3">
     <div class="col-md-3 col-sm-6">
-        <div class="card-stat">
+        <div class="card-stat h-100">
             <div class="card-stat__value"><%= stats.total.toLocaleString() %></div>
             <div class="card-stat__label">Total objects</div>
         </div>
     </div>
     <div class="col-md-3 col-sm-6">
-        <div class="card-stat">
+        <div class="card-stat h-100">
             <div class="card-stat__value"><%= stats.published.toLocaleString() %></div>
             <div class="card-stat__label">Published</div>
         </div>
     </div>
     <div class="col-md-3 col-sm-6">
-        <div class="card-stat">
+        <div class="card-stat h-100">
             <div class="card-stat__value"><%= stats.collections.toLocaleString() %></div>
             <div class="card-stat__label">Collections</div>
         </div>
     </div>
     <div class="col-md-3 col-sm-6">
-        <div class="card-stat">
+        <div class="card-stat h-100">
             <div class="card-stat__value"><%= stats.active_users.toLocaleString() %></div>
             <div class="card-stat__label">Active users</div>
         </div>
@@ -33,7 +42,7 @@
 
 <div class="row g-3 mb-3">
     <div class="col-md-6">
-        <div class="content-card">
+        <div class="content-card h-100">
             <div class="d-flex justify-content-between align-items-baseline mb-2">
                 <h2 class="h6 m-0">Top collections by object count</h2>
                 <a href="<%= dashboard_base %>/objects" class="small">Browse all →</a>
@@ -47,8 +56,11 @@
         </div>
     </div>
     <div class="col-md-6">
-        <div class="content-card">
-            <h2 class="h6 mb-2">Recent ingests</h2>
+        <div class="content-card h-100">
+            <div class="d-flex justify-content-between align-items-baseline mb-2">
+                <h2 class="h6 m-0">Recent ingests</h2>
+                <a href="<%= dashboard_base %>/ingest/recent" class="small">Browse all →</a>
+            </div>
             <div id="home-recent-ingests"
                  hx-get="<%= dashboard_base %>/_home/recent-ingests"
                  hx-trigger="load"
@@ -61,7 +73,7 @@
 
 <div class="row g-3">
     <div class="col-md-6">
-        <div class="content-card">
+        <div class="content-card h-100">
             <h2 class="h6 mb-2">Quick actions</h2>
             <ul class="list-unstyled m-0 small">
                 <li><a href="<%= dashboard_base %>/objects">→ Browse objects</a></li>
@@ -71,7 +83,7 @@
         </div>
     </div>
     <div class="col-md-6">
-        <div class="content-card">
+        <div class="content-card h-100">
             <h2 class="h6 mb-2">Your session</h2>
             <dl class="row mb-0 small">
                 <dt class="col-4">DU ID</dt>

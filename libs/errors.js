@@ -1,10 +1,12 @@
 'use strict';
 
-// Typed error classes. Routes/services throw these; the central
-// error handler in config/express.js maps them to HTTP responses.
-//
-// Use `AppError` when none of the typed variants fit. Use `code` for
-// machine-readable identifiers; UI surfaces `message`.
+/*
+ * Typed error classes. Routes/services throw these; the central
+ * error handler in config/express.js maps them to HTTP responses.
+ * 
+ * Use `AppError` when none of the typed variants fit. Use `code` for
+ * machine-readable identifiers; UI surfaces `message`.
+ */
 
 class AppError extends Error {
     constructor(message, status = 500, code = 'INTERNAL_ERROR') {

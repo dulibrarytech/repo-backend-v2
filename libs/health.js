@@ -1,13 +1,15 @@
 'use strict';
 
-// Aggregated health snapshot. Each "check" is an async function that
-// returns `{ ok: true }` or `{ ok: false, error: '...' }`. The endpoint
-// in config/express.js calls report() and returns 200 if every check is
-// ok, else 503.
-//
-// Phase 1 ships the registry only — the DB and Elasticsearch checks
-// land in Phase 4 when those configs exist. New checks register via
-// `register(name, fn)`.
+/*
+ * Aggregated health snapshot. Each "check" is an async function that
+ * returns `{ ok: true }` or `{ ok: false, error: '...' }`. The endpoint
+ * in config/express.js calls report() and returns 200 if every check is
+ * ok, else 503.
+ * 
+ * Phase 1 ships the registry only — the DB and Elasticsearch checks
+ * land in Phase 4 when those configs exist. New checks register via
+ * `register(name, fn)`.
+ */
 
 const checks = new Map();
 

@@ -6,9 +6,11 @@ const { db_queue } = require('../../../config/db');
 const tables = require('../../../config/db_tables');
 // model is imported through workspace.js — no direct use in this file.
 
-// Tiny fake astools — returns scripted responses keyed by call name.
-// Two list endpoints (workspace / processed) match the curation-service
-// shape; default empty response uses the canonical `{result: []}` envelope.
+/*
+ * Tiny fake astools — returns scripted responses keyed by call name.
+ * Two list endpoints (workspace / processed) match the curation-service
+ * shape; default empty response uses the canonical `{result: []}` envelope.
+ */
 function make_astools(script = {}) {
     const calls = {
         list_workspace: [],
@@ -82,10 +84,12 @@ describe('ingester/workspace', () => {
     });
     beforeEach(async () => {
         await db_helper.reset_data();
-        // QA-passed state used to live in an in-process Set with a
-        // _reset_for_tests escape hatch. It now lives in
-        // tbl_ingest_jobs, so the reset is just the regular table
-        // truncate that db_helper.reset_data already performs.
+        /*
+         * QA-passed state used to live in an in-process Set with a
+         * _reset_for_tests escape hatch. It now lives in
+         * tbl_ingest_jobs, so the reset is just the regular table
+         * truncate that db_helper.reset_data already performs.
+         */
     });
     afterAll(async () => {
         await db_helper.teardown();
@@ -104,8 +108,10 @@ describe('ingester/workspace', () => {
                         : { status: 200, data: { result: ['pkg-x'], errors: [] } },
             });
             const data = await workspace.list_workspace({ scope: 'unprocessed', astools });
-            // Server pre-filters — every folder list_workspace returns
-            // is by definition unprocessed; we render all of them.
+            /*
+             * Server pre-filters — every folder list_workspace returns
+             * is by definition unprocessed; we render all of them.
+             */
             expect(data.folders.map((f) => f.name)).toEqual(['col-a', 'col-b']);
             expect(data.total_folders).toBe(2);
             expect(data.total_packages).toBe(3);
@@ -151,9 +157,11 @@ describe('ingester/workspace', () => {
                 },
                 list_packages: { status: 200, data: { result: ['p'], errors: [] } },
             });
-            // QA-passed state is now sourced from tbl_ingest_jobs.
-            // The simplest test stub is a `jobs` shim that returns
-            // a fixed Set — avoids having to seed the actual table.
+            /*
+             * QA-passed state is now sourced from tbl_ingest_jobs.
+             * The simplest test stub is a `jobs` shim that returns
+             * a fixed Set — avoids having to seed the actual table.
+             */
             const jobs = {
                 get_qa_passed_folders: async () => new Set(['col-a']),
             };
@@ -211,9 +219,11 @@ describe('ingester/workspace', () => {
                 astools,
                 jobs,
             });
-            // Soft-fail: folder still shown. Better UX than a hard
-            // error page; the operator just sees the folder until
-            // the DB recovers.
+            /*
+             * Soft-fail: folder still shown. Better UX than a hard
+             * error page; the operator just sees the folder until
+             * the DB recovers.
+             */
             expect(data.folders.map((f) => f.name)).toEqual(['col-a']);
         });
 
@@ -243,8 +253,10 @@ describe('ingester/workspace', () => {
         });
 
         it('also tolerates legacy { folders: [...] } and bare-array shapes', async () => {
-            // Mocks + older staging builds returned these shapes; keep
-            // them working so we don't have to revise every test mock.
+            /*
+             * Mocks + older staging builds returned these shapes; keep
+             * them working so we don't have to revise every test mock.
+             */
             const astools_a = make_astools({
                 list_workspace: { status: 200, data: { folders: ['legacy-a'] } },
                 list_packages: { status: 200, data: { result: [], errors: [] } },
@@ -285,13 +297,15 @@ describe('ingester/workspace', () => {
     });
 
     describe('revert_to_mdo', () => {
-        // QA-passed state is no longer a per-process marker; it's
-        // derived from tbl_ingest_jobs. Revert doesn't (and doesn't
-        // need to) explicitly clear it because (a) revert removes
-        // uri.txt and the folder drops from /processed; (b) any
-        // future activity for that folder records a newer job that
-        // supersedes the SUCCESSFUL QA marker via
-        // jobs.get_qa_passed_folders' "latest job per folder" rule.
+        /*
+         * QA-passed state is no longer a per-process marker; it's
+         * derived from tbl_ingest_jobs. Revert doesn't (and doesn't
+         * need to) explicitly clear it because (a) revert removes
+         * uri.txt and the folder drops from /processed; (b) any
+         * future activity for that folder records a newer job that
+         * supersedes the SUCCESSFUL QA marker via
+         * jobs.get_qa_passed_folders' "latest job per folder" rule.
+         */
         it('returns ok=true on a 200 from astools.revert_to_mdo', async () => {
             const astools = make_astools({
                 revert_to_mdo: { status: 200, data: { result: { removed: ['p1'] } } },
@@ -373,10 +387,12 @@ describe('ingester/workspace', () => {
         });
 
         it('reads the canonical curation-service URI shape `{result:{uris:[..]}}`', async () => {
-            // The real curation-service wraps uri.txt content as
-            // `{result: {uris: ['/repositories/2/resources/1'], files: [...]}}`.
-            // Make sure we handle the canonical shape, not just the
-            // legacy bare-string fallback.
+            /*
+             * The real curation-service wraps uri.txt content as
+             * `{result: {uris: ['/repositories/2/resources/1'], files: [...]}}`.
+             * Make sure we handle the canonical shape, not just the
+             * legacy bare-string fallback.
+             */
             const astools = make_astools({
                 list_packages: { status: 200, data: { result: ['p1'], errors: [] } },
                 get_uri: {
@@ -420,20 +436,22 @@ describe('ingester/workspace', () => {
     });
 
     describe('submit_to_ingest', () => {
-        // Submit no longer explicitly clears the qa-passed marker.
-        // The controller records a `packaging_and_ingesting` job
-        // around the submit call, which (being more recent than the
-        // SUCCESSFUL QA row) wins jobs.get_qa_passed_folders' "latest
-        // job per folder" tie-break and removes the folder from the
-        // hidden set on the next list query.
-        //
-        // Pre-flight gate: every submit now requires the folder name
-        // to end in `-resources_<N>` (or `-archival_objects_<N>`) AND
-        // a local collection mirror to exist. The tests below inject
-        // a `repo_model` stub that says the collection is already
-        // present, so the gate fast-paths without hitting AS. The
-        // dedicated `gate` describe block below exercises the parse +
-        // fetch + create paths directly.
+        /*
+         * Submit no longer explicitly clears the qa-passed marker.
+         * The controller records a `packaging_and_ingesting` job
+         * around the submit call, which (being more recent than the
+         * SUCCESSFUL QA row) wins jobs.get_qa_passed_folders' "latest
+         * job per folder" tie-break and removes the folder from the
+         * hidden set on the next list query.
+         * 
+         * Pre-flight gate: every submit now requires the folder name
+         * to end in `-resources_<N>` (or `-archival_objects_<N>`) AND
+         * a local collection mirror to exist. The tests below inject
+         * a `repo_model` stub that says the collection is already
+         * present, so the gate fast-paths without hitting AS. The
+         * dedicated `gate` describe block below exercises the parse +
+         * fetch + create paths directly.
+         */
         const FOLDER = 'col-a-resources_1';
         const COLLECTION_URI = '/repositories/2/resources/1';
         function gated_repo() {
@@ -470,30 +488,38 @@ describe('ingester/workspace', () => {
             expect(rows[0].package).toBe('p1');
             expect(rows[0].metadata_uri).toBe('/repositories/2/resources/p1');
             expect(rows[1].package).toBe('p2');
-            // The queue row's collection_uuid carries the local
-            // collection's PID (resolved by the pre-flight gate),
-            // NOT the staff-facing folder name. The folder name still
-            // lives in `batch` for traceability + Stage 3's SFTP
-            // path. This is the contract task #119 enforced.
+            /*
+             * The queue row's collection_uuid carries the local
+             * collection's PID (resolved by the pre-flight gate),
+             * NOT the staff-facing folder name. The folder name still
+             * lives in `batch` for traceability + Stage 3's SFTP
+             * path. This is the contract task #119 enforced.
+             */
             for (const row of rows) {
                 expect(row.collection_uuid).toBe('pre-existing-collection-pid');
                 expect(row.batch).toBe(FOLDER);
             }
-            // Regression guard for task #128: the SFTP folder
-            // namespace IS row.collection_uuid (matches v1 — one
-            // SFTP folder per collection, shared across packages).
-            // collection_uuid is minted by the pre-flight gate ONCE
-            // when a new collection is created, then reused for
-            // existing collections — sibling packages in the same
-            // submit land in the same SFTP folder.
+            /*
+             * Regression guard for task #128: the SFTP folder
+             * namespace IS row.collection_uuid (matches v1 — one
+             * SFTP folder per collection, shared across packages).
+             * collection_uuid is minted by the pre-flight gate ONCE
+             * when a new collection is created, then reused for
+             * existing collections — sibling packages in the same
+             * submit land in the same SFTP folder.
+             */
             const collection_uuids = rows.map((r) => r.collection_uuid);
             for (const u of collection_uuids) {
-                // Stable value from the gate (the fake repo-model
-                // returns 'pre-existing-collection-pid' here).
+                /*
+                 * Stable value from the gate (the fake repo-model
+                 * returns 'pre-existing-collection-pid' here).
+                 */
                 expect(u).toBe('pre-existing-collection-pid');
             }
-            // All sibling packages share the same collection_uuid —
-            // they all land in the same SFTP folder downstream.
+            /*
+             * All sibling packages share the same collection_uuid —
+             * they all land in the same SFTP folder downstream.
+             */
             expect(collection_uuids[0]).toBe(collection_uuids[1]);
         });
 
@@ -519,17 +545,21 @@ describe('ingester/workspace', () => {
     });
 
     describe('submit_to_ingest pre-flight gate', () => {
-        // Direct coverage of _ensure_collection_exists (via the
-        // public submit_to_ingest entry point). The "fast path" case
-        // — collection already exists — is implicit in the previous
-        // describe block; here we exercise the parse failure, the
-        // AS-fetch failure, and the auto-create success paths.
+        /*
+         * Direct coverage of _ensure_collection_exists (via the
+         * public submit_to_ingest entry point). The "fast path" case
+         * — collection already exists — is implicit in the previous
+         * describe block; here we exercise the parse failure, the
+         * AS-fetch failure, and the auto-create success paths.
+         */
 
         function make_ok_astools() {
-            // ASTools doesn't matter for these — the gate fails (or
-            // creates) before we touch the package listing. Stub
-            // minimally so submit_to_ingest doesn't NPE if the gate
-            // happens to fall through.
+            /*
+             * ASTools doesn't matter for these — the gate fails (or
+             * creates) before we touch the package listing. Stub
+             * minimally so submit_to_ingest doesn't NPE if the gate
+             * happens to fall through.
+             */
             return make_astools({
                 list_packages: { status: 200, data: { packages: [{ name: 'p1' }] } },
                 get_uri: { status: 200, data: '/repositories/2/resources/1' },
@@ -624,10 +654,12 @@ describe('ingester/workspace', () => {
             expect(create_called_with).toBeTruthy();
             expect(create_called_with.uri).toBe('/repositories/2/resources/1');
             expect(create_called_with.mods.title).toBe('Glenn Miller Collection');
-            // The queue row's collection_uuid is the just-created
-            // collection's pid — NOT the folder name. Direct
-            // regression guard for the bug the user reported in
-            // task #119.
+            /*
+             * The queue row's collection_uuid is the just-created
+             * collection's pid — NOT the folder name. Direct
+             * regression guard for the bug the user reported in
+             * task #119.
+             */
             const rows = await db_queue()(tables.ingest_queue).orderBy('id', 'asc');
             expect(rows).toHaveLength(1);
             expect(rows[0].collection_uuid).toBe('newly-minted-pid');
@@ -650,13 +682,15 @@ describe('ingester/workspace', () => {
         });
 
         describe('handle minting on auto-create', () => {
-            // The pre-flight gate generates a PID up front, mints a
-            // handle against THAT pid, then passes both to
-            // create_collection so the inserted row's handle and pid
-            // are linked. Handle minting is best-effort — a failed
-            // mint must NOT block collection creation. These tests
-            // exercise both the happy path and the three failure
-            // modes (not configured, non-201 status, transport throw).
+            /*
+             * The pre-flight gate generates a PID up front, mints a
+             * handle against THAT pid, then passes both to
+             * create_collection so the inserted row's handle and pid
+             * are linked. Handle minting is best-effort — a failed
+             * mint must NOT block collection creation. These tests
+             * exercise both the happy path and the three failure
+             * modes (not configured, non-201 status, transport throw).
+             */
 
             function make_aspace_ok() {
                 return {
@@ -697,8 +731,10 @@ describe('ingester/workspace', () => {
                     handles,
                 });
                 expect(r.ok).toBe(true);
-                // The PID passed to create_handle is the SAME PID
-                // ultimately stored on the row.
+                /*
+                 * The PID passed to create_handle is the SAME PID
+                 * ultimately stored on the row.
+                 */
                 expect(mint_called_with_pid).toBeTruthy();
                 expect(create_called_with.pid).toBe(mint_called_with_pid);
                 // The handle URL is what got minted.
@@ -759,8 +795,10 @@ describe('ingester/workspace', () => {
                 const handles = {
                     is_configured: () => true,
                     create_handle: async () => {
-                        // libs/handles.create_handle throws UpstreamError
-                        // on transport failure.
+                        /*
+                         * libs/handles.create_handle throws UpstreamError
+                         * on transport failure.
+                         */
                         throw new Error('handle service unreachable');
                     },
                 };
@@ -778,16 +816,20 @@ describe('ingester/workspace', () => {
                     repo_model,
                     handles,
                 });
-                // Collection still created — minting failure does NOT
-                // halt the gate.
+                /*
+                 * Collection still created — minting failure does NOT
+                 * halt the gate.
+                 */
                 expect(r.ok).toBe(true);
                 expect(stored_handle).toBe('');
             });
 
             it('skips minting entirely on the fast path (collection already exists)', async () => {
-                // The collection mirror is already there — no AS
-                // fetch, no handle mint. Confirms minting is gated
-                // on the auto-create branch only.
+                /*
+                 * The collection mirror is already there — no AS
+                 * fetch, no handle mint. Confirms minting is gated
+                 * on the auto-create branch only.
+                 */
                 let mint_called = false;
                 const handles = {
                     is_configured: () => true,

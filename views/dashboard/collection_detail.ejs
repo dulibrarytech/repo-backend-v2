@@ -7,7 +7,17 @@
     <a href="<%= dashboard_base %>/collections" style="color: inherit;">← All collections</a>
 </nav>
 
-<h1 class="page-title"><%= collection.title || '(untitled collection)' %></h1>
+<div class="d-flex justify-content-between align-items-start" style="gap: 12px;">
+    <h1 class="page-title" style="margin: 0;"><%= collection.title || '(untitled collection)' %></h1>
+    <%/* Create a sub-collection nested under this one (bound to its own ASpace
+         resource). Gated on edit_object. */%>
+    <% if (typeof can === 'function' && can('edit_object')) { %>
+        <a href="<%= dashboard_base %>/collections/new?parent=<%= collection.pid %>"
+           class="btn btn-sm btn-outline-primary text-nowrap">
+            + Create sub-collection
+        </a>
+    <% } %>
+</div>
 <p class="page-subtitle">
     <%= collection.member_count.toLocaleString() %> objects
     · <%= collection.published_count.toLocaleString() %> published
@@ -104,10 +114,47 @@
     </div>
 </div>
 
+<%/* Nested sub-collections (dashboard-only nesting). Rendered in their own
+     card, separate from member objects, so the two never blur together.
+     Reuses the collections list row so the kebab actions + styling match the
+     main collections view. Only shown when this collection has children. */%>
+<% if (typeof sub_collections !== 'undefined' && sub_collections.length) { %>
+    <div class="content-card mb-3">
+        <div class="content-card-header">
+            <h2 style="font-size: 18px; margin: 0;">Sub-collections</h2>
+        </div>
+        <table class="queue-table">
+            <thead>
+                <tr>
+                    <th class="thumb-cell" aria-label="Thumbnail"><span class="visually-hidden">Thumbnail</span></th>
+                    <th>Title</th>
+                    <th>Objects</th>
+                    <th>Status</th>
+                    <th class="actions-cell">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% sub_collections.forEach(function(sc) { %>
+                    <%- include('partials/collection_row', { item: sc, dashboard_base: dashboard_base, allow_delete: true }) %>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+<% } %>
+
 <div class="content-card">
     <div class="content-card-header">
         <h2 style="font-size: 18px; margin: 0;">Member objects</h2>
         <div class="control-group">
+            <%/* Move existing objects into this collection (single-membership
+                 reassign). Filled button to set the additive action apart from
+                 the outline bulk buttons. Gated on edit_object. */%>
+            <% if (typeof can === 'function' && can('edit_object')) { %>
+                <a class="btn btn-sm btn-primary text-nowrap"
+                   href="<%= dashboard_base %>/collections/<%= collection.pid %>/add-objects">
+                    + Add objects
+                </a>
+            <% } %>
             <%/* Scope-based bulk: one UPDATE that flips every active
                  non-collection member of this collection. Fires on the
                  #objects-table region via HX-Trigger objects:refresh. */%>
@@ -150,6 +197,7 @@
                  flags from publish/suppress already trigger reindex
                  on the next worker tick. */%>
             <input type="search" name="q" class="form-control"
+                   aria-label="Search within this collection"
                    placeholder="Search within this collection…"
                    value="<%= filters.q || '' %>"
                    autocomplete="off"
@@ -157,13 +205,13 @@
                    hx-get="<%= dashboard_base %>/objects/list"
                    hx-target="#objects-table"
                    hx-trigger="keyup changed delay:300ms, search"
-                   hx-include="[name=is_published], [name=collection], [name=is_active]">
+                   hx-include="[name=is_published], [name=collection], [name=is_active], [name=exclude_collections]">
 
             <select name="is_published" class="form-select"
                     hx-get="<%= dashboard_base %>/objects/list"
                     hx-target="#objects-table"
                     hx-trigger="change"
-                    hx-include="[name=q], [name=collection], [name=is_active]">
+                    hx-include="[name=q], [name=collection], [name=is_active], [name=exclude_collections]">
                 <option value="" <%= filters.is_published === '' ? 'selected' : '' %>>All states</option>
                 <option value="1" <%= filters.is_published === '1' ? 'selected' : '' %>>Published</option>
                 <option value="0" <%= filters.is_published === '0' ? 'selected' : '' %>>Unpublished</option>
@@ -174,6 +222,9 @@
                  so soft-deleted members never appear in the table. */%>
             <input type="hidden" name="collection" value="<%= collection.pid %>">
             <input type="hidden" name="is_active" value="1">
+            <%/* Keep nested sub-collections out of the member-object list —
+                 they have their own section above. */%>
+            <input type="hidden" name="exclude_collections" value="1">
 
             <span class="htmx-indicator">
                 <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
@@ -184,7 +235,7 @@
     <%/* aria-live="polite" announces filter/search updates to SR
          users without interrupting whatever they're doing. */%>
     <div id="objects-table"
-         hx-get="<%= dashboard_base %>/objects/list?collection=<%= collection.pid %>&is_active=1"
+         hx-get="<%= dashboard_base %>/objects/list?collection=<%= collection.pid %>&is_active=1&exclude_collections=1"
          hx-trigger="load, objects:refresh from:body"
          hx-swap="innerHTML"
          aria-live="polite"

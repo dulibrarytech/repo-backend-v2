@@ -1,27 +1,29 @@
 'use strict';
 
-// Kaltura REST surface. Mounts under `${cfg.path}/api/v1/kaltura/*`
-// (see kaltura/routes.js for the mount points).
-//
-// Endpoints + responsibilities:
-//
-//   POST /session            → mint a Kaltura admin session, return the KS
-//   POST /metadata           → enqueue packages, drain queue, return per-file
-//                              { entry_id, status, message } triples
-//   GET  /queue              → list pending queue rows
-//   GET  /queue/entry_ids    → list resolved entry IDs (the IDs table)
-//   POST /queue/clear        → hard-reset both Kaltura queue tables
-//   POST /export             → legacy export-data flow (drains tbl_exports
-//                              row-by-row; admin scripts only — new callers
-//                              should use the /metadata flow)
-//
-// Auth: every endpoint requires a valid JWT (require_auth, applied at
-// the route layer). The controller itself doesn't re-check.
-//
-// All handlers throw typed errors (ValidationError, UpstreamError) so
-// the central error handler in config/express.js maps them to HTTP
-// responses. Inline try/catch is reserved for the few places we need
-// to convert SDK exceptions into UpstreamError; the rest bubble up.
+/*
+ * Kaltura REST surface. Mounts under `${cfg.path}/api/v1/kaltura/*`
+ * (see kaltura/routes.js for the mount points).
+ * 
+ * Endpoints + responsibilities:
+ * 
+ *   POST /session            → mint a Kaltura admin session, return the KS
+ *   POST /metadata           → enqueue packages, drain queue, return per-file
+ *                              { entry_id, status, message } triples
+ *   GET  /queue              → list pending queue rows
+ *   GET  /queue/entry_ids    → list resolved entry IDs (the IDs table)
+ *   POST /queue/clear        → hard-reset both Kaltura queue tables
+ *   POST /export             → legacy export-data flow (drains tbl_exports
+ *                              row-by-row; admin scripts only — new callers
+ *                              should use the /metadata flow)
+ * 
+ * Auth: every endpoint requires a valid JWT (require_auth, applied at
+ * the route layer). The controller itself doesn't re-check.
+ * 
+ * All handlers throw typed errors (ValidationError, UpstreamError) so
+ * the central error handler in config/express.js maps them to HTTP
+ * responses. Inline try/catch is reserved for the few places we need
+ * to convert SDK exceptions into UpstreamError; the rest bubble up.
+ */
 
 const service = require('./service');
 const model = require('./model');
@@ -29,15 +31,19 @@ const config = require('./config');
 const log = require('../libs/log');
 const { ValidationError, ServiceUnavailableError } = require('../libs/errors');
 
-// Defensive cap on the batch processing loop. The legacy controller
-// also caps at 1000 — same number here so existing batches keep
-// working. A misconfigured client can't pin the worker forever.
+/*
+ * Defensive cap on the batch processing loop. The legacy controller
+ * also caps at 1000 — same number here so existing batches keep
+ * working. A misconfigured client can't pin the worker forever.
+ */
 const MAX_PACKAGES_PER_REQUEST = 1000;
 
-// Backoff between Kaltura calls — Kaltura rate-limits aggressively
-// when hammered. The legacy controller used 500ms between packages
-// and 250ms between files; we match those values exactly so the v2
-// flow has the same upstream footprint as v1.
+/*
+ * Backoff between Kaltura calls — Kaltura rate-limits aggressively
+ * when hammered. The legacy controller used 500ms between packages
+ * and 250ms between files; we match those values exactly so the v2
+ * flow has the same upstream footprint as v1.
+ */
 const PACKAGE_DELAY_MS = 500;
 const FILE_DELAY_MS = 250;
 
@@ -57,31 +63,33 @@ async function get_session(_req, res) {
     res.status(200).json({ error: false, ks });
 }
 
-// --- POST /api/v1/kaltura/metadata ------------------------------------
-//
-// Body shape:
-//   {
-//     packages: [
-//       { package: 'object-name', files: ['file-A.mp4', 'file-B.mp4', ...] },
-//       ...
-//     ]
-//   }
-//
-// Returns:
-//   {
-//     error: false,
-//     status: 200,
-//     message: 'Entry ID processing complete.',
-//     results: [
-//       { package, file, entry_id, status, message },
-//       ...
-//     ]
-//   }
-//
-// The handler enqueues the packages first, then drains the queue in
-// the same request. That mirrors the legacy controller's contract; a
-// future enhancement could make the drain async (return 202 + a job
-// id) but keeping it synchronous preserves caller behavior.
+/*
+ * --- POST /api/v1/kaltura/metadata ------------------------------------
+ * 
+ * Body shape:
+ *   {
+ *     packages: [
+ *       { package: 'object-name', files: ['file-A.mp4', 'file-B.mp4', ...] },
+ *       ...
+ *     ]
+ *   }
+ * 
+ * Returns:
+ *   {
+ *     error: false,
+ *     status: 200,
+ *     message: 'Entry ID processing complete.',
+ *     results: [
+ *       { package, file, entry_id, status, message },
+ *       ...
+ *     ]
+ *   }
+ * 
+ * The handler enqueues the packages first, then drains the queue in
+ * the same request. That mirrors the legacy controller's contract; a
+ * future enhancement could make the drain async (return 202 + a job
+ * id) but keeping it synchronous preserves caller behavior.
+ */
 async function post_metadata(req, res) {
     if (!config.is_configured()) {
         throw new ServiceUnavailableError('Kaltura is not configured');
@@ -90,21 +98,27 @@ async function post_metadata(req, res) {
         typeof req.query.session === 'string' ? req.query.session.trim() : '';
     _validate_metadata_body(req.body);
 
-    // Mint a session if the caller didn't supply one. The legacy
-    // controller required the caller to mint + pass the KS as a query
-    // param; v2 keeps that path working but also auto-mints so single-
-    // shot scripts don't have to.
+    /*
+     * Mint a session if the caller didn't supply one. The legacy
+     * controller required the caller to mint + pass the KS as a query
+     * param; v2 keeps that path working but also auto-mints so single-
+     * shot scripts don't have to.
+     */
     let ks = session_from_query;
     if (!ks) {
         ks = await service.start_session();
     }
 
-    // Stage 1 — enqueue. JSON-stringify files at insert time so the
-    // LONGTEXT column round-trips cleanly.
+    /*
+     * Stage 1 — enqueue. JSON-stringify files at insert time so the
+     * LONGTEXT column round-trips cleanly.
+     */
     await model.queue_packages(req.body.packages);
 
-    // Stage 2 — drain. Bounded loop with the same per-package /
-    // per-file backoff as the legacy controller.
+    /*
+     * Stage 2 — drain. Bounded loop with the same per-package /
+     * per-file backoff as the legacy controller.
+     */
     const results = await _drain_queue(ks);
 
     res.status(200).json({
@@ -140,8 +154,10 @@ function _validate_metadata_body(body) {
     }
 }
 
-// Drain unprocessed packages from the queue. Returns a flat array of
-// `{package, file, entry_id, status, message}` results for the caller.
+/*
+ * Drain unprocessed packages from the queue. Returns a flat array of
+ * `{package, file, entry_id, status, message}` results for the caller.
+ */
 async function _drain_queue(ks) {
     const all_results = [];
     let processed = 0;
@@ -158,10 +174,12 @@ async function _drain_queue(ks) {
     return all_results;
 }
 
-// Process a single queue row: parse its files array, look each one up,
-// persist the entry IDs, mark the row processed. The row is flipped
-// to is_processed=1 BEFORE the per-file loop so a mid-loop crash
-// doesn't leave us re-processing the same files on retry.
+/*
+ * Process a single queue row: parse its files array, look each one up,
+ * persist the entry IDs, mark the row processed. The row is flipped
+ * to is_processed=1 BEFORE the per-file loop so a mid-loop crash
+ * doesn't leave us re-processing the same files on retry.
+ */
 async function _process_package(pkg, ks, deps = {}) {
     let files;
     try {
@@ -197,25 +215,29 @@ async function _process_package(pkg, ks, deps = {}) {
     return results;
 }
 
-// Look up a single filename in Kaltura. Strategy:
-//   1. Search by the full filename.
-//   2. If no match, search by the basename (strip the last extension —
-//      legacy code only handled `.mp4` via a 4-char trim; we use a
-//      proper lastIndexOf so .mov/.wav/.m4v all lose their extension).
-//   3. If still no match, record a status=0 placeholder.
-//
-// Returns the array of result rows for this file (status=1 → exactly
-// one entry id; status=2 → multiple ids as a JSON array; status=0 →
-// not found).
-//
-// `deps.service` is the kaltura service module (defaults to the real
-// import). Tests inject a stub so the SDK never runs.
+/*
+ * Look up a single filename in Kaltura. Strategy:
+ *   1. Search by the full filename.
+ *   2. If no match, search by the basename (strip the last extension —
+ *      legacy code only handled `.mp4` via a 4-char trim; we use a
+ *      proper lastIndexOf so .mov/.wav/.m4v all lose their extension).
+ *   3. If still no match, record a status=0 placeholder.
+ * 
+ * Returns the array of result rows for this file (status=1 → exactly
+ * one entry id; status=2 → multiple ids as a JSON array; status=0 →
+ * not found).
+ * 
+ * `deps.service` is the kaltura service module (defaults to the real
+ * import). Tests inject a stub so the SDK never runs.
+ */
 async function _resolve_file(file, package_name, ks, deps = {}) {
     const svc = deps.service || service;
     if (typeof file !== 'string' || file.length === 0) {
-        // Empty / non-string filenames render as 'unknown' so the
-        // staff-facing table doesn't have blank rows. Mirrors the
-        // legacy controller's `file || 'unknown'` shortcut.
+        /*
+         * Empty / non-string filenames render as 'unknown' so the
+         * staff-facing table doesn't have blank rows. Mirrors the
+         * legacy controller's `file || 'unknown'` shortcut.
+         */
         return [
             {
                 package: package_name,
@@ -276,11 +298,13 @@ function _basename(file) {
     return file.slice(0, dot);
 }
 
-// Turn an SDK eSearch response into one or more result rows. The two
-// status codes that surface from a successful upstream call:
-//   status=1 — exactly one entry id (the happy path)
-//   status=2 — multiple entry ids; entry_id is the JSON array string
-//             so staff can split + verify each one
+/*
+ * Turn an SDK eSearch response into one or more result rows. The two
+ * status codes that surface from a successful upstream call:
+ *   status=1 — exactly one entry id (the happy path)
+ *   status=2 — multiple entry ids; entry_id is the JSON array string
+ *             so staff can split + verify each one
+ */
 function _extract_entry_ids(response, file, package_name) {
     const objects = Array.isArray(response.objects) ? response.objects : [];
     const total = response.totalCount || 0;
@@ -339,8 +363,10 @@ module.exports = {
     get_queue,
     get_entry_ids,
     clear_queue,
-    // Internals exposed for tests so unit tests don't need to mock
-    // the full HTTP layer to exercise the per-file resolution rules.
+    /*
+     * Internals exposed for tests so unit tests don't need to mock
+     * the full HTTP layer to exercise the per-file resolution rules.
+     */
     _resolve_file,
     _extract_entry_ids,
     _basename,

@@ -1,0 +1,282 @@
+<%/* Digital Preservation Jobs — Workflow Guide (static help).
+     Rendered by ingester/dashboard.js help_page(). Read-only, CSP-safe:
+     in-page anchors are native, the flow diagram is plain HTML, and the
+     "Behind the scenes" technical blocks use native <details> (no JS).
+     This view is the user-facing source of truth for DPJ help — keep it in
+     step with the workflow (see docs/INGEST_HELP_DESIGN.md). */%>
+
+<nav class="small text-muted mb-2" aria-label="Breadcrumb">
+    <a href="<%= dashboard_base %>/ingest" style="color: inherit;">← Ingest queue</a>
+</nav>
+
+<h1 class="page-title">Digital Preservation Jobs — Workflow Guide</h1>
+<p class="page-subtitle">
+    How a batch of files becomes a preserved, described, published repository object —
+    and what each step in this section does.
+</p>
+
+<%/* ---- Table of contents ---- */%>
+<div class="content-card mb-3">
+    <h2 style="font-size: 16px; margin: 0 0 8px;">On this page</h2>
+    <ul class="mb-0" style="columns: 2; column-gap: 32px; padding-left: 18px;">
+        <li><a href="#overview">At a glance</a></li>
+        <li><a href="#folders">Where a batch lives (folders)</a></li>
+        <li><a href="#make-digital-objects">1. Make Digital Objects</a></li>
+        <li><a href="#aspace-qa">2. ASpace Description QA</a></li>
+        <li><a href="#packaging-and-ingesting">3. Packaging and Ingesting</a></li>
+        <li><a href="#queue">4. Ingest Queue</a></li>
+        <li><a href="#history">Job History</a></li>
+        <li><a href="#recent-ingests">Recent Ingests</a></li>
+        <li><a href="#glossary">Glossary</a></li>
+    </ul>
+</div>
+
+<%/* ---- At a glance ---- */%>
+<div class="content-card mb-3">
+    <h2 id="overview" style="font-size: 18px; margin: 0 0 8px;">At a glance</h2>
+    <p>
+        The Digital Preservation Jobs workflow takes archival packages staged on disk,
+        registers each one in <strong>ArchivesSpace</strong>, quality-checks its
+        description, then runs it through <strong>Archivematica</strong> into the
+        repository and the long-term preservation tier. You drive the first three steps;
+        a background worker runs the pipeline and you watch it on the Queue.
+    </p>
+
+    <%/* Flow diagram — plain HTML chips + arrows, wraps on narrow screens. */%>
+    <div class="d-flex flex-wrap align-items-center" style="gap: 8px; margin: 12px 0;"
+         role="img" aria-label="Make Digital Objects, then ASpace Description QA, then Packaging and Ingesting, then the Ingest Queue's six stages, ending in a published object plus a preserved AIP.">
+        <span class="sev-badge sev-info">Make Digital Objects</span>
+        <span aria-hidden="true">→</span>
+        <span class="sev-badge sev-info">ASpace Description QA</span>
+        <span aria-hidden="true">→</span>
+        <span class="sev-badge sev-info">Packaging &amp; Ingesting</span>
+        <span aria-hidden="true">→</span>
+        <span class="sev-badge sev-info">Ingest Queue (6 stages)</span>
+        <span aria-hidden="true">→</span>
+        <span class="sev-badge sev-success">Published object + preserved AIP</span>
+    </div>
+
+    <p class="mb-0 text-muted small">
+        The cast: <strong>you</strong> (staff), <strong>ArchivesSpace</strong>
+        (description), <strong>Archivematica</strong> (preservation processing),
+        <strong>DuraCloud</strong> + <strong>Wasabi&nbsp;S3</strong> (storage), and the
+        <strong>repository</strong> (the object record, search, and public access).
+    </p>
+</div>
+
+<%/* ---- Folder lifecycle ---- */%>
+<div class="content-card mb-3">
+    <h2 id="folders" style="font-size: 18px; margin: 0 0 8px;">Where a batch lives (folders)</h2>
+    <p class="mb-2">
+        Behind the scenes, the curation service moves a batch through on-disk stages.
+        Knowing these names helps when you're tracking down "where is my batch":
+    </p>
+    <dl class="row mb-2 small">
+        <dt class="col-sm-3 text-muted">workspace</dt>
+        <dd class="col-sm-9">Newly staged batches, before Make Digital Objects.</dd>
+        <dt class="col-sm-3 text-muted">001-ready</dt>
+        <dd class="col-sm-9">Described + QA'd batches, ready to submit.</dd>
+        <dt class="col-sm-3 text-muted">002-ingest</dt>
+        <dd class="col-sm-9">Submitted — being pushed to Archivematica.</dd>
+        <dt class="col-sm-3 text-muted">003-ingested</dt>
+        <dd class="col-sm-9">Finished — archived after the object lands in the repository.</dd>
+    </dl>
+    <p class="mb-0 small text-muted">
+        Each package carries a <code>uri.txt</code> sidecar once it has an ArchivesSpace
+        digital-object URI (written by Make Digital Objects). A package <em>with</em>
+        <code>uri.txt</code> is <strong>processed</strong>; <em>without</em> it,
+        <strong>unprocessed</strong>.
+    </p>
+</div>
+
+<%/* ---- Step 1 ---- */%>
+<div class="content-card mb-3">
+    <div class="content-card-header">
+        <h2 id="make-digital-objects" style="font-size: 18px; margin: 0;">1. Make Digital Objects</h2>
+        <a class="btn btn-sm btn-link" href="<%= dashboard_base %>/ingest/workspace">Open this step →</a>
+    </div>
+    <dl class="mb-2">
+        <dt>What you do</dt>
+        <dd>Pick a batch that's still <strong>unprocessed</strong> (no <code>uri.txt</code>) and run Make Digital Objects.</dd>
+        <dt>What the system does</dt>
+        <dd>Logs into ArchivesSpace and creates a <strong>digital-object record</strong> for each package, then writes a <code>uri.txt</code> sidecar per package. The batch flips to <strong>processed</strong> once every package has its <code>uri.txt</code>.</dd>
+        <dt>Inputs &amp; outputs</dt>
+        <dd>A batch of source files in → a <code>uri.txt</code> (ArchivesSpace digital-object URI) per package.</dd>
+    </dl>
+    <details class="small text-muted">
+        <summary>Behind the scenes</summary>
+        <p class="mt-2 mb-0">
+            The dashboard calls the curation service
+            (<code>POST /api/v1/astools/make-digital-objects</code>), which runs the
+            <code>make_digital_object.py</code> ArchivesSnake CLI against ArchivesSpace.
+        </p>
+    </details>
+    <div class="mt-2">
+        <strong class="small">If something goes wrong</strong>
+        <ul class="small mb-0">
+            <li>A package left without a <code>uri.txt</code> stays unprocessed — re-run Make Digital Objects on the batch.</li>
+            <li>ArchivesSpace login or record-creation failures show in the run result and in <a href="#history">Job History</a>.</li>
+        </ul>
+    </div>
+</div>
+
+<%/* ---- Step 2 ---- */%>
+<div class="content-card mb-3">
+    <div class="content-card-header">
+        <h2 id="aspace-qa" style="font-size: 18px; margin: 0;">2. ASpace Description QA</h2>
+        <a class="btn btn-sm btn-link" href="<%= dashboard_base %>/ingest/aspace-qa">Open this step →</a>
+    </div>
+    <dl class="mb-2">
+        <dt>What you do</dt>
+        <dd>Select a <strong>processed</strong> batch and run the metadata check; review the description before packaging.</dd>
+        <dt>What the system does</dt>
+        <dd>Validates each package's <code>uri.txt</code> / ArchivesSpace record against the ingest spec — the URI resolves and the required fields are present — and marks the folder QA-passed.</dd>
+        <dt>Inputs &amp; outputs</dt>
+        <dd>Packages with <code>uri.txt</code> in → a QA result recorded against the batch.</dd>
+    </dl>
+    <details class="small text-muted">
+        <summary>Behind the scenes</summary>
+        <p class="mt-2 mb-0">
+            Uses the curation service's URI/validation helpers
+            (<code>/api/v1/astools/check-uri-txt</code> and workspace/URI lookups).
+        </p>
+    </details>
+    <div class="mt-2">
+        <strong class="small">If something goes wrong</strong>
+        <ul class="small mb-0">
+            <li>If QA flags a record, fix the description in ArchivesSpace, then re-check.</li>
+            <li>Don't package a batch that hasn't passed QA — packaging assumes the description is final.</li>
+        </ul>
+    </div>
+</div>
+
+<%/* ---- Step 3 ---- */%>
+<div class="content-card mb-3">
+    <div class="content-card-header">
+        <h2 id="packaging-and-ingesting" style="font-size: 18px; margin: 0;">3. Packaging and Ingesting</h2>
+        <a class="btn btn-sm btn-link" href="<%= dashboard_base %>/ingest/packaging">Open this step →</a>
+    </div>
+    <dl class="mb-2">
+        <dt>What you do</dt>
+        <dd>Submit a QA-passed batch to the pipeline.</dd>
+        <dt>What the system does</dt>
+        <dd>Finds or creates the batch's <strong>collection</strong> (minting a Handle if new), moves each package from <code>001-ready</code> to <code>002-ingest</code>, queues <strong>one row per package</strong>, then the worker pushes the staged files to Archivematica over SFTP and waits for the upload to finish.</dd>
+        <dt>Inputs &amp; outputs</dt>
+        <dd>Ready folders in → queue rows + files staged on Archivematica's SFTP drop. From here, watch progress on the <a href="#queue">Ingest Queue</a>.</dd>
+    </dl>
+    <details class="small text-muted">
+        <summary>Behind the scenes</summary>
+        <p class="mt-2 mb-0">
+            Curation calls, in order:
+            <code>/move-to-ingest</code> (001-ready → 002-ingest) →
+            <code>/move-to-sftp</code> (push to Archivematica) →
+            <code>/upload-status</code> (polled until the file count matches).
+        </p>
+    </details>
+    <div class="mt-2">
+        <strong class="small">If something goes wrong</strong>
+        <ul class="small mb-0">
+            <li>A submit that stalls can be sent back with <strong>Return to packaging</strong> from the Queue row's actions menu (⋮).</li>
+            <li>Large media (video/audio) uploads rely on the "LARGE KALTURA MEDIA" timeout overrides being present in the server's configuration — a missing override is the usual cause of a stalled large upload.</li>
+        </ul>
+    </div>
+</div>
+
+<%/* ---- Step 4 ---- */%>
+<div class="content-card mb-3">
+    <div class="content-card-header">
+        <h2 id="queue" style="font-size: 18px; margin: 0;">4. Ingest Queue</h2>
+        <a class="btn btn-sm btn-link" href="<%= dashboard_base %>/ingest">Open this step →</a>
+    </div>
+    <dl class="mb-2">
+        <dt>What you do</dt>
+        <dd>Monitor packages moving through the pipeline. Use a row's actions menu (⋮) to open its <strong>Timeline</strong>, <strong>Cancel</strong> an in-flight package, or <strong>roll back / retry</strong> one that has halted.</dd>
+        <dt>What the system does</dt>
+        <dd>Runs a six-stage state machine. Each stage is idempotent on resume; the worker waits on external systems within bounded time budgets and only advances when the upstream confirms.</dd>
+    </dl>
+
+    <ol class="small mb-2">
+        <li><strong>process_metadata</strong> — fetch ArchivesSpace metadata + transform it into the workspace snapshot.</li>
+        <li><strong>upload</strong> — SFTP push to the Archivematica drop.</li>
+        <li><strong>transfer</strong> — Archivematica starts + approves the transfer, then we poll it (only one package occupies the Archivematica stages at a time, by design).</li>
+        <li><strong>ingest</strong> — poll Archivematica's ingest, then wait for DuraCloud propagation.</li>
+        <li><strong>repository</strong> — create the object record, mint its Handle, clean up SFTP, and archive the batch to <code>003-ingested</code> (with a Wasabi staging copy).</li>
+        <li><strong>aip_store</strong> — copy the AIP into the Wasabi preservation tier (when AIP-store is enabled).</li>
+    </ol>
+
+    <details class="small text-muted">
+        <summary>Recovery actions (row ⋮ menu)</summary>
+        <ul class="mt-2 mb-0">
+            <li><strong>Timeline</strong> — every state change for the row, with timestamps + actor.</li>
+            <li><strong>Cancel</strong> — stop an in-flight package and roll its files back.</li>
+            <li><strong>Rollback (pre-upload)</strong> — undo before anything reached Archivematica.</li>
+            <li><strong>Rollback (Archivematica)</strong> — undo after the Archivematica stages.</li>
+            <li><strong>Reset</strong> / <strong>Return to packaging</strong> — clear a halted row to retry, or send the batch back to Packaging.</li>
+            <li><strong>Re-check AM &amp; retry</strong> — for an AIP that wasn't in Archivematica's Storage Service yet but showed up later.</li>
+        </ul>
+    </details>
+
+    <div class="mt-2">
+        <strong class="small">Common halts &amp; what to do</strong>
+        <ul class="small mb-0">
+            <li><strong>Transfer timeout on large media</strong> — usually a missing large-media timeout override in config; once corrected, reset/retry the row.</li>
+            <li><strong>"AIP not found in AM Storage Service"</strong> — the worker retries over a budget; if it still misses, use <strong>Re-check AM &amp; retry</strong> once Archivematica has registered it.</li>
+            <li><strong>Indexing/date errors</strong> — a record with a malformed date is dead-lettered and retried rather than blocking the queue.</li>
+        </ul>
+    </div>
+</div>
+
+<%/* ---- Job History ---- */%>
+<div class="content-card mb-3">
+    <div class="content-card-header">
+        <h2 id="history" style="font-size: 18px; margin: 0;">Job History</h2>
+        <a class="btn btn-sm btn-link" href="<%= dashboard_base %>/ingest/history">Open →</a>
+    </div>
+    <p class="mb-0">
+        A read-only log of completed Make Digital Objects, ASpace Description QA, and
+        Packaging runs — newest first, with who ran each and the outcome. Use it to
+        confirm a step finished or to see why one failed.
+    </p>
+</div>
+
+<%/* ---- Recent Ingests ---- */%>
+<div class="content-card mb-3">
+    <div class="content-card-header">
+        <h2 id="recent-ingests" style="font-size: 18px; margin: 0;">Recent Ingests</h2>
+        <a class="btn btn-sm btn-link" href="<%= dashboard_base %>/ingest/recent">Open →</a>
+    </div>
+    <p class="mb-0">
+        Objects that reached the repository in the last 30 days. Review metadata,
+        publish, or suppress each one directly from its actions menu (⋮) — handy for a
+        final check right after ingest.
+    </p>
+</div>
+
+<%/* ---- Glossary ---- */%>
+<div class="content-card">
+    <h2 id="glossary" style="font-size: 18px; margin: 0 0 8px;">Glossary</h2>
+    <dl class="row mb-0 small">
+        <dt class="col-sm-3">ArchivesSpace (AS)</dt>
+        <dd class="col-sm-9">The descriptive metadata system. Resources + archival objects describe what a package <em>is</em>.</dd>
+        <dt class="col-sm-3">Archivematica (AM)</dt>
+        <dd class="col-sm-9">The preservation-processing system that turns a submission into a standards-based archival package.</dd>
+        <dt class="col-sm-3">SIP</dt>
+        <dd class="col-sm-9">Submission Information Package — what Archivematica ingests.</dd>
+        <dt class="col-sm-3">AIP</dt>
+        <dd class="col-sm-9">Archival Information Package — the preserved output stored long-term.</dd>
+        <dt class="col-sm-3">DuraCloud</dt>
+        <dd class="col-sm-9">Archivematica's storage layer the worker waits on during ingest.</dd>
+        <dt class="col-sm-3">Wasabi&nbsp;S3</dt>
+        <dd class="col-sm-9">The S3 preservation tier where AIPs are copied for long-term storage.</dd>
+        <dt class="col-sm-3">Handle / PID</dt>
+        <dd class="col-sm-9">The persistent identifier minted for each object (the <code>hdl.handle.net</code> link) / its internal id.</dd>
+        <dt class="col-sm-3"><code>uri.txt</code></dt>
+        <dd class="col-sm-9">A sidecar file linking a package to its ArchivesSpace digital-object URI.</dd>
+        <dt class="col-sm-3">Collection</dt>
+        <dd class="col-sm-9">A repository record bound to an ArchivesSpace resource; objects belong to one.</dd>
+        <dt class="col-sm-3">Elasticsearch</dt>
+        <dd class="col-sm-9">The search index that powers staff search and public discovery.</dd>
+        <dt class="col-sm-3">Kaltura</dt>
+        <dd class="col-sm-9">The streaming platform for audio/video derivatives.</dd>
+    </dl>
+</div>

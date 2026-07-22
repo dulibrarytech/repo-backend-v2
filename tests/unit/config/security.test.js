@@ -3,9 +3,11 @@
 const app_config = require('../../../config/app');
 const security = require('../../../config/security');
 
-// async + `return await fn()` is load-bearing: without it the finally
-// runs synchronously after fn returns its Promise, restoring env BEFORE
-// awaits inside fn resolve. Silent false passes result.
+/*
+ * async + `return await fn()` is load-bearing: without it the finally
+ * runs synchronously after fn returns its Promise, restoring env BEFORE
+ * awaits inside fn resolve. Silent false passes result.
+ */
 async function with_env(overrides, fn) {
     const saved = {};
     for (const k of Object.keys(overrides)) {
@@ -36,11 +38,18 @@ describe('config/security', () => {
     afterEach(() => app_config._reset());
 
     describe('helmet_options', () => {
-        it('enables CSP with self + jsdelivr CDN', () => {
+        it('enables CSP, self-hosted assets only (no third-party CDN)', () => {
             const csp = security.helmet_options().contentSecurityPolicy;
             expect(csp).toBeTruthy();
             expect(csp.directives['default-src']).toEqual(["'self'"]);
-            expect(csp.directives['script-src']).toContain('https://cdn.jsdelivr.net');
+            /*
+             * Bootstrap + HTMX are vendored under /static/assets/vendor, so no
+             * CDN origin is allowed for scripts/styles/fonts.
+             */
+            expect(csp.directives['script-src']).toEqual(["'self'"]);
+            expect(csp.directives['style-src']).toEqual(["'self'", "'unsafe-inline'"]);
+            expect(csp.directives['font-src']).toEqual(["'self'"]);
+            expect(JSON.stringify(csp.directives)).not.toContain('jsdelivr');
             expect(csp.directives['object-src']).toEqual(["'none'"]);
         });
 
@@ -52,9 +61,9 @@ describe('config/security', () => {
             expect(security.helmet_options().hsts.maxAge).toBe(31536000);
         });
 
-        it('connect-src allows jsDelivr so DevTools sourcemap fetches do not CSP-error', () => {
+        it("connect-src is 'self'-only (vendored sourcemaps load same-origin)", () => {
             const directives = security.helmet_options().contentSecurityPolicy.directives;
-            expect(directives['connect-src']).toEqual(["'self'", 'https://cdn.jsdelivr.net']);
+            expect(directives['connect-src']).toEqual(["'self'"]);
         });
 
         it("form-action defaults to 'self' when SSO_LOGOUT_URL is unset", async () => {

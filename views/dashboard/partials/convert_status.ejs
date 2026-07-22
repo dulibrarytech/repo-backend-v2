@@ -1,0 +1,165 @@
+<%/* Convert status panel. Polled every 3s by the admin page; also
+     returned after Start. Locals: s = model.status_summary() output:
+       configured, enabled, delay_ms, max_attempts
+       latest  { id, scope_type, scope_label, actor, created_at, counts }
+       current { object_name, attempts } | null
+       pending_total
+       history [ { id, scope_type, scope_label, total, complete, failed,
+                   status, actor, created_at } ] */%>
+<%
+    function fmt_when(ts) {
+        if (!ts) return '—';
+        try { return new Date(ts).toLocaleString(); } catch (e) { return String(ts); }
+    }
+%>
+<div class="p-3">
+
+    <% if (!s.enabled) { %>
+        <div class="content-card sev-warn mb-3">
+            <div class="p-3 text-body">
+                <strong>Convert worker is disabled</strong>
+                (<code>CONVERT_WORKER_ENABLED=false</code>). Queued rows won't drain until it's re-enabled.
+            </div>
+        </div>
+    <% } else if (!s.configured) { %>
+        <div class="content-card sev-warn mb-3">
+            <div class="p-3 text-body">
+                <strong>Convert service is not configured.</strong>
+                Set <code>CONVERT_SERVICE</code> and <code>CONVERT_SERVICE_API_KEY</code>
+                in the environment, then restart. You can still preview scopes, but Start won't process.
+            </div>
+        </div>
+    <% } %>
+
+    <% if (s.latest && s.latest.counts) { var c = s.latest.counts; var active = (c.pending + c.in_progress) > 0; %>
+        <div class="content-card <%= active ? 'sev-info' : '' %> mb-3">
+            <div class="content-card-header">
+                <h3 style="font-size: 16px; margin: 0;">
+                    Latest batch
+                    <span class="text-muted small">
+                        #<%= s.latest.id %> ·
+                        <%= s.latest.scope_type === 'object' ? 'single object' : 'collection' %>
+                        <% if (s.latest.scope_label) { %>
+                            <code><%= String(s.latest.scope_label).slice(0, 8) %>…</code>
+                        <% } %>
+                    </span>
+                </h3>
+                <span class="control-group">
+                    <% if (active) { %>
+                        <span class="spinner-border spinner-border-sm text-primary"
+                              role="status" aria-label="working"
+                              style="width: 14px; height: 14px;"></span>
+                        <span class="sev-badge sev-info">running</span>
+                    <% } else if (c.failed > 0) { %>
+                        <span class="sev-badge sev-warn">done · <%= c.failed %> failed</span>
+                    <% } else { %>
+                        <span class="sev-badge sev-success">done</span>
+                    <% } %>
+                </span>
+            </div>
+
+            <div class="row g-3 p-3 text-body">
+                <div class="col-6 col-md-3">
+                    <div class="text-muted small">Total</div>
+                    <div style="font-size: 22px; font-weight: 600;"><%= c.total.toLocaleString() %></div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="text-muted small">Converted</div>
+                    <div style="font-size: 22px; font-weight: 600; color: var(--success);"><%= c.complete.toLocaleString() %></div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="text-muted small">Pending</div>
+                    <div style="font-size: 22px; font-weight: 600;"><%= (c.pending + c.in_progress).toLocaleString() %></div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="text-muted small">Failed</div>
+                    <div style="font-size: 22px; font-weight: 600; color: var(--danger);"><%= c.failed.toLocaleString() %></div>
+                </div>
+            </div>
+
+            <div class="p-3 pt-0 text-body">
+                <div class="progress" style="height: 8px;">
+                    <div class="progress-bar" role="progressbar"
+                         style="width: <%= c.percent %>%;"
+                         aria-valuenow="<%= c.percent %>" aria-valuemin="0" aria-valuemax="100"></div>
+                </div>
+                <div class="text-muted small mt-1">
+                    <%= c.percent %>% complete
+                    <% if (s.current) { %>
+                        · now converting <code><%= s.current.object_name || '(unnamed)' %></code>
+                        <% if (s.current.attempts > 0) { %>
+                            <span class="text-muted">(retry <%= s.current.attempts %>/<%= s.max_attempts %>)</span>
+                        <% } %>
+                    <% } else if (active) { %>
+                        · next request in &le; <%= Math.round(s.delay_ms / 1000) %>s
+                    <% } %>
+                </div>
+            </div>
+
+            <div class="px-3 pb-2 text-muted small">
+                Started <%= fmt_when(s.latest.created_at) %>
+                <% if (s.latest.actor) { %> by <strong><%= s.latest.actor %></strong><% } %>
+            </div>
+        </div>
+    <% } else { %>
+        <div class="content-card sev-info mb-3">
+            <div class="p-3">
+                <strong>No conversions yet.</strong>
+                <span class="text-muted">Enter a collection or SIP UUID above and press Start.</span>
+            </div>
+        </div>
+    <% } %>
+
+    <% if (s.pending_total > 0) { %>
+        <div class="text-muted small mb-3">
+            <%= s.pending_total.toLocaleString() %> object<%= s.pending_total === 1 ? '' : 's' %>
+            pending across all batches · worker posts one every <%= Math.round(s.delay_ms / 1000) %>s.
+        </div>
+    <% } %>
+
+    <% if (s.history && s.history.length > 0) { %>
+        <h3 style="font-size: 16px; margin: 16px 0 8px;">Recent batches</h3>
+        <table class="table table-sm">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Scope</th>
+                    <th>Status</th>
+                    <th class="text-end">Total</th>
+                    <th class="text-end">OK</th>
+                    <th class="text-end">Failed</th>
+                    <th>Started</th>
+                    <th>By</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% s.history.forEach(function(b) { %>
+                    <tr>
+                        <td><%= b.id %></td>
+                        <td>
+                            <%= b.scope_type === 'object' ? 'object' : 'collection' %>
+                            <% if (b.scope_label) { %>
+                                <code class="text-muted"><%= String(b.scope_label).slice(0, 8) %>…</code>
+                            <% } %>
+                        </td>
+                        <td>
+                            <span class="sev-badge sev-<%=
+                                b.status === 'completed' ? 'success' :
+                                b.status === 'running' ? 'info' : 'warn'
+                            %>"><%= b.status %></span>
+                        </td>
+                        <td class="text-end"><%= Number(b.total).toLocaleString() %></td>
+                        <td class="text-end"><%= Number(b.complete).toLocaleString() %></td>
+                        <td class="text-end">
+                            <% if (b.failed > 0) { %>
+                                <strong class="text-danger"><%= Number(b.failed).toLocaleString() %></strong>
+                            <% } else { %>0<% } %>
+                        </td>
+                        <td class="text-muted small"><%= fmt_when(b.created_at) %></td>
+                        <td><%= b.actor || '—' %></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    <% } %>
+</div>

@@ -29,8 +29,10 @@ describe('ingester/libs/astools', () => {
     let original_env;
     beforeEach(() => {
         original_env = { ...process.env };
-        // Wipe legacy overlap names so a polluted shell can't poison
-        // the fallback chain mid-test.
+        /*
+         * Wipe legacy overlap names so a polluted shell can't poison
+         * the fallback chain mid-test.
+         */
         delete process.env.QA_SERVICE;
         delete process.env.QA_SERVICE_API_KEY;
         delete process.env.ASTOOLS_SERVICE;
@@ -102,9 +104,11 @@ describe('ingester/libs/astools', () => {
 
     describe('URL normalization', () => {
         it('strips a trailing `/api/v1/astools/` from the base URL', async () => {
-            // The legacy ingest-service .env stored CURATION_API
-            // (formerly ASTOOLS_SERVICE) with the path tail included;
-            // without normalization the client would double-append.
+            /*
+             * The legacy ingest-service .env stored CURATION_API
+             * (formerly ASTOOLS_SERVICE) with the path tail included;
+             * without normalization the client would double-append.
+             */
             delete process.env.CURATION_API;
             process.env.CURATION_API = 'http://libsftp01-vlp.du.edu:8185/api/v1/astools/';
             app_config._reset();
@@ -173,10 +177,12 @@ describe('ingester/libs/astools', () => {
 
     describe('make_digital_objects', () => {
         it('POSTs a `{ data: { folder } }` envelope (NOT a flat body, NOT a query string)', async () => {
-            // Matches _validate_make_digital_objects_request in the
-            // curation-service: the validator pulls folder out of
-            // `data.data.folder` and rejects unwrapped bodies with
-            // "Invalid request format: missing or invalid data object".
+            /*
+             * Matches _validate_make_digital_objects_request in the
+             * curation-service: the validator pulls folder out of
+             * `data.data.folder` and rejects unwrapped bodies with
+             * "Invalid request format: missing or invalid data object".
+             */
             const http = make_fake_http();
             http.set_response({ status: 200, data: { result: { success: true } } });
             const client = astools_module.create_client(http);

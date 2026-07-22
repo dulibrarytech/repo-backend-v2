@@ -1,7 +1,9 @@
 'use strict';
 
-// Pure-validation unit tests for users/model.
-// Behavioral tests (DB-backed) live in tests/integration/users/.
+/*
+ * Pure-validation unit tests for users/model.
+ * Behavioral tests (DB-backed) live in tests/integration/users/.
+ */
 
 const user_model = require('../../../users/model');
 const { ValidationError } = require('../../../libs/errors');
@@ -51,9 +53,11 @@ describe('users/model — input validation', () => {
         });
 
         it('accepts a partial patch with valid email', async () => {
-            // Will fail at the DB layer (no DB in unit tests) — but the
-            // validation step throws synchronously before any query runs.
-            // We check that the rejection is NOT a ValidationError.
+            /*
+             * Will fail at the DB layer (no DB in unit tests) — but the
+             * validation step throws synchronously before any query runs.
+             * We check that the rejection is NOT a ValidationError.
+             */
             await expect(user_model.update(1, { email: 'new@b.com' })).rejects.not.toBeInstanceOf(
                 ValidationError
             );

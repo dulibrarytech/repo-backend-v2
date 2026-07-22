@@ -1,9 +1,11 @@
 'use strict';
 
-// Unit tests for dashboard/thumbnails.js — the magic-byte gate,
-// the URL builder, and the atomic-write semantics. The multer-piped
-// upload path is covered by the e2e tests where we can drive a real
-// multipart body through the route.
+/*
+ * Unit tests for dashboard/thumbnails.js — the magic-byte gate,
+ * the URL builder, and the atomic-write semantics. The multer-piped
+ * upload path is covered by the e2e tests where we can drive a real
+ * multipart body through the route.
+ */
 
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -72,8 +74,10 @@ describe('dashboard/thumbnails — build_thumbnail_url', () => {
         original_env = { ...process.env };
     });
     afterEach(() => {
-        // Restore env + clear the cached config so the next test picks
-        // up its own settings cleanly.
+        /*
+         * Restore env + clear the cached config so the next test picks
+         * up its own settings cleanly.
+         */
         process.env = original_env;
         app_config._reset();
     });

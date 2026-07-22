@@ -37,9 +37,11 @@
     <% } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) { %>
         <span class="font-monospace small"><%= s %></span>
     <% } else { %>
-        <span style="white-space: pre-wrap; word-break: break-word;">
-            <%= s.replace(/<[^>]+>/g, '') %>
-        </span>
+        <%/* Keep the value flush against the span tags: with
+             white-space: pre-wrap, any surrounding newline/indentation
+             would render as blank lines above/below the value, inflating
+             the row and misaligning it with the label. */%>
+        <span style="white-space: pre-wrap; word-break: break-word;"><%= s.replace(/<[^>]+>/g, '') %></span>
     <% } %>
 
 <% } else if (Array.isArray(value)) { %>

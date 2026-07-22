@@ -121,9 +121,11 @@ describe('ingester/stages/repository', () => {
     let saved_env;
     beforeAll(async () => {
         saved_env = { ...process.env };
-        // Stage 5's post-success "Ingest Complete" hold is staff UX
-        // (4s in prod); tests want it as close to zero as possible
-        // so the suite doesn't pay the wall-clock cost per case.
+        /*
+         * Stage 5's post-success "Ingest Complete" hold is staff UX
+         * (4s in prod); tests want it as close to zero as possible
+         * so the suite doesn't pay the wall-clock cost per case.
+         */
         process.env.INGEST_COMPLETE_HOLD_MS = '1';
         const app_config = require('../../../config/app');
         app_config._reset();
@@ -184,10 +186,12 @@ describe('ingester/stages/repository', () => {
     });
 
     it('finalize: COMPLETE writes the Ingest Complete suggested_action and emits only one COMPLETE event', async () => {
-        // Two-phase finalize (status=COMPLETE+is_complete=0 then a
-        // bare is_complete=1 update) must NOT produce a duplicate
-        // COMPLETE event, and the suggested_action must come from
-        // state_metadata so the dashboard renders the message.
+        /*
+         * Two-phase finalize (status=COMPLETE+is_complete=0 then a
+         * bare is_complete=1 update) must NOT produce a duplicate
+         * COMPLETE event, and the suggested_action must come from
+         * state_metadata so the dashboard renders the message.
+         */
         const row = await seed_row();
         const out = await stage.run(row, {
             duracloud: make_duracloud({ mets_xml: happy_mets() }),
@@ -218,16 +222,20 @@ describe('ingester/stages/repository', () => {
         expect(out.ok).toBe(true);
         expect(out.sftp_cleanup).toEqual({ ok: true, status: 200 });
 
-        // cleanup_sftp must use the collection_uuid (qa_uuid) and the
-        // package name — matches the curation-API contract.
+        /*
+         * cleanup_sftp must use the collection_uuid (qa_uuid) and the
+         * package name — matches the curation-API contract.
+         */
         expect(qa._calls.cleanup_sftp).toHaveLength(1);
         expect(qa._calls.cleanup_sftp[0]).toEqual({
             uuid: 'codu:parent',
             archival_package: 'pkg-001',
         });
 
-        // The outcome is captured in the COMPLETE event's payload so
-        // the timeline shows what happened.
+        /*
+         * The outcome is captured in the COMPLETE event's payload so
+         * the timeline shows what happened.
+         */
         const events = await db_queue()(tables.ingest_events)
             .where({ queue_id: row.id, to_state: 'COMPLETE' });
         expect(events).toHaveLength(1);
@@ -301,9 +309,11 @@ describe('ingester/stages/repository', () => {
             status: 200,
             result: 'packages_moved_to_ingested_folder',
         });
-        // Wire matches the curation route contract: uuid + folder
-        // (folder = row.batch — the curation route strips `new_`
-        // when placing into 003-ingested).
+        /*
+         * Wire matches the curation route contract: uuid + folder
+         * (folder = row.batch — the curation route strips `new_`
+         * when placing into 003-ingested).
+         */
         expect(qa._calls.move_to_ingested).toHaveLength(1);
         expect(qa._calls.move_to_ingested[0]).toEqual({
             uuid: 'codu:parent',
@@ -318,9 +328,11 @@ describe('ingester/stages/repository', () => {
     });
 
     it('move_to_ingested: partial failure (Wasabi error in 200 body) is recorded but does not unwind COMPLETE', async () => {
-        // Curation route always returns 200, even when move_to_s3
-        // fails. Errors land in data.errors. Stage 5 has to inspect
-        // the body — a bare 200 isn't proof Wasabi worked.
+        /*
+         * Curation route always returns 200, even when move_to_s3
+         * fails. Errors land in data.errors. Stage 5 has to inspect
+         * the body — a bare 200 isn't proof Wasabi worked.
+         */
         const row = await seed_row();
         const qa = make_qa({
             move_to_ingested_result: {
@@ -384,9 +396,11 @@ describe('ingester/stages/repository', () => {
     });
 
     it('finalize: aborted signal during the hold leaves is_complete=0 for boot-time finalize', async () => {
-        // Graceful shutdown mid-hold: Stage 5 returns ok but
-        // is_complete stays 0. The worker boot sweep
-        // (model.finalize_pending_completes) catches it on restart.
+        /*
+         * Graceful shutdown mid-hold: Stage 5 returns ok but
+         * is_complete stays 0. The worker boot sweep
+         * (model.finalize_pending_completes) catches it on restart.
+         */
         const row = await seed_row();
         const controller = new AbortController();
         controller.abort();
@@ -532,18 +546,22 @@ describe('ingester/stages/repository', () => {
         expect(fresh.pipeline_state).toBe('INGEST_HALTED');
     });
 
-    // --- Kaltura entry_id attachment -----------------------------------
-    //
-    // Stage 5 calls kaltura_model.get_entry_id_for_file(package, file)
-    // for each part before building the object row. A populated
-    // tbl_kaltura_ids row should produce a `kaltura_id` field on the
-    // matching part in the saved display_record envelope.
+    /*
+     * --- Kaltura entry_id attachment -----------------------------------
+     * 
+     * Stage 5 calls kaltura_model.get_entry_id_for_file(package, file)
+     * for each part before building the object row. A populated
+     * tbl_kaltura_ids row should produce a `kaltura_id` field on the
+     * matching part in the saved display_record envelope.
+     */
 
     it('attaches kaltura_id to parts when tbl_kaltura_ids has a match', async () => {
         const row = await seed_row({ package: 'D047.02.0001.0020.00001' });
-        // Pre-populate tbl_kaltura_ids — the row's METS fileSec will
-        // yield a part with file='thing.tif' (per happy_mets above).
-        // We seed the lookup so attach_kaltura_ids stamps the id.
+        /*
+         * Pre-populate tbl_kaltura_ids — the row's METS fileSec will
+         * yield a part with file='thing.tif' (per happy_mets above).
+         * We seed the lookup so attach_kaltura_ids stamps the id.
+         */
         await db_queue()(tables.kaltura_ids).insert({
             package: 'D047.02.0001.0020.00001',
             file: 'thing.tif',
@@ -573,18 +591,22 @@ describe('ingester/stages/repository', () => {
         expect(out.ok).toBe(true);
         const obj = await db()(tables.objects).where({ pid: row.sip_uuid }).first();
         const envelope = JSON.parse(obj.display_record);
-        // The part exists, but no kaltura_id key was added — the lookup
-        // just returned null and the part passed through unchanged.
+        /*
+         * The part exists, but no kaltura_id key was added — the lookup
+         * just returned null and the part passed through unchanged.
+         */
         expect(envelope.parts[0].kaltura_id).toBeUndefined();
         expect(envelope.parts[0].file).toBe('thing.tif');
     });
 
     it('skips status=0 (not-found) rows even when they exist in tbl_kaltura_ids', async () => {
         const row = await seed_row({ package: 'D999.zero.status' });
-        // tbl_kaltura_ids may carry placeholder rows for files that
-        // were searched but not found (entry_id='0_0', status=0).
-        // model.get_entry_id_for_file's WHERE status=1 filter excludes
-        // these — so the part should NOT pick up the '0_0' value.
+        /*
+         * tbl_kaltura_ids may carry placeholder rows for files that
+         * were searched but not found (entry_id='0_0', status=0).
+         * model.get_entry_id_for_file's WHERE status=1 filter excludes
+         * these — so the part should NOT pick up the '0_0' value.
+         */
         await db_queue()(tables.kaltura_ids).insert({
             package: 'D999.zero.status',
             file: 'thing.tif',

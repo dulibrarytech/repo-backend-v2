@@ -1,7 +1,9 @@
 'use strict';
 
-// Stage 3 (transfer) integration tests. Fake AM client + fast poll
-// cadence so the long-poll paths run in tens of milliseconds.
+/*
+ * Stage 3 (transfer) integration tests. Fake AM client + fast poll
+ * cadence so the long-poll paths run in tens of milliseconds.
+ */
 
 const app_config = require('../../../config/app');
 const db_helper = require('../../helpers/db');
@@ -118,14 +120,16 @@ describe('ingester/stages/transfer', () => {
     });
 
     it('start_transfer is called with collection_uuid (the SFTP folder name), NOT row.batch', async () => {
-        // Task #128 switched the SFTP folder to row.collection_uuid
-        // (the local collection PID) — matches v1's layout where
-        // all packages in a collection share one SFTP folder named
-        // after the collection. Stage 3 must therefore pass
-        // collection_uuid to AM.start_transfer so AM's transfer-source
-        // path mirrors what Stage 2 actually uploaded. Passing
-        // row.batch would point AM at a non-existent folder and AM
-        // returns HTTP 500 (the start_transfer_bad_status halt).
+        /*
+         * Task #128 switched the SFTP folder to row.collection_uuid
+         * (the local collection PID) — matches v1's layout where
+         * all packages in a collection share one SFTP folder named
+         * after the collection. Stage 3 must therefore pass
+         * collection_uuid to AM.start_transfer so AM's transfer-source
+         * path mirrors what Stage 2 actually uploaded. Passing
+         * row.batch would point AM at a non-existent folder and AM
+         * returns HTTP 500 (the start_transfer_bad_status halt).
+         */
         const row = await seed_row({
             batch: 'new_U358-resources_1204',
             collection_uuid: '550e8400-e29b-41d4-a716-446655440000',
@@ -147,9 +151,11 @@ describe('ingester/stages/transfer', () => {
     });
 
     it("treats the legacy collection_uuid='PENDING' default as missing — falls through to q-<id>", async () => {
-        // Mirrors the upload.js + controller.js defensive fallback
-        // for rows that landed with the schema default before the
-        // pre-flight gate started stamping a real PID.
+        /*
+         * Mirrors the upload.js + controller.js defensive fallback
+         * for rows that landed with the schema default before the
+         * pre-flight gate started stamping a real PID.
+         */
         const row = await seed_row({ collection_uuid: 'PENDING' });
         const am = make_am({
             start_transfer: { status: 200, data: { id: 'tx-uuid-1', directory: 'd' } },
@@ -192,8 +198,10 @@ describe('ingester/stages/transfer', () => {
         expect(fresh.transfer_uuid).toBe('tx-uuid-1');
         expect(fresh.transfer_folder).toBe('codu:test_pkg-001_transfer');
         expect(fresh.sip_uuid).toBe('sip-uuid-7');
-        // The transfer-cleanup fire-and-forget should have fired.
-        // Allow a microtask tick to let the .catch chain register.
+        /*
+         * The transfer-cleanup fire-and-forget should have fired.
+         * Allow a microtask tick to let the .catch chain register.
+         */
         await new Promise((r) => setTimeout(r, 5));
         expect(am._calls.clear_transfer).toHaveLength(1);
     });
@@ -255,8 +263,10 @@ describe('ingester/stages/transfer', () => {
         expect(out.reason).toBe('am_failed');
         const fresh = await db_queue()(tables.ingest_queue).where({ id: row.id }).first();
         expect(fresh.pipeline_state).toBe('FAILED');
-        // The audit payload should capture the microservice so staff
-        // know which step failed in AM.
+        /*
+         * The audit payload should capture the microservice so staff
+         * know which step failed in AM.
+         */
         const events = await db_queue()(tables.ingest_events)
             .where({ queue_id: row.id })
             .orderBy('id', 'desc');
@@ -282,10 +292,12 @@ describe('ingester/stages/transfer', () => {
     });
 
     it('parses the production AM response shape: extracts uuid + basename from `path`', async () => {
-        // Real AM 1.13 returns `{message:'Copy successful.', path:'/var/.../<basename>-<uuid>/'}`
-        // — no `id` / `transfer_id`. The basename and trailing UUID
-        // are both encoded in `path`. Regression for the live bug
-        // that halted as start_transfer_missing_uuid.
+        /*
+         * Real AM 1.13 returns `{message:'Copy successful.', path:'/var/.../<basename>-<uuid>/'}`
+         * — no `id` / `transfer_id`. The basename and trailing UUID
+         * are both encoded in `path`. Regression for the live bug
+         * that halted as start_transfer_missing_uuid.
+         */
         const row = await seed_row({
             collection_uuid: '49986393-2f99-4c20-aebe-3a6d4c9b61f0',
             package: 'U219.03.0005.0006.00001',
@@ -317,25 +329,31 @@ describe('ingester/stages/transfer', () => {
         expect(out.ok).toBe(true);
         const fresh = await db_queue()(tables.ingest_queue).where({ id: row.id }).first();
         expect(fresh.pipeline_state).toBe('TRANSFER_COMPLETE');
-        // Both fields landed correctly: folder is the basename
-        // (NOT the full path), uuid is the trailing UUID from the
-        // path's tail (extracted via _trailing_uuid_from_basename).
+        /*
+         * Both fields landed correctly: folder is the basename
+         * (NOT the full path), uuid is the trailing UUID from the
+         * path's tail (extracted via _trailing_uuid_from_basename).
+         */
         expect(fresh.transfer_folder).toBe(basename);
         expect(fresh.transfer_uuid).toBe('1b6f7f3a-3dc4-4623-9744-05f1e4f41539');
     });
 
     it('recovers transfer_uuid from the unapproved-list when start_transfer omits it entirely', async () => {
-        // Defense-in-depth: even if AM's response gives us no uuid
-        // (any field, any source), the unapproved-list match has
-        // {directory, uuid} per entry. Capture from there.
+        /*
+         * Defense-in-depth: even if AM's response gives us no uuid
+         * (any field, any source), the unapproved-list match has
+         * {directory, uuid} per entry. Capture from there.
+         */
         const row = await seed_row();
         const basename = 'codu:test_pkg-001_transfer';
         const am = make_am({
             start_transfer: {
                 status: 200,
-                // No id, no transfer_id, no parseable path UUID — just
-                // a directory name. The approve poll fills in the
-                // missing uuid.
+                /*
+                 * No id, no transfer_id, no parseable path UUID — just
+                 * a directory name. The approve poll fills in the
+                 * missing uuid.
+                 */
                 data: { message: 'Copy successful.', directory: basename },
             },
             get_unapproved_transfer_list: {
@@ -355,9 +373,11 @@ describe('ingester/stages/transfer', () => {
     });
 
     it('halts with start_transfer_missing_folder when neither path nor directory is present', async () => {
-        // The folder name is the ONLY field we genuinely can't
-        // proceed without — we need it to match the entry in the
-        // unapproved-list. This is the new floor for halts.
+        /*
+         * The folder name is the ONLY field we genuinely can't
+         * proceed without — we need it to match the entry in the
+         * unapproved-list. This is the new floor for halts.
+         */
         const row = await seed_row();
         const am = make_am({
             start_transfer: { status: 200, data: { message: 'queued' } },
@@ -366,12 +386,16 @@ describe('ingester/stages/transfer', () => {
             get_transfer_status: { status: 200, data: {} },
         });
         const out = await stage.run(row, { am, model });
-        // Either the explicit halt above OR a timeout — depending on
-        // whether the synthesized fallback kicks in.
+        /*
+         * Either the explicit halt above OR a timeout — depending on
+         * whether the synthesized fallback kicks in.
+         */
         const fresh = await db_queue()(tables.ingest_queue).where({ id: row.id }).first();
-        // The synthesized fallback `${collection_pid}_${row.package}_transfer`
-        // saves us here, so the stage actually proceeds to the approve
-        // poll. With an empty unapproved list it then times out.
+        /*
+         * The synthesized fallback `${collection_pid}_${row.package}_transfer`
+         * saves us here, so the stage actually proceeds to the approve
+         * poll. With an empty unapproved list it then times out.
+         */
         expect(['INGEST_HALTED', 'APPROVE_TIMEOUT']).toContain(fresh.pipeline_state);
         void out;
     });
@@ -483,5 +507,28 @@ describe('ingester/stages/transfer', () => {
         await new Promise((r) => setTimeout(r, 10));
         const fresh = await db_queue()(tables.ingest_queue).where({ id: row.id }).first();
         expect(['Verify metadata', 'Finished'].includes(fresh.micro_service)).toBe(true);
+    });
+
+    it('writes a last_poll_at heartbeat during the in-progress status poll', async () => {
+        const row = await seed_row();
+        const before = Date.now();
+        const am = make_am({
+            start_transfer: { status: 200, data: { id: 'tx-1', directory: 'd' } },
+            get_unapproved_transfer_list: {
+                status: 200,
+                data: { results: [{ directory: 'd', uuid: 'tx-1' }] },
+            },
+            approve_transfer: { status: 200, data: {} },
+            get_transfer_status: [
+                { status: 200, data: { status: 'PROCESSING', microservice: 'Normalize' } },
+                { status: 200, data: { status: 'COMPLETE', sip_uuid: 'sip-9' } },
+            ],
+        });
+        const out = await stage.run(row, { am, model });
+        expect(out.ok).toBe(true);
+        const fresh = await db_queue()(tables.ingest_queue).where({ id: row.id }).first();
+        // The in-progress poll persisted a recent epoch-ms heartbeat.
+        expect(Number(fresh.last_poll_at)).toBeGreaterThanOrEqual(before);
+        expect(Number(fresh.last_poll_at)).toBeLessThanOrEqual(Date.now());
     });
 });

@@ -1,8 +1,10 @@
 'use strict';
 
-// Activity snapshot + progress computation for the admin status panel.
-// Separate file from batches.test.js so the new UX-oriented assertions
-// (in-flight + recent + rate/ETA) live next to each other.
+/*
+ * Activity snapshot + progress computation for the admin status panel.
+ * Separate file from batches.test.js so the new UX-oriented assertions
+ * (in-flight + recent + rate/ETA) live next to each other.
+ */
 
 const batches = require('../../../metadata/batches');
 const model = require('../../../metadata/model');
@@ -72,8 +74,10 @@ describe('metadata/batches — get_activity_snapshot', () => {
     });
 
     it('shows DEAD_LETTERED rows with last_error populated', async () => {
-        // Force single-shot terminal so we get a clean dead-letter
-        // without juggling retry state.
+        /*
+         * Force single-shot terminal so we get a clean dead-letter
+         * without juggling retry state.
+         */
         const saved = process.env.METADATA_MAX_ATTEMPTS;
         process.env.METADATA_MAX_ATTEMPTS = '1';
         require('../../../config/app')._reset();
@@ -246,9 +250,11 @@ describe('metadata/admin_controller — _build_status (integration)', () => {
         expect(status.activity.recently_completed).toEqual([]);
         expect(status.progress).toHaveProperty('elapsed_seconds');
         expect(status.progress).toHaveProperty('rate_per_min');
-        // Worker health surfaces concurrency + max_attempts so the
-        // partial can render "X of Y worker slots in use" and the
-        // retry budget.
+        /*
+         * Worker health surfaces concurrency + max_attempts so the
+         * partial can render "X of Y worker slots in use" and the
+         * retry budget.
+         */
         expect(status.worker_health).toMatchObject({
             enabled: true,
             concurrency: expect.any(Number),

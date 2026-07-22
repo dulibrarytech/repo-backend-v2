@@ -1,28 +1,30 @@
 'use strict';
 
-// SSO callback handler. Sits at POST /repo/auth/sso. The upstream proxy
-// (authproxy.du.edu in prod) authenticates the user against DU's
-// central credential store, then POSTs back to us with body fields:
-//
-//   employeeID    — required, the user's du_id
-//   HTTP_HOST     — legacy compat (Layer 0)
-//   timestamp     — required when SSO_REQUIRE_FRESHNESS=1 (Layer 2)
-//   nonce         — required when SSO_REQUIRE_FRESHNESS=1 (Layer 2)
-//   signature     — required when SSO_REQUIRE_HMAC=1 (Layer 3)
-//   next          — optional, where to redirect after success
-//
-// Layer enforcement order (fail fast on the highest-confidence rejection):
-//   1. IP allowlist                  (middleware, runs first)
-//   2. Request shape validation
-//   3. HMAC signature                (if SSO_REQUIRE_HMAC=1)
-//   4. Timestamp + nonce freshness   (if SSO_REQUIRE_FRESHNESS=1)
-//   5. Legacy HTTP_HOST string match (defense-in-depth)
-//   6. User lookup in tbl_users
-//   7. Mint session cookie, 303 redirect
-//
-// Every attempt — success or fail — emits a structured audit log with
-// request_id, ip, employeeID (when known), outcome, and which layers
-// were active. Useful when reviewing the access log for forged attempts.
+/*
+ * SSO callback handler. Sits at POST /repo/auth/sso. The upstream proxy
+ * (authproxy.du.edu in prod) authenticates the user against DU's
+ * central credential store, then POSTs back to us with body fields:
+ * 
+ *   employeeID    — required, the user's du_id
+ *   HTTP_HOST     — legacy compat (Layer 0)
+ *   timestamp     — required when SSO_REQUIRE_FRESHNESS=1 (Layer 2)
+ *   nonce         — required when SSO_REQUIRE_FRESHNESS=1 (Layer 2)
+ *   signature     — required when SSO_REQUIRE_HMAC=1 (Layer 3)
+ *   next          — optional, where to redirect after success
+ * 
+ * Layer enforcement order (fail fast on the highest-confidence rejection):
+ *   1. IP allowlist                  (middleware, runs first)
+ *   2. Request shape validation
+ *   3. HMAC signature                (if SSO_REQUIRE_HMAC=1)
+ *   4. Timestamp + nonce freshness   (if SSO_REQUIRE_FRESHNESS=1)
+ *   5. Legacy HTTP_HOST string match (defense-in-depth)
+ *   6. User lookup in tbl_users
+ *   7. Mint session cookie, 303 redirect
+ * 
+ * Every attempt — success or fail — emits a structured audit log with
+ * request_id, ip, employeeID (when known), outcome, and which layers
+ * were active. Useful when reviewing the access log for forged attempts.
+ */
 
 const validator = require('validator');
 
@@ -53,10 +55,12 @@ function build_payload(user) {
     return { sub: String(user.id), du_id: user.du_id, email: user.email };
 }
 
-// Safe-redirect: only allow same-origin paths starting with `/` and not
-// `//`. Mirrors the helper in dashboard/controller.js but the lib is
-// internal there; duplicating the few lines keeps the SSO module
-// self-contained.
+/*
+ * Safe-redirect: only allow same-origin paths starting with `/` and not
+ * `//`. Mirrors the helper in dashboard/controller.js but the lib is
+ * internal there; duplicating the few lines keeps the SSO module
+ * self-contained.
+ */
 function safe_next(raw, fallback) {
     if (typeof raw !== 'string' || raw.length === 0) return fallback;
     const decoded = validator.unescape(raw.trim());
@@ -112,10 +116,12 @@ async function sso_callback(req, res) {
             });
         }
 
-        // Step 5 — legacy HTTP_HOST (Layer 0, defense-in-depth).
-        // Skipped if SSO_HOST is empty (e.g. dev). Even when present,
-        // this is NEVER the only check — at minimum Layer 1 must also
-        // have rejected attackers from outside the allowlist.
+        /*
+         * Step 5 — legacy HTTP_HOST (Layer 0, defense-in-depth).
+         * Skipped if SSO_HOST is empty (e.g. dev). Even when present,
+         * this is NEVER the only check — at minimum Layer 1 must also
+         * have rejected attackers from outside the allowlist.
+         */
         if (cfg.sso.expected_host) {
             if (!req.body.HTTP_HOST) {
                 throw new ValidationError('HTTP_HOST is required');
@@ -135,8 +141,10 @@ async function sso_callback(req, res) {
         if (!user) {
             audit.outcome = 'rejected:user_not_found_or_inactive';
             log.warn(audit);
-            // Same response shape as any other auth failure — don't
-            // leak whether the du_id exists.
+            /*
+             * Same response shape as any other auth failure — don't
+             * leak whether the du_id exists.
+             */
             throw new UnauthorizedError('Authentication failed');
         }
         audit.user_id = user.id;
@@ -151,8 +159,10 @@ async function sso_callback(req, res) {
         const target = safe_next(req.body.next, cfg.sso.default_redirect);
         return res.redirect(303, target);
     } catch (err) {
-        // Make sure every rejection has an audit trail, even
-        // ValidationErrors thrown before we set an outcome explicitly.
+        /*
+         * Make sure every rejection has an audit trail, even
+         * ValidationErrors thrown before we set an outcome explicitly.
+         */
         if (!audit.outcome) {
             audit.outcome = 'rejected:' + (err.code || 'error');
             audit.error = err.message;
@@ -162,14 +172,16 @@ async function sso_callback(req, res) {
     }
 }
 
-// GET /repo/auth/sso/start — kicks off the SSO redirect. The user
-// clicks "Sign in with DU SSO" on the login page; we redirect them to
-// SSO_URL with two appended params:
-//   - app_url=<SSO_RESPONSE_URL>  — matches the legacy convention so
-//     authproxy.du.edu can use the same wiring it already understands.
-//     Skipped when SSO_RESPONSE_URL is unset.
-//   - next=<safe path>            — preserved so the callback can bounce
-//     the user to their intended destination after auth.
+/*
+ * GET /repo/auth/sso/start — kicks off the SSO redirect. The user
+ * clicks "Sign in with DU SSO" on the login page; we redirect them to
+ * SSO_URL with two appended params:
+ *   - app_url=<SSO_RESPONSE_URL>  — matches the legacy convention so
+ *     authproxy.du.edu can use the same wiring it already understands.
+ *     Skipped when SSO_RESPONSE_URL is unset.
+ *   - next=<safe path>            — preserved so the callback can bounce
+ *     the user to their intended destination after auth.
+ */
 function sso_start(req, res) {
     const cfg = app_config();
     if (!cfg.sso.url) {

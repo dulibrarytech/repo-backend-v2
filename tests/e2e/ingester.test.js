@@ -1,7 +1,9 @@
 'use strict';
 
-// E2E tests for /api/ingest/*. Exercises the full Express + auth +
-// model + sqlite stack via supertest.
+/*
+ * E2E tests for /api/ingest/*. Exercises the full Express + auth +
+ * model + sqlite stack via supertest.
+ */
 
 const supertest = require('supertest');
 const { make_app } = require('../helpers/app');
@@ -113,8 +115,10 @@ describe('ingester — e2e', () => {
             // FAILED row should advertise rollback_archivematica.
             const a_row = res.body.rows.find((r) => r.package === 'a');
             expect(a_row.actions).toContain('rollback_archivematica');
-            // PENDING is an in-flight (cancellable) state — staff
-            // can cancel it before the worker picks it up.
+            /*
+             * PENDING is an in-flight (cancellable) state — staff
+             * can cancel it before the worker picks it up.
+             */
             const b_row = res.body.rows.find((r) => r.package === 'b');
             expect(b_row.actions).toEqual(['timeline', 'cancel']);
         });
@@ -178,10 +182,12 @@ describe('ingester — e2e', () => {
                 .set('Authorization', auth)
                 .send({ rows: [row()] });
             const id = post.body.ids[0];
-            // Trigger a state transition by hitting reset on an
-            // appropriate state — go through model directly here would
-            // skip the API; instead just write a second event via the
-            // dedicated state.
+            /*
+             * Trigger a state transition by hitting reset on an
+             * appropriate state — go through model directly here would
+             * skip the API; instead just write a second event via the
+             * dedicated state.
+             */
             const model = require('../../ingester/model');
             await model.update_queue({ id }, { status: 'STARTING' }, { actor: 'worker' });
 
@@ -211,16 +217,20 @@ describe('ingester — e2e', () => {
                 .send({ note: 'fixing source data' })
                 .expect(200);
             expect(res.body.new_state).toBe('ROLLED_BACK_TO_READY');
-            // QA isn't configured in the test env, so qa_error should
-            // be the "not configured" sentinel — but the queue flip
-            // still lands.
+            /*
+             * QA isn't configured in the test env, so qa_error should
+             * be the "not configured" sentinel — but the queue flip
+             * still lands.
+             */
             expect(res.body.qa_error).toMatch(/not configured/i);
 
             const queue = await db_queue()(tables.ingest_queue).where({ id }).first();
             expect(queue.pipeline_state).toBe('ROLLED_BACK_TO_READY');
-            // Rolled-back rows leave the default "Open only" view —
-            // is_complete=1 + the history row below cover the staff
-            // visibility.
+            /*
+             * Rolled-back rows leave the default "Open only" view —
+             * is_complete=1 + the history row below cover the staff
+             * visibility.
+             */
             expect(queue.is_complete).toBe(1);
 
             const events = await db_queue()(tables.ingest_events)
@@ -234,9 +244,11 @@ describe('ingester — e2e', () => {
             expect(payload.note).toBe('fixing source data');
             expect(payload.qa_uuid).toBeTruthy();
 
-            // The rollback should surface on the Job History page as
-            // a FAILED packaging_and_ingesting entry so the action
-            // stays visible after the queue row is hidden.
+            /*
+             * The rollback should surface on the Job History page as
+             * a FAILED packaging_and_ingesting entry so the action
+             * stays visible after the queue row is hidden.
+             */
             const jobs_rows = await db_queue()(tables.ingest_jobs).where({
                 collection_folder: 'batch-A',
             });
@@ -291,8 +303,10 @@ describe('ingester — e2e', () => {
             expect(payload.sip_uuid).toBe('sip-xyz');
             expect(payload.am_error).toMatch(/not configured/i);
 
-            // History row: FAILED packaging_and_ingesting for the
-            // rolled-back package.
+            /*
+             * History row: FAILED packaging_and_ingesting for the
+             * rolled-back package.
+             */
             const jobs_rows = await db_queue()(tables.ingest_jobs).where({
                 collection_folder: 'batch-A',
             });
@@ -307,8 +321,10 @@ describe('ingester — e2e', () => {
             const post = await supertest(app)
                 .post('/repo/api/ingest/queue')
                 .set('Authorization', auth)
-                // FAILED is rollback_archivematica-eligible but the
-                // row has no sip_uuid set (PENDING default).
+                /*
+                 * FAILED is rollback_archivematica-eligible but the
+                 * row has no sip_uuid set (PENDING default).
+                 */
                 .send({ rows: [row({ status: 'FAILED' })] });
             const id = post.body.ids[0];
             const res = await supertest(app)
@@ -377,8 +393,10 @@ describe('ingester — e2e', () => {
                 .expect(200);
             expect(res.body.new_state).toBe('CANCELLED_BY_USER');
             expect(res.body.prev_state).toBe('UPLOADING');
-            // No worker is registered in this test process, so
-            // was_running should be false. The state still flips.
+            /*
+             * No worker is registered in this test process, so
+             * was_running should be false. The state still flips.
+             */
             expect(res.body.was_running).toBe(false);
             const queue = await db_queue()(tables.ingest_queue).where({ id }).first();
             expect(queue.pipeline_state).toBe('CANCELLED_BY_USER');
@@ -422,11 +440,13 @@ describe('ingester — e2e', () => {
                 .set('Authorization', auth)
                 .expect(200);
             expect(res.body.row.pipeline_state).toBe('CANCELLED_BY_USER');
-            // Single follow-up for every cancel — the kebab always
-            // offers Return to Packaging regardless of prev_state.
-            // (For AM-side cancels the controller marks the row
-            // terminal and flags needed_am_cleanup in the audit log,
-            // but the action surface stays the same.)
+            /*
+             * Single follow-up for every cancel — the kebab always
+             * offers Return to Packaging regardless of prev_state.
+             * (For AM-side cancels the controller marks the row
+             * terminal and flags needed_am_cleanup in the audit log,
+             * but the action surface stays the same.)
+             */
             expect(res.body.row.actions).toEqual(['timeline', 'rollback_to_packaging']);
         });
     });
@@ -477,10 +497,12 @@ describe('ingester — e2e', () => {
         });
 
         it('marks needed_qa_move=true for an UPLOADING prev_state', async () => {
-            // We can't easily assert the QA HTTP call landed (no QA
-            // service is configured in the e2e harness), but we CAN
-            // assert the branch was taken: needed_qa_move flag in
-            // the audit payload + response body.
+            /*
+             * We can't easily assert the QA HTTP call landed (no QA
+             * service is configured in the e2e harness), but we CAN
+             * assert the branch was taken: needed_qa_move flag in
+             * the audit payload + response body.
+             */
             const auth = await bearer_for('return-staff2');
             const post = await supertest(app)
                 .post('/repo/api/ingest/queue')
@@ -498,19 +520,23 @@ describe('ingester — e2e', () => {
             expect(res.body.new_state).toBe('RETURNED_TO_PACKAGING');
             expect(res.body.prev_state).toBe('UPLOADING');
             expect(res.body.needed_qa_move).toBe(true);
-            // qa_error should be set (no QA configured in the test
-            // environment); the row flip still succeeded.
+            /*
+             * qa_error should be set (no QA configured in the test
+             * environment); the row flip still succeeded.
+             */
             expect(res.body.qa_error).toBeTruthy();
         });
 
         it('flags needed_am_cleanup=true AND moves folder back when prev_state was AM-side', async () => {
-            // AM-side cancels leave an AIP in AM (needed_am_cleanup
-            // tells staff to delete it in AM's Storage Service UI),
-            // BUT the staff-visible folder is still in 002-ingest —
-            // AM reads from the SFTP source, not from 002-ingest.
-            // So Return to Packaging still calls QA to move the
-            // folder back; otherwise it stays stuck and never
-            // reappears in /processed.
+            /*
+             * AM-side cancels leave an AIP in AM (needed_am_cleanup
+             * tells staff to delete it in AM's Storage Service UI),
+             * BUT the staff-visible folder is still in 002-ingest —
+             * AM reads from the SFTP source, not from 002-ingest.
+             * So Return to Packaging still calls QA to move the
+             * folder back; otherwise it stays stuck and never
+             * reappears in /processed.
+             */
             const auth = await bearer_for('return-staff3');
             const post = await supertest(app)
                 .post('/repo/api/ingest/queue')

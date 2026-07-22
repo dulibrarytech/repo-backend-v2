@@ -1,0 +1,39 @@
+<%/* Dry-run preview for a convert scope. Shows the exact object count
+     and a sample of the payloads that WOULD be POSTed — nothing is
+     enqueued. Locals: preview { count, sample[], truncated }, scope. */%>
+<% if (preview.count === 0) { %>
+    <div class="alert alert-warning small mb-0" role="alert">
+        No matching objects with a source file for <%= scope %>.
+    </div>
+<% } else { %>
+    <div class="alert alert-info small" role="alert">
+        <strong><%= preview.count.toLocaleString() %></strong>
+        object<%= preview.count === 1 ? '' : 's' %> would be converted for <%= scope %>.
+        Nothing has been queued yet — press <strong>Start conversion</strong> to begin.
+    </div>
+    <div class="table-responsive">
+        <table class="table table-sm font-monospace" style="font-size: 12px;">
+            <thead>
+                <tr>
+                    <th>object_name</th>
+                    <th>mime_type</th>
+                    <th>sip_uuid</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% preview.sample.forEach(function(p) { %>
+                    <tr>
+                        <td style="word-break: break-all;"><%= p.object_name || '(none)' %></td>
+                        <td><%= p.mime_type || '—' %></td>
+                        <td><%= p.sip_uuid || '—' %></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+    <% if (preview.truncated) { %>
+        <div class="text-muted small">
+            Showing the first <%= preview.sample.length %> of <%= preview.count.toLocaleString() %>.
+        </div>
+    <% } %>
+<% } %>

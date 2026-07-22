@@ -1,18 +1,20 @@
 'use strict';
 
-// Auth controllers. Express 5 async handlers — rejections propagate to
-// the central error middleware.
-//
-// Endpoints:
-//   POST /repo/auth/login   — body { du_id }, issues cookie + body payload
-//   POST /repo/auth/logout  — clears cookie + DB refresh token
-//   GET  /repo/auth/me      — returns the authenticated user
-//   POST /repo/auth/refresh — exchanges {user_id, refresh_token} for new JWT
-//
-// The SSO callback lives in auth/sso/ and runs its own layered defense
-// (IP allowlist → freshness → HMAC → host check → user lookup). This
-// controller covers the local session surface only — direct login,
-// logout, /me, refresh — which the dashboard and API clients use.
+/*
+ * Auth controllers. Express 5 async handlers — rejections propagate to
+ * the central error middleware.
+ * 
+ * Endpoints:
+ *   POST /repo/auth/login   — body { du_id }, issues cookie + body payload
+ *   POST /repo/auth/logout  — clears cookie + DB refresh token
+ *   GET  /repo/auth/me      — returns the authenticated user
+ *   POST /repo/auth/refresh — exchanges {user_id, refresh_token} for new JWT
+ * 
+ * The SSO callback lives in auth/sso/ and runs its own layered defense
+ * (IP allowlist → freshness → HMAC → host check → user lookup). This
+ * controller covers the local session surface only — direct login,
+ * logout, /me, refresh — which the dashboard and API clients use.
+ */
 
 const auth_model = require('./model');
 const user_model = require('../users/model');
@@ -49,8 +51,10 @@ async function login(req, res) {
 
     const user = await auth_model.find_active_user(du_id);
     if (!user) {
-        // Same response shape as a wrong-password failure would be — don't
-        // leak which du_ids exist.
+        /*
+         * Same response shape as a wrong-password failure would be — don't
+         * leak which du_ids exist.
+         */
         throw new UnauthorizedError('Invalid credentials');
     }
 
@@ -65,8 +69,10 @@ async function login(req, res) {
 }
 
 async function logout(req, res) {
-    // Best-effort clear — even if we have no req.user (token expired, etc.)
-    // we still clear the cookie so the client comes back clean.
+    /*
+     * Best-effort clear — even if we have no req.user (token expired, etc.)
+     * we still clear the cookie so the client comes back clean.
+     */
     if (req.user && req.user.sub) {
         await auth_model.clear_refresh_token(req.user.sub);
     }
@@ -107,9 +113,11 @@ async function refresh(req, res) {
     });
 }
 
-// Used internally by tests / future bootstrap scripts. NOT exposed via a
-// route. Reuses user_model so the same validation + duplicate check
-// apply.
+/*
+ * Used internally by tests / future bootstrap scripts. NOT exposed via a
+ * route. Reuses user_model so the same validation + duplicate check
+ * apply.
+ */
 async function bootstrap_user(input) {
     return user_model.create(input);
 }

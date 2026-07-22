@@ -1,9 +1,11 @@
 'use strict';
 
-// Unit tests for metadata/worker.js. The build_payload helper is pure
-// and easy to test in isolation; the rest of the worker (network +
-// DB) is exercised at the integration tier with a real sqlite + fake
-// ArchivesSpace.
+/*
+ * Unit tests for metadata/worker.js. The build_payload helper is pure
+ * and easy to test in isolation; the rest of the worker (network +
+ * DB) is exercised at the integration tier with a real sqlite + fake
+ * ArchivesSpace.
+ */
 
 const { build_payload } = require('../../../metadata/worker');
 
@@ -67,9 +69,11 @@ describe('metadata/worker — build_payload', () => {
     });
 
     it('handles a compound object that previously had no parts list', () => {
-        // Edge case: a previously-simple object reclassified as
-        // compound. There's no existing parts list to splice in;
-        // compound_parts becomes an empty array, not undefined.
+        /*
+         * Edge case: a previously-simple object reclassified as
+         * compound. There's no existing parts list to splice in;
+         * compound_parts becomes an empty array, not undefined.
+         */
         const payload = build_payload(JSON.stringify({ display_record: { title: 'OLD' } }), {
             title: 'NEW',
             is_compound: true,

@@ -1,26 +1,28 @@
 'use strict';
 
-// Initial schema for the `repo_queue` database — tbl_ingest_queue +
-// tbl_metadata_update_queue.
-//
-// Idempotency notes specific to repo_queue:
-//
-//   - tbl_ingest_queue ships in legacy production (created from
-//     /repo_queue-schema.sql). hasTable guards make this migration
-//     a no-op there. New deploys get a fresh table with v2's shape.
-//
-//   - tbl_metadata_update_queue ALSO ships in legacy production, but
-//     WITHOUT the composite (batch_uuid, is_complete, id) index that
-//     v2's metadata worker hot-path expects. The initial migration
-//     creates the table with the index on fresh installs. To add
-//     the index to a legacy production DB AFTER baseline, write a
-//     follow-up migration (something like 20260101000002_add_metadata_queue_indexes.js)
-//     using knex.raw('CREATE INDEX IF NOT EXISTS …') so it's
-//     idempotent on legacy + fresh.
-//
-// See knex/migrations/repo/20260101000001_initial.js for the broader
-// migration-file rules (don't edit after deploy, add new files for
-// changes, etc.).
+/*
+ * Initial schema for the `repo_queue` database — tbl_ingest_queue +
+ * tbl_metadata_update_queue.
+ * 
+ * Idempotency notes specific to repo_queue:
+ * 
+ *   - tbl_ingest_queue ships in legacy production (created from
+ *     /repo_queue-schema.sql). hasTable guards make this migration
+ *     a no-op there. New deploys get a fresh table with v2's shape.
+ * 
+ *   - tbl_metadata_update_queue ALSO ships in legacy production, but
+ *     WITHOUT the composite (batch_uuid, is_complete, id) index that
+ *     v2's metadata worker hot-path expects. The initial migration
+ *     creates the table with the index on fresh installs. To add
+ *     the index to a legacy production DB AFTER baseline, write a
+ *     follow-up migration (something like 20260101000002_add_metadata_queue_indexes.js)
+ *     using knex.raw('CREATE INDEX IF NOT EXISTS …') so it's
+ *     idempotent on legacy + fresh.
+ * 
+ * See knex/migrations/repo/20260101000001_initial.js for the broader
+ * migration-file rules (don't edit after deploy, add new files for
+ * changes, etc.).
+ */
 
 const tables = require('../../../config/db_tables');
 
@@ -54,12 +56,14 @@ exports.up = async function up(knex) {
         });
     }
 
-    // tbl_metadata_update_queue:
-    //   Status lifecycle: PENDING → IN_PROGRESS → RECORD_UPDATED →
-    //   COMPLETE | CANCELLED. The composite (batch_uuid, is_complete,
-    //   id) index serves the worker's claim query; (status,
-    //   is_complete) supports the orphan-recovery scan that runs on
-    //   worker boot. See metadata/model.js for query shapes.
+    /*
+     * tbl_metadata_update_queue:
+     *   Status lifecycle: PENDING → IN_PROGRESS → RECORD_UPDATED →
+     *   COMPLETE | CANCELLED. The composite (batch_uuid, is_complete,
+     *   id) index serves the worker's claim query; (status,
+     *   is_complete) supports the orphan-recovery scan that runs on
+     *   worker boot. See metadata/model.js for query shapes.
+     */
     if (!(await knex.schema.hasTable(tables.metadata_update_queue))) {
         await knex.schema.createTable(tables.metadata_update_queue, (t) => {
             t.increments('id').primary();

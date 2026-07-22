@@ -1,16 +1,18 @@
 'use strict';
 
-// Layer 3: HMAC-SHA256 signature verification.
-//
-// The upstream proxy computes:
-//     signature = hex( HMAC-SHA256(employeeID + '|' + timestamp + '|' + nonce, secret) )
-// and includes it in the POST body. Backend recomputes locally and
-// compares via constant-time equality.
-//
-// Two-secret rollover: if SSO_HMAC_SECRET_NEXT is also configured,
-// either secret produces a valid signature. Set the new secret as
-// "next", deploy, then promote it to "current" once upstream is
-// signing with it. Removes downtime from rotation.
+/*
+ * Layer 3: HMAC-SHA256 signature verification.
+ * 
+ * The upstream proxy computes:
+ *     signature = hex( HMAC-SHA256(employeeID + '|' + timestamp + '|' + nonce, secret) )
+ * and includes it in the POST body. Backend recomputes locally and
+ * compares via constant-time equality.
+ * 
+ * Two-secret rollover: if SSO_HMAC_SECRET_NEXT is also configured,
+ * either secret produces a valid signature. Set the new secret as
+ * "next", deploy, then promote it to "current" once upstream is
+ * signing with it. Removes downtime from rotation.
+ */
 
 const { createHmac, timingSafeEqual } = require('node:crypto');
 
@@ -72,8 +74,10 @@ function verify(body, secrets) {
             sign(String(body.employeeID), String(body.timestamp), String(body.nonce), secret),
             'hex'
         );
-        // timingSafeEqual requires equal-length buffers; provided is
-        // already guaranteed 32 bytes.
+        /*
+         * timingSafeEqual requires equal-length buffers; provided is
+         * already guaranteed 32 bytes.
+         */
         if (provided.length === expected.length && timingSafeEqual(provided, expected)) {
             return true;
         }

@@ -11,9 +11,11 @@ describe('GET /repo/health', () => {
         app = make_app();
     });
     beforeEach(() => {
-        // Start each test from a clean registry, then re-add the DB
-        // checks the factory normally would. This isolates extra checks
-        // a test adds while keeping the DB-check baseline deterministic.
+        /*
+         * Start each test from a clean registry, then re-add the DB
+         * checks the factory normally would. This isolates extra checks
+         * a test adds while keeping the DB-check baseline deterministic.
+         */
         health.clear();
         db_health.register_all();
     });

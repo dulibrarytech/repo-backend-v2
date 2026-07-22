@@ -6,9 +6,11 @@ const express = require('express');
 const { login_limiter, write_limiter } = require('../../auth/rate_limit');
 const request_id = require('../../libs/request_id');
 
-// The Phase 1 app surface has no auth endpoints yet (Phase 3 lands
-// auth/login etc.). To prove the limiter is production-shaped, we mount
-// it against a minimal app that simulates the eventual endpoint.
+/*
+ * The Phase 1 app surface has no auth endpoints yet (Phase 3 lands
+ * auth/login etc.). To prove the limiter is production-shaped, we mount
+ * it against a minimal app that simulates the eventual endpoint.
+ */
 function build_protected_app() {
     const app = express();
     app.use(express.json());
@@ -62,9 +64,11 @@ describe('rate limiting end-to-end', () => {
     });
 
     it('different IPs do not share a budget (validate trustProxy disabled)', async () => {
-        // express-rate-limit keys by req.ip. supertest reuses the same
-        // socket so we can't easily fake IPs without trust proxy on. This
-        // test just asserts the limiter exists with an expected shape.
+        /*
+         * express-rate-limit keys by req.ip. supertest reuses the same
+         * socket so we can't easily fake IPs without trust proxy on. This
+         * test just asserts the limiter exists with an expected shape.
+         */
         const mw = login_limiter({ limit: 1 });
         expect(typeof mw).toBe('function');
         expect(mw.length).toBe(3);

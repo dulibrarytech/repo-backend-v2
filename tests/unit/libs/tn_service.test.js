@@ -1,9 +1,11 @@
 'use strict';
 
-// Unit tests for libs/tn_service. Tested via create_client(http) with
-// an injected fake HTTP so the full path (cache miss → fetch → cache
-// → hit) runs without network. The disk cache uses a per-test temp
-// directory so tests are isolated and parallel-safe.
+/*
+ * Unit tests for libs/tn_service. Tested via create_client(http) with
+ * an injected fake HTTP so the full path (cache miss → fetch → cache
+ * → hit) runs without network. The disk cache uses a per-test temp
+ * directory so tests are isolated and parallel-safe.
+ */
 
 const fs = require('node:fs');
 const fs_async = require('node:fs/promises');
@@ -77,8 +79,10 @@ describe('libs/tn_service', () => {
         it('URL-encodes pid and api_key', () => {
             process.env.TN_SERVICE_API_KEY = 'a/b+c=d';
             app_config._reset();
-            // weird chars in pid wouldn't normally happen (validator
-            // gates UUIDs upstream), but defense-in-depth.
+            /*
+             * weird chars in pid wouldn't normally happen (validator
+             * gates UUIDs upstream), but defense-in-depth.
+             */
             const url = tn_module.build_endpoint('pid/with/slashes');
             expect(url).toBe(
                 'https://tn.example/svc/datastream/pid%2Fwith%2Fslashes/tn?key=a%2Fb%2Bc%3Dd'
@@ -114,8 +118,10 @@ describe('libs/tn_service', () => {
 
         it('normalizes ArrayBuffer-typed responses to Buffer', async () => {
             const http = make_fake_http();
-            // Some axios versions return a typed array; ensure we
-            // convert to a Node Buffer regardless.
+            /*
+             * Some axios versions return a typed array; ensure we
+             * convert to a Node Buffer regardless.
+             */
             const arr = new Uint8Array([1, 2, 3]).buffer;
             http.set_response({ status: 200, data: arr, headers: {} });
             const client = tn_module.create_client(http);
@@ -205,8 +211,10 @@ describe('libs/tn_service', () => {
         });
 
         it('write-cache failures do not break the request', async () => {
-            // Point the cache at a non-writable path (a regular file
-            // we'll pretend is the cache dir — mkdir will fail).
+            /*
+             * Point the cache at a non-writable path (a regular file
+             * we'll pretend is the cache dir — mkdir will fail).
+             */
             const blocked = path.join(tempdir, 'blocked');
             await fs_async.writeFile(blocked, 'not a directory');
             process.env.TN_CACHE_PATH = path.join(blocked, 'cant-go-here');
@@ -241,8 +249,10 @@ describe('libs/tn_service', () => {
         });
 
         it('after invalidation, the next get_thumbnail call refetches', async () => {
-            // First fetch → cache → invalidate → second fetch should
-            // hit the network again, not the deleted cache file.
+            /*
+             * First fetch → cache → invalidate → second fetch should
+             * hit the network again, not the deleted cache file.
+             */
             const http = make_fake_http();
             http.set_response({
                 status: 200,
@@ -268,9 +278,11 @@ describe('libs/tn_service', () => {
 
         it('returns invalidated:false when no cache_path is configured', async () => {
             delete process.env.TN_CACHE_PATH;
-            // The default in config/app.js fills in a value, so to
-            // actually drop the cache_path we need an explicit empty
-            // string — that's what disables caching.
+            /*
+             * The default in config/app.js fills in a value, so to
+             * actually drop the cache_path we need an explicit empty
+             * string — that's what disables caching.
+             */
             process.env.TN_CACHE_PATH = '';
             app_config._reset();
             const result = await tn_module.invalidate_cache('pid-nocfg');

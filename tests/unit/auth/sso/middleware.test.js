@@ -4,11 +4,13 @@ const middleware = require('../../../../auth/sso/middleware');
 const app_config = require('../../../../config/app');
 const { ForbiddenError } = require('../../../../libs/errors');
 
-// IMPORTANT: must be async with `return await fn()`. With the sync form
-// `try { return fn(); }`, the finally block fires synchronously the
-// moment fn returns its Promise — before any await inside fn resolves.
-// The first run inside the test sees the env; everything after sees
-// the restored env. Quietly produces false-pass results.
+/*
+ * IMPORTANT: must be async with `return await fn()`. With the sync form
+ * `try { return fn(); }`, the finally block fires synchronously the
+ * moment fn returns its Promise — before any await inside fn resolves.
+ * The first run inside the test sees the env; everything after sees
+ * the restored env. Quietly produces false-pass results.
+ */
 async function with_env(overrides, fn) {
     const saved = {};
     for (const k of Object.keys(overrides)) {

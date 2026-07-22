@@ -1,10 +1,12 @@
 'use strict';
 
-// Unit tests for api/model.js. The query builder + result projection
-// are pure functions, so most tests are direct calls without any
-// fake-ES setup. The integration of those pieces through the model
-// surface uses a tiny fake ES client that records calls + returns
-// scripted responses.
+/*
+ * Unit tests for api/model.js. The query builder + result projection
+ * are pure functions, so most tests are direct calls without any
+ * fake-ES setup. The integration of those pieces through the model
+ * surface uses a tiny fake ES client that records calls + returns
+ * scripted responses.
+ */
 
 const { randomUUID } = require('node:crypto');
 
@@ -38,9 +40,9 @@ function make_fake_es() {
 const make_thumbnail_url = (pid) => `/repo/api/v1/objects/${pid}/thumbnail`;
 
 describe('api/model — build_query', () => {
-    it('always pins is_published=true (eligibility defense-in-depth)', () => {
+    it('always pins is_published=1 (eligibility defense-in-depth)', () => {
         const q = model_module.build_query({});
-        expect(q.bool.filter).toContainEqual({ term: { is_published: true } });
+        expect(q.bool.filter).toContainEqual({ term: { is_published: 1 } });
     });
 
     it('returns match_all when no q is given', () => {
@@ -48,12 +50,12 @@ describe('api/model — build_query', () => {
         expect(q.bool.must).toEqual([{ match_all: {} }]);
     });
 
-    it('builds a multi_match against title/abstract/subjects when q present', () => {
+    it('builds a multi_match against title/abstract/f_subjects when q present', () => {
         const q = model_module.build_query({ q: 'tuberculosis' });
         expect(q.bool.must[0]).toEqual({
             multi_match: {
                 query: 'tuberculosis',
-                fields: ['title^3', 'abstract', 'subjects'],
+                fields: ['title^3', 'abstract', 'f_subjects'],
                 type: 'best_fields',
             },
         });
@@ -95,10 +97,10 @@ describe('api/model — build_query', () => {
         expect(() => model_module.build_query({ object_type: 'video' })).toThrow(ValidationError);
     });
 
-    it('builds a terms filter on subjects (OR semantics)', () => {
+    it('builds a terms filter on f_subjects.keyword (OR semantics)', () => {
         const q = model_module.build_query({ subject: ['Photography', 'Tuberculosis'] });
         expect(q.bool.filter).toContainEqual({
-            terms: { subjects: ['Photography', 'Tuberculosis'] },
+            terms: { 'f_subjects.keyword': ['Photography', 'Tuberculosis'] },
         });
     });
 
@@ -107,11 +109,11 @@ describe('api/model — build_query', () => {
         expect(() => model_module.build_query({ subject: huge })).toThrow(ValidationError);
     });
 
-    it('builds a boolean filter on is_compound', () => {
+    it('builds an integer (0/1) filter on is_compound', () => {
         const yes = model_module.build_query({ is_compound: 'true' });
-        expect(yes.bool.filter).toContainEqual({ term: { is_compound: true } });
+        expect(yes.bool.filter).toContainEqual({ term: { is_compound: 1 } });
         const no = model_module.build_query({ is_compound: 'false' });
-        expect(no.bool.filter).toContainEqual({ term: { is_compound: false } });
+        expect(no.bool.filter).toContainEqual({ term: { is_compound: 0 } });
     });
 
     it('rejects non-boolean is_compound values', () => {
@@ -125,7 +127,7 @@ describe('api/model — build_query', () => {
             collection: '',
         });
         // Only the always-present eligibility filter.
-        expect(q.bool.filter).toEqual([{ term: { is_published: true } }]);
+        expect(q.bool.filter).toEqual([{ term: { is_published: 1 } }]);
     });
 });
 
@@ -150,33 +152,89 @@ describe('api/model — build_sort', () => {
 });
 
 describe('api/model — project_to_public', () => {
+    /*
+     * New 2-level index shape: denormalized fields top-level, raw ASpace
+     * record (with uri) under display_record.
+     */
     const doc = {
         pid: 'p1',
         title: 'Hello',
+        creator: 'Doe, Jane',
         abstract: 'World',
         handle: 'https://hdl/x',
-        uri: '/r/1',
         object_type: 'object',
         mime_type: 'image/tiff',
-        is_compound: true,
+        type: 'still image',
+        is_compound: 1,
         is_member_of_collection: 'col-1',
-        subjects: ['A', 'B'],
-        created: '2024-01-01',
+        f_subjects: ['A', 'B'],
+        object: 'dip/objects/x.tif',
         thumbnail: 'archivematica/foo.jpg',
         sip_uuid: 'OPERATIONAL_LEAK_SHOULD_NOT_SHOW',
-        display_record: { title: 'deep' },
+        display_record: { title: 'deep', uri: '/r/1' },
     };
 
-    it('produces a list-shaped projection (no display_record)', () => {
-        const out = model_module.project_to_public(doc, 'list', make_thumbnail_url);
+    it('mirrors the index field names (creator/f_subjects/type/object) and booleanizes is_compound', () => {
+        const out = model_module.project_to_public(doc, 'detail', make_thumbnail_url);
         expect(out.pid).toBe('p1');
+        expect(out.creator).toBe('Doe, Jane');
+        expect(out.f_subjects).toEqual(['A', 'B']);
+        expect(out.type).toBe('still image');
+        expect(out.object).toBe('dip/objects/x.tif');
+        // index stores integer 1/0; the API exposes a JS boolean.
+        expect(out.is_compound).toBe(true);
         expect(out.thumbnail_url).toBe('/repo/api/v1/objects/p1/thumbnail');
-        expect(out.display_record).toBeUndefined();
     });
 
-    it('produces a detail-shaped projection (with display_record)', () => {
+    it('produces a list-shaped projection (no display_record envelope)', () => {
+        const out = model_module.project_to_public(doc, 'list', make_thumbnail_url);
+        expect(out.display_record).toBeUndefined();
+        // top-level facet field is still present in the slim form.
+        expect(out.f_subjects).toEqual(['A', 'B']);
+    });
+
+    it('produces a detail-shaped projection with the raw record + uri sourced from it', () => {
         const out = model_module.project_to_public(doc, 'detail', make_thumbnail_url);
-        expect(out.display_record).toEqual({ title: 'deep' });
+        expect(out.display_record).toEqual({ title: 'deep', uri: '/r/1' });
+        // uri lives inside display_record now; surfaced on the detail endpoint.
+        expect(out.uri).toBe('/r/1');
+    });
+
+    it('returns uri=null on a slim list doc (display_record excluded from _source)', () => {
+        const slim = { pid: 'p', f_subjects: [] };
+        const out = model_module.project_to_public(slim, 'list', make_thumbnail_url);
+        expect(out.uri).toBeNull();
+    });
+
+    it('surfaces a Kaltura entry_id only when present', () => {
+        const withId = model_module.project_to_public(
+            { ...doc, entry_id: 'kalt-1' },
+            'list',
+            make_thumbnail_url
+        );
+        expect(withId.entry_id).toBe('kalt-1');
+        expect('entry_id' in model_module.project_to_public(doc, 'list', make_thumbnail_url)).toBe(
+            false
+        );
+    });
+
+    it('handles the stripped collection shape (no object-only fields)', () => {
+        const coll = {
+            pid: 'c1',
+            object_type: 'collection',
+            title: 'Coll',
+            abstract: 'A',
+            handle: 'h',
+            is_published: 1,
+            is_member_of_collection: 'root',
+            display_record: { title: 'Coll', abstract: 'A' },
+        };
+        const out = model_module.project_to_public(coll, 'detail', make_thumbnail_url);
+        expect(out.object_type).toBe('collection');
+        expect(out.creator).toBeNull();
+        expect(out.type).toBeNull();
+        expect(out.object).toBeNull();
+        expect(out.f_subjects).toEqual([]);
     });
 
     it('NEVER includes sip_uuid (operational metadata)', () => {
@@ -191,13 +249,13 @@ describe('api/model — project_to_public', () => {
         expect(model_module.project_to_public(undefined, 'detail', make_thumbnail_url)).toBeNull();
     });
 
-    it('normalizes missing subjects to an empty array', () => {
+    it('normalizes missing f_subjects to an empty array', () => {
         const out = model_module.project_to_public(
-            { pid: 'p', subjects: undefined },
+            { pid: 'p', f_subjects: undefined },
             'list',
             make_thumbnail_url
         );
-        expect(out.subjects).toEqual([]);
+        expect(out.f_subjects).toEqual([]);
     });
 });
 
@@ -244,20 +302,20 @@ describe('api/model — model surface (search/get/list/eligible)', () => {
         expect(es.calls[0].opts.size).toBe(100);
     });
 
-    it('get: returns detail projection when doc has is_published=true', async () => {
+    it('get: returns detail projection when doc has is_published=1', async () => {
         const pid = randomUUID();
         const es = make_fake_es();
-        es.set_get({ pid, title: 'X', is_published: true });
+        es.set_get({ pid, title: 'X', is_published: 1 });
         const m = model_module.create_model({ es });
         const r = await m.get(pid, { make_thumbnail_url });
         expect(r.pid).toBe(pid);
         expect(r.title).toBe('X');
     });
 
-    it('get: returns null when doc.is_published is not true (defense in depth)', async () => {
+    it('get: returns null when doc is not published (is_published=0, defense in depth)', async () => {
         const pid = randomUUID();
         const es = make_fake_es();
-        es.set_get({ pid, title: 'X', is_published: false });
+        es.set_get({ pid, title: 'X', is_published: 0 });
         const m = model_module.create_model({ es });
         const r = await m.get(pid, { make_thumbnail_url });
         expect(r).toBeNull();
@@ -288,17 +346,17 @@ describe('api/model — model surface (search/get/list/eligible)', () => {
         expect(opts.query.bool.filter).toContainEqual({
             term: { object_type: 'collection' },
         });
-        expect(opts.query.bool.filter).toContainEqual({ term: { is_published: true } });
+        expect(opts.query.bool.filter).toContainEqual({ term: { is_published: 1 } });
         expect(opts.sort).toEqual([{ 'title.keyword': 'asc' }]);
     });
 
-    it('is_eligible: true iff doc.is_published is strictly true', async () => {
+    it('is_eligible: true iff doc.is_published is truthy (integer 1)', async () => {
         const pid = randomUUID();
         const es = make_fake_es();
         const m = model_module.create_model({ es });
-        es.set_get({ pid, is_published: true });
+        es.set_get({ pid, is_published: 1 });
         expect(await m.is_eligible(pid)).toBe(true);
-        es.set_get({ pid, is_published: false });
+        es.set_get({ pid, is_published: 0 });
         expect(await m.is_eligible(pid)).toBe(false);
         es.set_get(null);
         expect(await m.is_eligible(pid)).toBe(false);

@@ -1,7 +1,9 @@
 'use strict';
 
-// End-to-end SSO callback flow. Drives the full Express factory via
-// supertest with each defense layer toggled independently.
+/*
+ * End-to-end SSO callback flow. Drives the full Express factory via
+ * supertest with each defense layer toggled independently.
+ */
 
 const supertest = require('supertest');
 const { make_app } = require('../helpers/app');
@@ -419,11 +421,13 @@ describe('SSO callback — e2e', () => {
     });
 
     describe('Layer 1: IP allowlist (route-level)', () => {
-        // Note: supertest doesn't easily spoof req.ip without trust-proxy
-        // setup. The unit tests in tests/unit/auth/sso/middleware.test.js
-        // exercise the matcher directly. Here we just confirm the
-        // middleware is mounted: a non-empty allowlist that excludes
-        // 127.0.0.1 should block.
+        /*
+         * Note: supertest doesn't easily spoof req.ip without trust-proxy
+         * setup. The unit tests in tests/unit/auth/sso/middleware.test.js
+         * exercise the matcher directly. Here we just confirm the
+         * middleware is mounted: a non-empty allowlist that excludes
+         * 127.0.0.1 should block.
+         */
         it('blocks when the local source IP is not in the allowlist', async () => {
             const restore = with_env({
                 SSO_HOST: 'authproxy.example.invalid',
@@ -519,8 +523,10 @@ describe('SSO callback — e2e', () => {
                 const app = make_app();
                 const res = await supertest(app).get('/repo/dashboard/login');
                 expect(res.status).toBe(200);
-                // SSO button is the only login surface. Match the link
-                // text + the start-handler URL it points at.
+                /*
+                 * SSO button is the only login surface. Match the link
+                 * text + the start-handler URL it points at.
+                 */
                 expect(res.text).toMatch(/\/repo\/auth\/sso\/start/);
                 expect(res.text).toMatch(/>\s*Sign in\s*<\/a>/);
                 // "SSO not configured" warning must NOT show when it is.

@@ -1,9 +1,11 @@
 'use strict';
 
-// Batch-rollup model — system-refresh batch CRUD + the worker's
-// terminal-transition logic (on_row_terminal). Mostly DB-shape and
-// state-machine assertions; the producer's tick-by-tick flow is
-// covered in producer.test.js.
+/*
+ * Batch-rollup model — system-refresh batch CRUD + the worker's
+ * terminal-transition logic (on_row_terminal). Mostly DB-shape and
+ * state-machine assertions; the producer's tick-by-tick flow is
+ * covered in producer.test.js.
+ */
 
 const batches = require('../../../metadata/batches');
 const db_helper = require('../../helpers/db');
@@ -19,8 +21,10 @@ describe('metadata/batches', () => {
     });
     beforeEach(async () => {
         await db_helper.reset_data();
-        // Re-export config defaults so transformer_flag captured at
-        // batch start is deterministic.
+        /*
+         * Re-export config defaults so transformer_flag captured at
+         * batch start is deterministic.
+         */
         delete process.env.ASPACE_USE_TRANSFORMER;
         delete process.env.ASPACE_TRANSFORMER_VERSION;
         require('../../../config/app')._reset();
@@ -31,10 +35,12 @@ describe('metadata/batches', () => {
 
     describe('actor name resolution', () => {
         it('resolves actor_name from tbl_users by du_id at write time', async () => {
-            // The dashboard JWT carries du_id but NOT first/last
-            // name. create_batch looks the name up so the admin
-            // listing renders "by Ada Lovelace" instead of "by
-            // <du_id-string>".
+            /*
+             * The dashboard JWT carries du_id but NOT first/last
+             * name. create_batch looks the name up so the admin
+             * listing renders "by Ada Lovelace" instead of "by
+             * <du_id-string>".
+             */
             await db_helper.seed_user({
                 du_id: 'ada-001',
                 first_name: 'Ada',
@@ -47,9 +53,11 @@ describe('metadata/batches', () => {
         });
 
         it("falls back to the user's email when no name is on file", async () => {
-            // Bypass the seed_user helper here — its defaults
-            // replace empty strings with 'Test'/'User', which would
-            // mask the empty-name fallback we want to test.
+            /*
+             * Bypass the seed_user helper here — its defaults
+             * replace empty strings with 'Test'/'User', which would
+             * mask the empty-name fallback we want to test.
+             */
             const { db } = require('../../../config/db');
             await db()(tables.users).insert({
                 du_id: 'svc-only',
@@ -72,8 +80,10 @@ describe('metadata/batches', () => {
         });
 
         it('honors an explicit actor_name from the caller without re-looking-up', async () => {
-            // An override path lets the controller pre-resolve if it
-            // already has the display name in scope.
+            /*
+             * An override path lets the controller pre-resolve if it
+             * already has the display name in scope.
+             */
             const uuid = await batches.create_batch({
                 actor: 'someone',
                 actor_name: 'Manually Supplied',
@@ -123,9 +133,11 @@ describe('metadata/batches', () => {
         });
 
         it('inherit_cursor_id starts the new batch at the supplied cursor', async () => {
-            // Caller-supplied cursor — the controller passes this
-            // value from get_last_cancelled_cursor() when the
-            // operator opts into resume on the start form.
+            /*
+             * Caller-supplied cursor — the controller passes this
+             * value from get_last_cancelled_cursor() when the
+             * operator opts into resume on the start form.
+             */
             const uuid = await batches.create_batch({
                 inherit_cursor_id: 12345,
             });
@@ -160,8 +172,10 @@ describe('metadata/batches', () => {
         });
 
         it('returns null when the most recent cancelled batch never advanced its cursor', async () => {
-            // Edge case: cancelled before the producer's first
-            // tick. cursor_id stays NULL → nothing to resume from.
+            /*
+             * Edge case: cancelled before the producer's first
+             * tick. cursor_id stays NULL → nothing to resume from.
+             */
             const uuid = await batches.create_batch();
             await db_queue()(BATCHES)
                 .where({ batch_uuid: uuid })
@@ -193,21 +207,25 @@ describe('metadata/batches', () => {
             await db_queue()(BATCHES)
                 .where({ batch_uuid: completed })
                 .update({ status: 'completed', cursor_id: 999 });
-            // get_last_cancelled_cursor must return the CANCELLED
-            // batch even though the completed one has a higher
-            // cursor / later id.
+            /*
+             * get_last_cancelled_cursor must return the CANCELLED
+             * batch even though the completed one has a higher
+             * cursor / later id.
+             */
             const got = await batches.get_last_cancelled_cursor();
             expect(got).toEqual({ batch_uuid: cancelled, cursor_id: 50 });
         });
 
-        // Bug scenario: producer had finished enqueueing every active
-        // object (cursor at max_id) but the worker only got through a
-        // fraction before the operator cancelled. Resuming naively
-        // from the producer's cursor would read 0 rows and the new
-        // batch would flip straight to 'completed' with total=0,
-        // silently abandoning every un-processed object. The fix
-        // returns a cursor positioned just BELOW the lowest active
-        // object whose pid wasn't terminally processed.
+        /*
+         * Bug scenario: producer had finished enqueueing every active
+         * object (cursor at max_id) but the worker only got through a
+         * fraction before the operator cancelled. Resuming naively
+         * from the producer's cursor would read 0 rows and the new
+         * batch would flip straight to 'completed' with total=0,
+         * silently abandoning every un-processed object. The fix
+         * returns a cursor positioned just BELOW the lowest active
+         * object whose pid wasn't terminally processed.
+         */
         it('returns a cursor that re-enqueues objects the worker did not finalize', async () => {
             const tables = require('../../../config/db_tables');
             const { db } = require('../../../config/db');
@@ -218,9 +236,11 @@ describe('metadata/batches', () => {
                 objs.push(await db_helper.seed_object({ uri: `/repositories/2/digital_objects/${i}` }));
             }
 
-            // Cancelled batch whose producer had walked past the
-            // last object (cursor at the table max). The worker
-            // only terminalised the first two pids before cancel.
+            /*
+             * Cancelled batch whose producer had walked past the
+             * last object (cursor at the table max). The worker
+             * only terminalised the first two pids before cancel.
+             */
             const cancelled = await batches.create_batch();
             const last_object_id = Number(
                 (await db()(tables.objects).max('id as m').first()).m
@@ -257,9 +277,11 @@ describe('metadata/batches', () => {
             ]);
 
             const got = await batches.get_last_cancelled_cursor();
-            // Resume cursor = id of first unprocessed (objs[2]) - 1
-            // so the producer's `id > cursor_id` predicate picks
-            // that row up on its first tick.
+            /*
+             * Resume cursor = id of first unprocessed (objs[2]) - 1
+             * so the producer's `id > cursor_id` predicate picks
+             * that row up on its first tick.
+             */
             expect(got).toEqual({
                 batch_uuid: cancelled,
                 cursor_id: objs[2].id - 1,
@@ -286,18 +308,22 @@ describe('metadata/batches', () => {
                 priority: 5,
                 attempts: 1,
             });
-            // Nothing left to re-enqueue → return the producer cursor;
-            // the producer's no-rows tick will close out the new batch
-            // honestly (which is correct: there's no work to do).
+            /*
+             * Nothing left to re-enqueue → return the producer cursor;
+             * the producer's no-rows tick will close out the new batch
+             * honestly (which is correct: there's no work to do).
+             */
             const got = await batches.get_last_cancelled_cursor();
             expect(got).toEqual({ batch_uuid: cancelled, cursor_id: 999 });
         });
 
         it('uses the producer cursor when the worker never finalised any row', async () => {
-            // Cancelled before any IN_PROGRESS row reached terminal.
-            // request_cancel deleted every PENDING row, so the queue
-            // has nothing tied to this batch_uuid. The producer
-            // cursor is the best signal we have.
+            /*
+             * Cancelled before any IN_PROGRESS row reached terminal.
+             * request_cancel deleted every PENDING row, so the queue
+             * has nothing tied to this batch_uuid. The producer
+             * cursor is the best signal we have.
+             */
             await db_helper.seed_object({ uri: '/repositories/2/digital_objects/seeded' });
             const cancelled = await batches.create_batch();
             await db_queue()(BATCHES)
@@ -319,8 +345,10 @@ describe('metadata/batches', () => {
             });
             expect(r1.affected).toBe(1);
 
-            // Stale producer B thinks cursor is still null — should
-            // be rejected by the CAS.
+            /*
+             * Stale producer B thinks cursor is still null — should
+             * be rejected by the CAS.
+             */
             const r2 = await batches.advance_cursor(uuid, {
                 expected_cursor_id: null,
                 new_cursor_id: 200,
@@ -377,8 +405,10 @@ describe('metadata/batches', () => {
             // Producer still enqueuing — enqueue_complete=false.
             await batches.on_row_terminal(uuid, 'succeeded');
             const row = await db_queue()(BATCHES).where({ batch_uuid: uuid }).first();
-            // sum=1, total=1, but enqueue_complete=false → stay
-            // running.
+            /*
+             * sum=1, total=1, but enqueue_complete=false → stay
+             * running.
+             */
             expect(row.status).toBe('running');
         });
 
@@ -427,11 +457,13 @@ describe('metadata/batches', () => {
 
     describe('complete_if_empty', () => {
         it('transitions a running+enqueue_complete+total=0 batch to completed', async () => {
-            // The empty-batch scenario: a resume that started past
-            // max(tbl_objects.id) → producer's first tick finds no
-            // rows → sets enqueue_complete=true → total stays 0.
-            // Without complete_if_empty the batch sits at 'running'
-            // forever (no on_row_terminal can fire to transition it).
+            /*
+             * The empty-batch scenario: a resume that started past
+             * max(tbl_objects.id) → producer's first tick finds no
+             * rows → sets enqueue_complete=true → total stays 0.
+             * Without complete_if_empty the batch sits at 'running'
+             * forever (no on_row_terminal can fire to transition it).
+             */
             const uuid = await batches.create_batch();
             await db_queue()(BATCHES)
                 .where({ batch_uuid: uuid })
@@ -460,8 +492,10 @@ describe('metadata/batches', () => {
 
         it('does NOT transition a batch that has not finished enqueuing', async () => {
             const uuid = await batches.create_batch();
-            // total=0 but enqueue_complete=false → producer might
-            // still be working. Don't preempt.
+            /*
+             * total=0 but enqueue_complete=false → producer might
+             * still be working. Don't preempt.
+             */
             await db_queue()(BATCHES)
                 .where({ batch_uuid: uuid })
                 .update({ enqueue_complete: false, total: 0 });
