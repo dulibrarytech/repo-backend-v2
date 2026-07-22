@@ -137,7 +137,7 @@ External: DU SSO (auth) · ArchivesSpace (metadata) · Archivematica + Storage S
 | **ArchivesSpace**             | Source of truth for descriptive metadata. On-demand + system-wide refresh both fetch from here.   |
 | **DuraCloud**                 | Active storage tier for AIPs (post-AM). Thumbnail proxy reads legacy thumbnails from here.        |
 | **Wasabi S3** (`library-repository/aip-store/`) | Preservation tier. Stage 6 + backfill copy AIPs here via the curation API.            |
-| **Curation API** (Python)     | Wasabi gatekeeper. Holds the boto3 credentials; v2 talks HTTP to it for both SFTP-staging and AIP copies. Also owns AM-folder QA. |
+| **[Curation API](https://github.com/dulibrarytech/digitaldu-backend-curation-service)** (Python) | Wasabi gatekeeper. Holds the boto3 credentials; v2 talks HTTP to it for both SFTP-staging and AIP copies. Also owns AM-folder QA. |
 | **Handle service**            | Mints persistent identifiers per object.                                                          |
 | **TN service**                | Generates fresh thumbnails from source files.                                                     |
 | **Kaltura**                   | Streaming media for AV-bearing objects.                                                           |
@@ -157,6 +157,10 @@ Stage 6 (aip_store)        → Curation /copy-to-wasabi → AIP lands in library
 ```
 
 Stage 6 is gated by `AIP_STORE_ENABLED`. With the flag off, Stage 5 finalizes ingest the same way it did pre-Stage-6. The single-row AM gate at Stages 3–4 prevents AM from being overwhelmed by parallel transfers.
+
+### Companion service: curation API
+
+Package ingest is a two-service effort with [digitaldu-backend-curation-service](https://github.com/dulibrarytech/digitaldu-backend-curation-service), a Python API that owns the filesystem and storage operations this backend can't (or shouldn't) perform directly. During the pre-ingest workspace and Stage 2 it stages and QAs package folders on the Archivematica SFTP drop; during Stage 6 and AIP backfill it copies AIPs to Wasabi and mints the presigned download URLs the dashboard serves. It is the sole holder of the Wasabi (boto3) credentials — this backend carries only the `CURATION_API` URL and `CURATION_API_KEY`, and talks to it over HTTP under the `/api/v2/qa/*` and `/api/v2/aip/*` prefixes. Deploy the two services together: an ingest run cannot complete without both.
 
 ### System-wide metadata refresh
 
