@@ -19,25 +19,25 @@ Backend and staff dashboard for the University of Denver Libraries' digital repo
 
 <img src="docs/screenshots/01-dashboard-home.png" alt="Dashboard home" width="720">
 
-<br>
+<hr>
 
 **Objects browse — bulk publish, suppress, and metadata refresh**
 
 <img src="docs/screenshots/02-objects.png" alt="Objects browse" width="720">
 
-<br>
+<hr>
 
 **Pre-ingest workspace — Make Digital Objects, ASpace QA, Packaging**
 
 <img src="docs/screenshots/03-ingest-workspace.png" alt="Ingest workspace" width="720">
 
-<br>
+<hr>
 
 **Preservation tier — AIP browse and download**
 
 <img src="docs/screenshots/04-aips.png" alt="AIPs" width="720">
 
-<br>
+<hr>
 
 **Services health — live probes for every external dependency**
 
