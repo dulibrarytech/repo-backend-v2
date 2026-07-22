@@ -51,8 +51,9 @@ public/tn_cache/*
 *.sql
 *.sql.gz
 
-# Local docs and report exports
-docs/
+# Local docs and report exports (screenshots stay tracked for the README)
+docs/*
+!docs/screenshots/
 *.csv
 
 # Misc
