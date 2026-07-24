@@ -132,7 +132,10 @@ async function record_job({
  * dashboard history page.
  * 
  * `filters`:
- *   q                — substring match against collection_folder or job_uuid
+ *   q                — substring match against collection_folder or packages
+ *                      (packages is the JSON-array TEXT column, so a LIKE
+ *                      hits the package names inside it; staff search by
+ *                      folder or package, not by job id — 2026-07-24)
  *   job_type         — exact match
  *   status           — 'SUCCESSFUL' | 'FAILED'
  *   collection_folder — exact match (deep-link from a workspace row)
@@ -160,7 +163,7 @@ async function list_jobs(filters = {}, opts = {}) {
     if (filters.q) {
         const needle = `%${String(filters.q).trim()}%`;
         base.where(function () {
-            this.where('collection_folder', 'like', needle).orWhere('job_uuid', 'like', needle);
+            this.where('collection_folder', 'like', needle).orWhere('packages', 'like', needle);
         });
     }
 

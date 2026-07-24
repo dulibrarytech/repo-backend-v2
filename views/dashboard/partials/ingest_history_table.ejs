@@ -1,6 +1,8 @@
 <%
-    // Columns mirror the staff-provided screenshot:
-    //   Job ID | Job Type | Status | Collection Folder | Packages | Job Run By | Date
+    // Columns (2026-07-24: the old Job ID column is folded into Job Type —
+    // the full UUID sits under the type as a muted second line, so it no
+    // longer char-wraps in a narrow column and dictates row height):
+    //   Job Type (+ Job ID) | Status | Collection Folder | Packages | Job Run By | Date
     function fmt_ts(ts) {
         if (!ts) return '';
         var d = new Date(ts);
@@ -22,7 +24,6 @@
     <table class="queue-table">
         <thead>
             <tr>
-                <th>Job ID</th>
                 <th>Job Type</th>
                 <th>Status</th>
                 <th>Collection Folder</th>
@@ -37,13 +38,17 @@
             %>
                 <tr>
                     <td>
-                        <code class="font-monospace small"
-                              title="<%= row.job_uuid %>"
-                              style="word-break: break-all;">
-                            <%= row.job_uuid %>
-                        </code>
+                        <code class="font-monospace small"><%= row.job_type %></code>
+                        <%/* Full UUID as real selectable text (not a hover
+                             title — those are invisible to keyboard/touch).
+                             The visually-hidden prefix labels the bare string
+                             for screen readers now that there's no Job ID
+                             column header. Search matches substrings, so any
+                             fragment of this still filters. */%>
+                        <div class="text-muted small font-monospace">
+                            <span class="visually-hidden">Job ID: </span><%= row.job_uuid %>
+                        </div>
                     </td>
-                    <td><code class="font-monospace small"><%= row.job_type %></code></td>
                     <td>
                         <span class="sev-badge <%= status_class %>">
                             <%= row.status %>
@@ -70,12 +75,13 @@
                         <% } %>
                     </td>
                     <td>
+                        <%/* Show a person, never a du_id: the resolved name
+                             when we have one, else the raw actor ONLY if it's
+                             human-readable (email / "staff (ip)") — an
+                             all-digit du_id renders as the unknown dash. */%>
                         <% if (row.actor_name) { %>
                             <div><%= row.actor_name %></div>
-                            <% if (row.actor && row.actor !== row.actor_name) { %>
-                                <div class="text-muted small font-monospace"><%= row.actor %></div>
-                            <% } %>
-                        <% } else if (row.actor) { %>
+                        <% } else if (row.actor && !/^\d+$/.test(row.actor)) { %>
                             <code class="font-monospace small"><%= row.actor %></code>
                         <% } else { %>
                             <span class="text-muted small">—</span>

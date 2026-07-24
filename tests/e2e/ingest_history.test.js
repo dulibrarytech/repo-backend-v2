@@ -105,8 +105,13 @@ describe('ingest Job History — e2e', () => {
                 .get('/repo/dashboard/ingest/history/list')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            // Columns
-            expect(res.text).toContain('Job ID');
+            /*
+             * Columns. No standalone Job ID header — the UUID renders
+             * under Job Type as a muted line with a visually-hidden
+             * "Job ID:" label for screen readers (2026-07-24 merge).
+             */
+            expect(res.text).not.toMatch(/<th>Job ID<\/th>/);
+            expect(res.text).toMatch(/<span class="visually-hidden">Job ID: <\/span>/);
             expect(res.text).toContain('Job Type');
             expect(res.text).toContain('Status');
             expect(res.text).toContain('Collection Folder');

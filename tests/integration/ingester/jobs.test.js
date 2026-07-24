@@ -191,13 +191,22 @@ describe('ingester/jobs', () => {
             data.rows.forEach((r) => expect(r.collection_folder).toMatch(/col-2/i));
         });
 
-        it('q filter matches job_uuid prefix', async () => {
+        it('q filter matches a package-name substring', async () => {
+            /*
+             * 2026-07-24: q searches collection_folder + packages (the
+             * JSON-array TEXT column), replacing the old job_uuid match —
+             * staff search by folder or package, not by job id.
+             */
+            const data = await jobs.list_jobs({ q: 'p-2-0' });
+            expect(data.rows.length).toBeGreaterThanOrEqual(1);
+            data.rows.forEach((r) => expect(r.packages).toContain('p-2-0'));
+        });
+
+        it('q filter no longer matches job_uuid', async () => {
             const all = await jobs.list_jobs();
             const target = all.rows[0].job_uuid;
-            // Use the first 8 hex chars as a prefix.
             const data = await jobs.list_jobs({ q: target.slice(0, 8) });
-            expect(data.rows.length).toBeGreaterThanOrEqual(1);
-            expect(data.rows.find((r) => r.job_uuid === target)).toBeTruthy();
+            expect(data.rows.find((r) => r.job_uuid === target)).toBeFalsy();
         });
 
         it('paginates via limit + offset', async () => {
