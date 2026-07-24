@@ -40,7 +40,7 @@ function render_partial(req, res, view, locals = {}) {
 function render_page(req, res, view, locals = {}) {
     const cfg = app_config();
     const base_locals = {
-        title: locals.title || 'Indexer — Repository @ DU',
+        title: locals.title || 'Indexer — Digital Archives @ DU',
         app_path: cfg.path,
         dashboard_base: `${cfg.path}/dashboard`,
         static_base: `${cfg.path}/static`,
@@ -65,7 +65,7 @@ async function indexer_page(req, res) {
     render_page(req, res, 'dashboard/admin/indexer', {
         page: 'indexer',
         active: 'admin',
-        title: 'Indexer — Repository @ DU',
+        title: 'Indexer — Digital Archives @ DU',
     });
 }
 

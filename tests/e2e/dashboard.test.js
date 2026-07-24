@@ -84,8 +84,8 @@ describe('dashboard — e2e', () => {
         it('GET /login renders the standalone shell (no app chrome)', async () => {
             const res = await supertest(app).get('/repo/dashboard/login');
             expect(res.status).toBe(200);
-            // Header brand block shows "Repository @ DU"; H1 is "Sign in"
-            expect(res.text).toMatch(/Repository <span class="accent">@ DU<\/span>/);
+            // Header brand block shows "Digital Archives @ DU"; H1 is "Sign in"
+            expect(res.text).toMatch(/Digital Archives <span class="accent">@ DU<\/span>/);
             expect(res.text).toMatch(/<h1[^>]*>Sign in<\/h1>/);
             // login shell is standalone — no sidebar
             expect(res.text).not.toMatch(/class="app-sidebar"/);

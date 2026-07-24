@@ -42,7 +42,7 @@ const log = require('../libs/log');
 function render_page(req, res, view, locals = {}) {
     const cfg = app_config();
     const base_locals = {
-        title: locals.title || 'Ingest — Repository @ DU',
+        title: locals.title || 'Ingest — Digital Archives @ DU',
         app_path: cfg.path,
         dashboard_base: `${cfg.path}/dashboard`,
         static_base: `${cfg.path}/static`,
@@ -764,7 +764,7 @@ async function services_page(req, res) {
     render_page(req, res, 'dashboard/admin/services', {
         page: 'services',
         active: 'admin',
-        title: 'Services Health — Repository @ DU',
+        title: 'Services Health — Digital Archives @ DU',
     });
 }
 
