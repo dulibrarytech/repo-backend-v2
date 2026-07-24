@@ -11,6 +11,17 @@
      (col-sm-6), 1 on phone (default). Bootstrap's grid handles all
      the breakpoints. */%>
 
+<%/* Degraded-services banner — only when rendered AS the home page
+     (show_services_banner local from home_page). Lazy, non-blocking:
+     fetched after paint so a slow service probe can't delay the
+     landing page; renders nothing when every service is reachable. */%>
+<% if (typeof show_services_banner !== 'undefined' && show_services_banner) { %>
+<div id="services-banner"
+     hx-get="<%= dashboard_base %>/_services/banner"
+     hx-trigger="load"
+     hx-swap="outerHTML"></div>
+<% } %>
+
 <h1 class="page-title">Stats</h1>
 <p class="page-subtitle">
     Collection and object counts, storage usage, and ingest history

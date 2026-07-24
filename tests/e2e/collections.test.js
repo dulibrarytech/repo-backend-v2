@@ -143,7 +143,7 @@ describe('collections — e2e', () => {
                 .set('Cookie', cookie)
                 .expect(200);
             expect(res.text).toMatch(/href="\/repo\/dashboard\/collections"/);
-            expect(res.text).toMatch(/title="Collections"/);
+            expect(res.text).toMatch(/title="Manage Collections"/);
         });
 
         it('Collections list shell page renders with search + sort controls', async () => {
@@ -152,7 +152,7 @@ describe('collections — e2e', () => {
                 .get('/repo/dashboard/collections')
                 .set('Cookie', cookie)
                 .expect(200);
-            expect(res.text).toMatch(/<h1[^>]*>Collections<\/h1>/);
+            expect(res.text).toMatch(/<h1[^>]*>Manage Collections<\/h1>/);
             expect(res.text).toMatch(/id="collections-table"/);
             expect(res.text).toMatch(/name="sort"/);
             expect(res.text).toMatch(/name="q"/);

@@ -37,6 +37,12 @@
         // require_permission is the real enforcement; this just keeps the
         // nav honest so staff don't see links they can't use.)
         var allow = (typeof can === 'function') ? can : function () { return false; };
+        // TEMPORARY (2026-07-24) v1-familiar nav rollout: flip these back
+        // to true to restore the hidden icons. Stats is hidden because the
+        // stats view IS the home page for now (controller redirects
+        // /dashboard/stats → /dashboard/). AIPs and Admin Utils are hidden
+        // from the rail only — their routes stay live for direct URLs.
+        var nav_show = { stats: false, aips: false, admin_utils: false };
     %>
 
     <% if (in_workflow) { %>
@@ -289,6 +295,7 @@
              with the v1-style 12-card grid + ingests-per-year chart.
              Sits directly under Home because it's a content-management
              overview, not a per-collection or workflow surface. */%>
+        <% if (nav_show.stats) { %>
         <a href="<%= dashboard_base %>/stats"
            class="<%= active === 'stats' ? 'active' : '' %>"
            <% if (active === 'stats') { %>aria-current="page"<% } %>
@@ -302,13 +309,15 @@
                 <line x1="3" y1="20" x2="21" y2="20"/>
             </svg>
         </a>
+        <% } %>
 
-        <%/* Collections — stacked-layers icon. Primary staff entry point. */%>
+        <%/* Manage Collections — stacked-layers icon. Primary staff entry
+             point. Labelled "Manage Collections" (v1-familiar wording). */%>
         <a href="<%= dashboard_base %>/collections"
            class="<%= active === 'collections' ? 'active' : '' %>"
            <% if (active === 'collections') { %>aria-current="page"<% } %>
-           aria-label="Collections"
-           title="Collections">
+           aria-label="Manage Collections"
+           title="Manage Collections">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <polygon points="12 2 2 7 12 12 22 7 12 2"/>
@@ -354,6 +363,7 @@
              live AFTER (preservation tier). Visible in the main
              nav (not hidden behind Admin Utils) so staff verifying
              or recovering an AIP don't have to enter focus mode. */%>
+        <% if (nav_show.aips) { %>
         <a href="<%= dashboard_base %>/aips"
            class="<%= active === 'aips' ? 'active' : '' %>"
            <% if (active === 'aips') { %>aria-current="page"<% } %>
@@ -366,6 +376,7 @@
                 <line x1="10" y1="12" x2="14" y2="12"/>
             </svg>
         </a>
+        <% } %>
 
         <%/* Users — people icon. Admin-only (manage_users). */%>
         <% if (allow('manage_users')) { %>
@@ -390,7 +401,7 @@
              in place of this nav. No `active` class — by definition we're
              outside admin mode here. Admin-only — gated on manage_index
              (only admins hold it). */%>
-        <% if (allow('manage_index')) { %>
+        <% if (nav_show.admin_utils && allow('manage_index')) { %>
         <a href="<%= dashboard_base %>/admin/services"
            aria-label="Admin Utils"
            title="Admin Utils">

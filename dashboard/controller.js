@@ -182,6 +182,14 @@ async function logout(req, res) {
  * HOME
  * ----------------------------------------------------------------------------
  */
+/*
+ * TEMPORARY (2026-07-24) v1-familiar nav rollout: the home page renders
+ * the STATS view (v1 staff landed on a stats dashboard, so this reads
+ * familiar). The original home view (dashboard/home + its two HTMX
+ * partials below) is untouched and still routed — restore by swapping
+ * this handler back to render 'dashboard/home' (see git history) and
+ * re-enabling nav_show.stats in partials/sidebar.ejs.
+ */
 async function home_page(req, res) {
     const user = await auth_model.find_by_id(req.user.sub);
     if (!user || user.is_active !== 1) {
@@ -189,21 +197,25 @@ async function home_page(req, res) {
         jwt.clear_cookie(res);
         throw new UnauthorizedError('User no longer active');
     }
-    /*
-     * Top-line counts. The richer breakdowns (top collections, recent
-     * ingests) load via HTMX after the page paints — keeps initial
-     * render snappy against a 23k-row DB.
-     */
-    const [counts, active_users] = await Promise.all([
-        stats_model.summary(),
-        stats_model.active_users(),
+    const [summary, per_year] = await Promise.all([
+        stats_model.extended_summary(),
+        stats_model.ingests_per_year({ min_year: 2020 }),
     ]);
-    render_page(req, res, 'dashboard/home', {
-        page: 'home',
+    render_page(req, res, 'dashboard/stats', {
+        page: 'stats',
         active: 'home',
-        title: 'Home — Repo Dashboard',
+        title: 'Home — Repository @ DU',
         user,
-        stats: { ...counts, active_users },
+        summary,
+        per_year,
+        fmt_count: format_count,
+        fmt_bytes: format_bytes,
+        /*
+         * Carry the degraded-services banner over from the old home
+         * view — it's staff's only passive signal that a backing
+         * service (ASpace / DuraCloud / …) is down.
+         */
+        show_services_banner: true,
     });
 }
 
@@ -231,24 +243,16 @@ async function home_recent_ingests_partial(req, res) {
 const stats_duracloud = require('../stats/duracloud');
 const { format_bytes, format_count } = require('../libs/format');
 
+/*
+ * TEMPORARY (2026-07-24): while the stats view is the home page the
+ * dedicated /dashboard/stats URL bounces to /dashboard/ so bookmarks
+ * keep working without a second URL for the same content (and without
+ * a sidebar state where nothing highlights — the Stats icon is hidden).
+ * Restore the original render (git history) when the old home returns.
+ */
 async function stats_page(req, res) {
-    const [summary, per_year] = await Promise.all([
-        stats_model.extended_summary(),
-        stats_model.ingests_per_year({ min_year: 2020 }),
-    ]);
-    render_page(req, res, 'dashboard/stats', {
-        page: 'stats',
-        active: 'stats',
-        title: 'Stats — Repository @ DU',
-        summary,
-        per_year,
-        /*
-         * Pass formatters as locals so the EJS templates don't need
-         * to require modules themselves.
-         */
-        fmt_count: format_count,
-        fmt_bytes: format_bytes,
-    });
+    const cfg = app_config();
+    return res.redirect(302, `${cfg.path}/dashboard/`);
 }
 
 async function stats_duracloud_partial(req, res) {
@@ -268,7 +272,7 @@ async function collections_page(req, res) {
     render_page(req, res, 'dashboard/collections', {
         page: 'collections',
         active: 'collections',
-        title: 'Collections — Repository @ DU',
+        title: 'Manage Collections — Repository @ DU',
         filters: {
             q: req.query.q || '',
             /*

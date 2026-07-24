@@ -1,7 +1,10 @@
 <%/* Digital Preservation Jobs — Workflow Guide (static help).
      Rendered by ingester/dashboard.js help_page(). Read-only, CSP-safe:
      in-page anchors are native, the flow diagram is plain HTML, and the
-     "Behind the scenes" technical blocks use native <details> (no JS).
+     collapsible blocks use native <details> (no JS). The per-step
+     "Behind the scenes" technical blocks were removed 2026-07-24 —
+     too technical for the staff audience; the dev-facing detail lives
+     in docs/INGEST_HELP_DESIGN.md.
      This view is the user-facing source of truth for DPJ help — keep it in
      step with the workflow (see docs/INGEST_HELP_DESIGN.md). */%>
 
@@ -57,7 +60,7 @@
     </div>
 
     <p class="mb-0 text-muted small">
-        The cast: <strong>you</strong> (staff), <strong>ArchivesSpace</strong>
+        The moving parts: <strong>you</strong> (staff), <strong>ArchivesSpace</strong>
         (description), <strong>Archivematica</strong> (preservation processing),
         <strong>DuraCloud</strong> + <strong>Wasabi&nbsp;S3</strong> (storage), and the
         <strong>repository</strong> (the object record, search, and public access).
@@ -82,7 +85,7 @@
         <dd class="col-sm-9">Finished — archived after the object lands in the repository.</dd>
     </dl>
     <p class="mb-0 small text-muted">
-        Each package carries a <code>uri.txt</code> sidecar once it has an ArchivesSpace
+        Each package carries a <code>uri.txt</code> marker file once it has an ArchivesSpace
         digital-object URI (written by Make Digital Objects). A package <em>with</em>
         <code>uri.txt</code> is <strong>processed</strong>; <em>without</em> it,
         <strong>unprocessed</strong>.
@@ -97,20 +100,12 @@
     </div>
     <dl class="mb-2">
         <dt>What you do</dt>
-        <dd>Pick a batch that's still <strong>unprocessed</strong> (no <code>uri.txt</code>) and run Make Digital Objects.</dd>
+        <dd>Pick a batch that still has <strong>unprocessed</strong> packages and run Make Digital Objects. A batch holds one or more packages, and processing status is tracked <strong>per package</strong>: a package with a <code>uri.txt</code> marker file is processed; one without is unprocessed.</dd>
         <dt>What the system does</dt>
-        <dd>Logs into ArchivesSpace and creates a <strong>digital-object record</strong> for each package, then writes a <code>uri.txt</code> sidecar per package. The batch flips to <strong>processed</strong> once every package has its <code>uri.txt</code>.</dd>
+        <dd>Logs into ArchivesSpace and creates a <strong>digital-object record</strong> for each package, then writes a <code>uri.txt</code> marker file per package. The batch flips to <strong>processed</strong> once every package has its <code>uri.txt</code>.</dd>
         <dt>Inputs &amp; outputs</dt>
-        <dd>A batch of source files in → a <code>uri.txt</code> (ArchivesSpace digital-object URI) per package.</dd>
+        <dd>A batch of packages (each holding its source files) in → a <code>uri.txt</code> marker file written inside each package, storing that package's ArchivesSpace digital-object URI.</dd>
     </dl>
-    <details class="small text-muted">
-        <summary>Behind the scenes</summary>
-        <p class="mt-2 mb-0">
-            The dashboard calls the curation service
-            (<code>POST /api/v1/astools/make-digital-objects</code>), which runs the
-            <code>make_digital_object.py</code> ArchivesSnake CLI against ArchivesSpace.
-        </p>
-    </details>
     <div class="mt-2">
         <strong class="small">If something goes wrong</strong>
         <ul class="small mb-0">
@@ -134,13 +129,6 @@
         <dt>Inputs &amp; outputs</dt>
         <dd>Packages with <code>uri.txt</code> in → a QA result recorded against the batch.</dd>
     </dl>
-    <details class="small text-muted">
-        <summary>Behind the scenes</summary>
-        <p class="mt-2 mb-0">
-            Uses the curation service's URI/validation helpers
-            (<code>/api/v1/astools/check-uri-txt</code> and workspace/URI lookups).
-        </p>
-    </details>
     <div class="mt-2">
         <strong class="small">If something goes wrong</strong>
         <ul class="small mb-0">
@@ -164,20 +152,11 @@
         <dt>Inputs &amp; outputs</dt>
         <dd>Ready folders in → queue rows + files staged on Archivematica's SFTP drop. From here, watch progress on the <a href="#queue">Ingest Queue</a>.</dd>
     </dl>
-    <details class="small text-muted">
-        <summary>Behind the scenes</summary>
-        <p class="mt-2 mb-0">
-            Curation calls, in order:
-            <code>/move-to-ingest</code> (001-ready → 002-ingest) →
-            <code>/move-to-sftp</code> (push to Archivematica) →
-            <code>/upload-status</code> (polled until the file count matches).
-        </p>
-    </details>
     <div class="mt-2">
         <strong class="small">If something goes wrong</strong>
         <ul class="small mb-0">
             <li>A submit that stalls can be sent back with <strong>Return to packaging</strong> from the Queue row's actions menu (⋮).</li>
-            <li>Large media (video/audio) uploads rely on the "LARGE KALTURA MEDIA" timeout overrides being present in the server's configuration — a missing override is the usual cause of a stalled large upload.</li>
+            <li>Very large video/audio batches can take hours and may halt because the system's time limits are set for normal-sized batches. This is a server-settings issue, not a problem with your files — contact LDT, who can raise the limits and then retry the halted row.</li>
         </ul>
     </div>
 </div>
@@ -197,7 +176,7 @@
 
     <ol class="small mb-2">
         <li><strong>process_metadata</strong> — fetch ArchivesSpace metadata + transform it into the workspace snapshot.</li>
-        <li><strong>upload</strong> — SFTP push to the Archivematica drop.</li>
+        <li><strong>upload</strong> — SFTP push to the Archivematica drop (Archivematica SFTP server).</li>
         <li><strong>transfer</strong> — Archivematica starts + approves the transfer, then we poll it (only one package occupies the Archivematica stages at a time, by design).</li>
         <li><strong>ingest</strong> — poll Archivematica's ingest, then wait for DuraCloud propagation.</li>
         <li><strong>repository</strong> — create the object record, mint its Handle, clean up SFTP, and archive the batch to <code>003-ingested</code> (with a Wasabi staging copy).</li>
@@ -207,21 +186,20 @@
     <details class="small text-muted">
         <summary>Recovery actions (row ⋮ menu)</summary>
         <ul class="mt-2 mb-0">
-            <li><strong>Timeline</strong> — every state change for the row, with timestamps + actor.</li>
-            <li><strong>Cancel</strong> — stop an in-flight package and roll its files back.</li>
-            <li><strong>Rollback (pre-upload)</strong> — undo before anything reached Archivematica.</li>
-            <li><strong>Rollback (Archivematica)</strong> — undo after the Archivematica stages.</li>
-            <li><strong>Reset</strong> / <strong>Return to packaging</strong> — clear a halted row to retry, or send the batch back to Packaging.</li>
-            <li><strong>Re-check AM &amp; retry</strong> — for an AIP that wasn't in Archivematica's Storage Service yet but showed up later.</li>
+            <li><strong>Timeline</strong> — every state change for the package, with timestamps and who did it.</li>
+            <li><strong>Cancel</strong> — stop an in-flight package. After cancelling, a <strong>Return to Packaging</strong> action appears for the cleanup.</li>
+            <li><strong>Return to Packaging</strong> — for cancelled or halted packages: moves the folder back to the Packaging and Ingesting view so it can be re-submitted after the issue is addressed.</li>
+            <li><strong>Rollback AIP</strong> — for packages that failed after Archivematica stored them: submits an AIP deletion request (an Archivematica admin must approve it before removal).</li>
+            <li><strong>Reset</strong> — clears a halted row that never reached any outside system, so the package can be re-submitted.</li>
         </ul>
     </details>
 
     <div class="mt-2">
         <strong class="small">Common halts &amp; what to do</strong>
         <ul class="small mb-0">
-            <li><strong>Transfer timeout on large media</strong> — usually a missing large-media timeout override in config; once corrected, reset/retry the row.</li>
-            <li><strong>"AIP not found in AM Storage Service"</strong> — the worker retries over a budget; if it still misses, use <strong>Re-check AM &amp; retry</strong> once Archivematica has registered it.</li>
-            <li><strong>Indexing/date errors</strong> — a record with a malformed date is dead-lettered and retried rather than blocking the queue.</li>
+            <li><strong>Halt on a large video/audio batch</strong> — the system's time limits were likely exceeded, not an actual failure. Ask LDT to raise the large-media time limits, then reset/retry the row.</li>
+            <li><strong>"AIP not found in AM Storage Service"</strong> — the system keeps retrying on its own for a while. If the package stays flagged, contact LDT.</li>
+            <li><strong>An object finished ingesting but doesn't appear in search</strong> — a record with unusual data can occasionally fail to index. The system sets it aside so it doesn't hold up other packages — contact LDT to have it fixed and re-indexed.</li>
         </ul>
     </div>
 </div>
@@ -271,7 +249,7 @@
         <dt class="col-sm-3">Handle / PID</dt>
         <dd class="col-sm-9">The persistent identifier minted for each object (the <code>hdl.handle.net</code> link) / its internal id.</dd>
         <dt class="col-sm-3"><code>uri.txt</code></dt>
-        <dd class="col-sm-9">A sidecar file linking a package to its ArchivesSpace digital-object URI.</dd>
+        <dd class="col-sm-9">A marker file linking a package to its ArchivesSpace digital-object URI.</dd>
         <dt class="col-sm-3">Collection</dt>
         <dd class="col-sm-9">A repository record bound to an ArchivesSpace resource; objects belong to one.</dd>
         <dt class="col-sm-3">Elasticsearch</dt>

@@ -201,15 +201,16 @@ describe('dashboard — e2e', () => {
              * Each icon-only link must be reachable by SR users.
              * We verify the labels for the normal-mode nav. (Workflow
              * / admin mode are exercised by their own page tests.)
+             * TEMPORARY (2026-07-24) v1-familiar nav: Stats / AIPs /
+             * Admin Utils are hidden (nav_show flags in sidebar.ejs)
+             * and Collections is labelled "Manage Collections".
              */
             for (const label of [
                 'Home',
-                'Stats',
-                'Collections',
+                'Manage Collections',
                 'Objects',
                 'Digital Preservation Jobs',
                 'Users',
-                'Admin Utils',
             ]) {
                 expect(res.text).toMatch(
                     new RegExp(`aria-label="${label.replace(/[()]/g, '\\$&')}"`)
@@ -230,12 +231,10 @@ describe('dashboard — e2e', () => {
                 .set('Cookie', cookie);
             for (const label of [
                 'Home',
-                'Stats',
-                'Collections',
+                'Manage Collections',
                 'Objects',
                 'Digital Preservation Jobs',
                 'Users',
-                'Admin Utils',
             ]) {
                 expect(res.text).toMatch(
                     new RegExp(`title="${label.replace(/[()]/g, '\\$&')}"`)
@@ -268,14 +267,14 @@ describe('dashboard — e2e', () => {
              * must not claim to be the current page.
              */
             expect(res.text).toMatch(
-                /<a[^>]*aria-label="Collections"[^>]*>/
+                /<a[^>]*aria-label="Manage Collections"[^>]*>/
             );
             /*
              * The slice from "Collections" link start to the next link
              * start must NOT contain aria-current.
              */
             const m = res.text.match(
-                /<a[^>]*aria-label="Collections"[\s\S]*?<\/a>/
+                /<a[^>]*aria-label="Manage Collections"[\s\S]*?<\/a>/
             );
             expect(m).toBeTruthy();
             expect(m[0]).not.toMatch(/aria-current/);
@@ -472,12 +471,13 @@ describe('dashboard — e2e', () => {
             );
         });
 
-        it('stats page chart SVG has both aria-label and <desc>', async () => {
+        it('stats chart SVG has both aria-label and <desc>', async () => {
             const cookie = await cookie_for('a11y-chart');
             // Seed at least one ingest so the description has a peak.
             await db_helper.seed_object({ created: '2024-03-01 00:00:00' });
+            // Stats view is currently served as the home page.
             const res = await supertest(app)
-                .get('/repo/dashboard/stats')
+                .get('/repo/dashboard/')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
             /*
@@ -555,15 +555,30 @@ describe('dashboard — e2e', () => {
     });
 
     describe('home page', () => {
-        it('renders welcome + stats for the authed user', async () => {
+        /*
+         * TEMPORARY (2026-07-24) v1-familiar nav: the home page renders
+         * the STATS view (12-card grid + chart), not dashboard/home.
+         * The old "renders welcome + stats" assertion lives in git
+         * history — restore it when home_page renders dashboard/home
+         * again.
+         */
+        it('renders the stats view as the home page for the authed user', async () => {
             const cookie = await cookie_for('admin');
             await db_helper.seed_object({ is_published: 1 });
             await db_helper.seed_object({ is_published: 0 });
             const res = await supertest(app).get('/repo/dashboard/').set('Cookie', cookie);
             expect(res.status).toBe(200);
-            expect(res.text).toMatch(/Welcome, Ada\./);
-            expect(res.text).toMatch(/Total objects/);
-            expect(res.text).toMatch(/Active users/);
+            expect(res.text).toMatch(/Total Objects/);
+            expect(res.text).toMatch(/Published Objects/);
+            expect(res.text).toMatch(/Ingests Per Year/);
+        });
+
+        it('carries the degraded-services banner mount over from the old home', async () => {
+            const cookie = await cookie_for('home-svc-banner');
+            const res = await supertest(app).get('/repo/dashboard/').set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toMatch(/id="services-banner"/);
+            expect(res.text).toMatch(/hx-get="\/repo\/dashboard\/_services\/banner"/);
         });
 
         it('Top Collections partial shows the title only (no PID subtitle)', async () => {
@@ -616,9 +631,12 @@ describe('dashboard — e2e', () => {
 
     describe('stats page', () => {
         /*
-         * Dedicated /dashboard/stats — v1-dashboard parity. 12-card
-         * grid + inline-SVG ingests-per-year chart. DuraCloud cards
-         * lazy-load via HTMX (covered by a separate test).
+         * Stats view — v1-dashboard parity. 12-card grid + inline-SVG
+         * ingests-per-year chart. DuraCloud cards lazy-load via HTMX
+         * (covered by a separate test).
+         * TEMPORARY (2026-07-24): the stats view is served AS the home
+         * page (/dashboard/) and /dashboard/stats redirects there, so
+         * the content tests below fetch /repo/dashboard/.
          */
         const stats_model = require('../../stats/model');
 
@@ -636,10 +654,19 @@ describe('dashboard — e2e', () => {
             expect(res.headers.location).toMatch(/\/repo\/dashboard\/login/);
         });
 
+        it('GET /dashboard/stats redirects authed users to the home page', async () => {
+            const cookie = await cookie_for('stats-redirect');
+            const res = await supertest(app)
+                .get('/repo/dashboard/stats')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(302);
+            expect(res.headers.location).toBe('/repo/dashboard/');
+        });
+
         it('renders the 12 stat-card labels for authed users', async () => {
             const cookie = await cookie_for('stats-1');
             const res = await supertest(app)
-                .get('/repo/dashboard/stats')
+                .get('/repo/dashboard/')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
             // All twelve card labels match the v1 dashboard wording.
@@ -668,7 +695,7 @@ describe('dashboard — e2e', () => {
             await db_helper.seed_object({ object_type: 'object', mime_type: 'image/tiff' });
             await db_helper.seed_object({ object_type: 'object', mime_type: 'application/pdf' });
             const res = await supertest(app)
-                .get('/repo/dashboard/stats')
+                .get('/repo/dashboard/')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
             /*
@@ -686,7 +713,7 @@ describe('dashboard — e2e', () => {
             await db_helper.seed_object({ created: '2023-04-01 00:00:00' });
             await db_helper.seed_object({ created: '2025-04-01 00:00:00' });
             const res = await supertest(app)
-                .get('/repo/dashboard/stats')
+                .get('/repo/dashboard/')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
             expect(res.text).toContain('Ingests Per Year');
@@ -710,7 +737,7 @@ describe('dashboard — e2e', () => {
         it('DuraCloud cards are lazy-loaded — placeholder + HTMX trigger present', async () => {
             const cookie = await cookie_for('stats-4');
             const res = await supertest(app)
-                .get('/repo/dashboard/stats')
+                .get('/repo/dashboard/')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
             /*
@@ -741,31 +768,32 @@ describe('dashboard — e2e', () => {
             expect(res.text).toContain('—');
         });
 
-        it('sidebar marks Stats as the active nav item on the stats page', async () => {
+        it('sidebar marks Home as the active nav item while stats renders as home', async () => {
             const cookie = await cookie_for('stats-6');
             const res = await supertest(app)
-                .get('/repo/dashboard/stats')
+                .get('/repo/dashboard/')
                 .set('Cookie', cookie);
             /*
-             * Match the active Stats link by its aria-label (stable
-             * anchor) and verify both the visual .active class and the
-             * SR-perceivable aria-current land on the same element.
+             * The stats content is the home page, so the HOME icon is
+             * the active one. Verify both the visual .active class and
+             * the SR-perceivable aria-current land on the same element.
              */
             expect(res.text).toMatch(
-                /<a[^>]*class="active"[^>]*aria-current="page"[^>]*aria-label="Stats"/
+                /<a[^>]*class="active"[^>]*aria-current="page"[^>]*aria-label="Home"/
             );
         });
 
-        it('home page sidebar shows the Stats icon (out-of-workflow mode)', async () => {
+        it('hidden nav icons (Stats / AIPs / Admin Utils) are absent from the rail', async () => {
             const cookie = await cookie_for('stats-7');
             const res = await supertest(app).get('/repo/dashboard/').set('Cookie', cookie);
             /*
-             * The icon link to /dashboard/stats is present (sits under
-             * the Home icon per design).
+             * TEMPORARY (2026-07-24) v1-familiar nav: these three icons
+             * are hidden via the nav_show flags in sidebar.ejs. Routes
+             * stay live — only the rail links are gone.
              */
-            expect(res.text).toMatch(
-                /href="[^"]*\/dashboard\/stats"[^>]*title="Stats"/
-            );
+            expect(res.text).not.toMatch(/aria-label="Stats"/);
+            expect(res.text).not.toMatch(/aria-label="AIPs"/);
+            expect(res.text).not.toMatch(/aria-label="Admin Utils"/);
         });
     });
 
@@ -3527,19 +3555,20 @@ describe('dashboard — e2e', () => {
             }
         });
 
-        it('sidebar shows AIPs link in the main nav with active state on the AIPs page', async () => {
+        it('AIPs page still renders while its sidebar icon is temporarily hidden', async () => {
+            /*
+             * TEMPORARY (2026-07-24) v1-familiar nav: the AIPs rail
+             * icon is hidden via nav_show in sidebar.ejs but the route
+             * stays live for direct URLs. Restore the original
+             * icon-visible + active-state assertions (git history)
+             * when nav_show.aips flips back on.
+             */
             const cookie = await cookie_for('aip-nav');
             const res = await supertest(app)
                 .get('/repo/dashboard/aips')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            /*
-             * AIPs lives in normal-mode nav (not admin focus mode),
-             * adjacent to Digital Preservation Jobs. The link uses
-             * aria-label="AIPs" (no "(admin)" suffix).
-             */
-            expect(res.text).toMatch(/aria-label="AIPs"/);
-            expect(res.text).toMatch(/aria-current="page"[^>]*>\s*<svg[^>]*>[\s\S]*?<\/svg>/);
+            expect(res.text).not.toMatch(/aria-label="AIPs"/);
             /*
              * Sibling check: the DPJ icon should be present in the
              * same render (i.e. we ARE in normal nav, not the admin

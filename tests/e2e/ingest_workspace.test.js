@@ -131,7 +131,7 @@ describe('ingest workspace pages — e2e', () => {
                 const res = await supertest(app).get(path).set('Cookie', cookie);
                 expect(res.status).toBe(200);
                 // Hidden in focus mode.
-                expect(res.text).not.toContain('title="Collections"');
+                expect(res.text).not.toContain('title="Manage Collections"');
                 expect(res.text).not.toContain('title="Objects"');
                 expect(res.text).not.toContain('title="Users"');
                 expect(res.text).not.toContain('title="Admin Utils"');
@@ -203,16 +203,18 @@ describe('ingest workspace pages — e2e', () => {
             const res = await supertest(app).get('/repo/dashboard/').set('Cookie', cookie);
             expect(res.status).toBe(200);
             expect(res.text).toContain('title="Home"');
-            expect(res.text).toContain('title="Collections"');
+            expect(res.text).toContain('title="Manage Collections"');
             expect(res.text).toContain('title="Objects"');
             expect(res.text).toContain('title="Users"');
             expect(res.text).toContain('title="Digital Preservation Jobs"');
             /*
              * Admin Utils is the single entry icon for the admin tools
-             * (Indexer / Metadata Refresh / Services Health). The three
-             * tool icons themselves are only visible IN admin focus mode.
+             * (Indexer / Metadata Refresh / Services Health).
+             * TEMPORARY (2026-07-24) v1-familiar nav: the icon is
+             * hidden via nav_show in sidebar.ejs (routes stay live) —
+             * flip back to toContain when restored.
              */
-            expect(res.text).toContain('title="Admin Utils"');
+            expect(res.text).not.toContain('title="Admin Utils"');
             expect(res.text).not.toContain('title="Indexer (admin)"');
             expect(res.text).not.toContain('title="Metadata Refresh (admin)"');
             expect(res.text).not.toContain('title="Services Health (admin)"');
@@ -221,13 +223,18 @@ describe('ingest workspace pages — e2e', () => {
         it('out-of-workflow sidebar order is Home → Collections → Objects → DPJ → Users → Admin Utils', async () => {
             const cookie = await cookie_for('side-order');
             const res = await supertest(app).get('/repo/dashboard/').set('Cookie', cookie);
+            /*
+             * TEMPORARY (2026-07-24) v1-familiar nav: Stats / AIPs /
+             * Admin Utils are hidden and Collections reads "Manage
+             * Collections" — restore them to this order list when the
+             * nav_show flags in sidebar.ejs are flipped back on.
+             */
             const expected = [
                 'title="Home"',
-                'title="Collections"',
+                'title="Manage Collections"',
                 'title="Objects"',
                 'title="Digital Preservation Jobs"',
                 'title="Users"',
-                'title="Admin Utils"',
             ];
             /*
              * Each title appears later in the HTML than the previous
@@ -241,12 +248,18 @@ describe('ingest workspace pages — e2e', () => {
             expect(positions).toEqual(sorted);
         });
 
-        it('Admin Utils icon points at /admin/services (the default admin view)', async () => {
+        it('Admin Utils icon is temporarily hidden from the rail', async () => {
+            /*
+             * TEMPORARY (2026-07-24) v1-familiar nav: the Admin Utils
+             * entry icon is hidden via nav_show in sidebar.ejs. The
+             * /admin/services route stays live (admin focus mode tests
+             * below still exercise it). Restore the original
+             * points-at-/admin/services assertion (git history) when
+             * the icon returns.
+             */
             const cookie = await cookie_for('side-admin-link');
             const res = await supertest(app).get('/repo/dashboard/').set('Cookie', cookie);
-            expect(res.text).toMatch(
-                /href="[^"]*\/dashboard\/admin\/services"[^>]*title="Admin Utils"/
-            );
+            expect(res.text).not.toMatch(/title="Admin Utils"/);
         });
     });
 
@@ -273,7 +286,7 @@ describe('ingest workspace pages — e2e', () => {
                 // Home escape stays.
                 expect(res.text).toContain('title="Home"');
                 // Standard nav items are hidden (focus mode).
-                expect(res.text).not.toContain('title="Collections"');
+                expect(res.text).not.toContain('title="Manage Collections"');
                 expect(res.text).not.toContain('title="Objects"');
                 expect(res.text).not.toContain('title="Users"');
                 expect(res.text).not.toContain('title="Digital Preservation Jobs"');
@@ -455,7 +468,7 @@ describe('ingest workspace pages — e2e', () => {
             );
             // …and the normal nav is hidden (focus mode).
             expect(res.text).toContain('title="Make Digital Objects"');
-            expect(res.text).not.toContain('title="Collections"');
+            expect(res.text).not.toContain('title="Manage Collections"');
         });
 
         it('the objects table, scoped by recent_days, shows in-window objects with row actions', async () => {
@@ -483,11 +496,21 @@ describe('ingest workspace pages — e2e', () => {
             expect(res.text).toMatch(/\/objects\/codu:recent-fresh\/metadata/);
         });
 
-        it('home page "Recent ingests" card links to the standalone view', async () => {
+        it('the Recent Ingests view stays reachable while the stats view serves as home', async () => {
+            /*
+             * TEMPORARY (2026-07-24) v1-familiar nav: the home page
+             * renders the STATS view, so the old home's "Recent
+             * ingests → Browse all" card isn't rendered. The
+             * standalone view stays reachable via the DPJ workflow
+             * sidebar — restore the original home-card assertion (git
+             * history) when home_page renders dashboard/home again.
+             */
             const cookie = await cookie_for('recent-home');
-            const res = await supertest(app).get('/repo/dashboard/').set('Cookie', cookie);
+            const res = await supertest(app)
+                .get('/repo/dashboard/ingest/recent')
+                .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            expect(res.text).toMatch(/href="[^"]*\/ingest\/recent"[^>]*>\s*Browse all/);
+            expect(res.text).toMatch(/aria-label="Recent Ingests"/);
         });
     });
 
