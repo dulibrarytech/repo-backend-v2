@@ -28,6 +28,7 @@
  */
 
 const astools_default = require('../ingester/libs/astools');
+const structure_flags = require('./libs/structure_flags');
 const validator_default = require('./libs/aspace_validator');
 const aspace_default = require('../libs/archivesspace');
 const model_default = require('./model');
@@ -170,7 +171,7 @@ async function list_workspace(opts = {}) {
      * don't tell us about uri.txt presence). No client-side filtering
      * needed beyond search + qa-passed marker.
      */
-    let folder_names = [];
+    let entries = [];
     const endpoint_name = scope === 'processed' ? 'list_processed' : 'list_workspace';
     try {
         const res =
@@ -184,7 +185,7 @@ async function list_workspace(opts = {}) {
                 error: `ASTools ${endpoint_name} HTTP ${res.status}`,
             };
         }
-        folder_names = _normalize_folder_list(res.data);
+        entries = _normalize_workspace_entries(res.data);
     } catch (err) {
         return {
             folders: [],
@@ -196,22 +197,54 @@ async function list_workspace(opts = {}) {
     }
 
     /*
-     * For each folder, fetch its package list. Serial to avoid
-     * hammering the curation-service for every page render — staff
-     * page sizes are small (tens of folders).
+     * Resolve each folder's package list. The structure-QA build of the
+     * curation-service embeds packages + structure_errors directly in
+     * the /workspace entries, so no follow-up call is needed — that
+     * removes the old N+1 round-trip pattern for the MDO view. Entries
+     * without embedded packages (the /processed feed, or an older
+     * curation-service) fall back to the per-folder fetch, kept serial
+     * to avoid hammering the service — staff page sizes are small.
      */
     const folders = [];
     let total_packages = 0;
-    for (const name of folder_names) {
+    for (const entry of entries) {
+        const name = entry.name;
         if (q && !name.toLowerCase().includes(q)) continue;
         if (qa_passed_set && qa_passed_set.has(name)) continue;
-        const folder = await _fetch_folder_state(astools, name);
+
+        let package_names;
+        let packages_error;
+        let flags = Array.isArray(entry.structure_errors) ? entry.structure_errors : [];
+        if (Array.isArray(entry.packages)) {
+            package_names = entry.packages.map((p) =>
+                typeof p === 'string' ? p : p && p.name
+            ).filter(Boolean);
+        } else {
+            const folder = await _fetch_folder_state(astools, name);
+            package_names = folder.packages.map((p) => p.name);
+            packages_error = folder.packages_error;
+            if (Array.isArray(folder.structure_errors)) {
+                flags = folder.structure_errors;
+            }
+        }
+
         folders.push({
-            name: folder.name,
-            packages: folder.packages.map((p) => p.name),
-            packages_error: folder.packages_error,
+            name,
+            packages: package_names,
+            packages_error,
+            structure_errors: flags,
+            /*
+             * Pre-rendered for the view: plain-English notices (wording
+             * owned by libs/structure_flags) and the blocked bit that
+             * disables the Make Digital Objects action. Both are also
+             * enforced server-side in run_make_digital_objects /
+             * submit_to_ingest — the view state is affordance, not the
+             * gate.
+             */
+            structure_notices: structure_flags.format_structure_errors(flags, name),
+            blocked: structure_flags.has_blocking_errors(flags),
         });
-        total_packages += folder.packages.length;
+        total_packages += package_names.length;
     }
 
     return {
@@ -228,25 +261,37 @@ async function list_workspace(opts = {}) {
  * older mocks / staging builds returned a bare array or a `folders`
  * envelope, so we accept all three shapes to keep tests + dev mocks
  * working without forcing a server rev.
+ *
+ * Entry shapes accepted:
+ *   'name'                                        — legacy flat string
+ *   { name }                                      — object without QA data
+ *   { name, packages, processed, structure_errors } — structure-QA build;
+ *     packages/structure_errors are carried through so list_workspace can
+ *     skip the per-folder fetch and render QA flags.
  */
-function _normalize_folder_list(data) {
-    if (Array.isArray(data)) return data.map((entry) => _folder_name_from(entry)).filter(Boolean);
-    if (data && Array.isArray(data.result)) {
-        return data.result.map((entry) => _folder_name_from(entry)).filter(Boolean);
-    }
-    if (data && Array.isArray(data.folders)) {
-        return data.folders.map((entry) => _folder_name_from(entry)).filter(Boolean);
-    }
-    if (data && Array.isArray(data.results)) {
-        return data.results.map((entry) => _folder_name_from(entry)).filter(Boolean);
-    }
-    return [];
-}
-
-function _folder_name_from(entry) {
-    if (typeof entry === 'string') return entry;
-    if (entry && typeof entry === 'object') return entry.name || entry.folder || null;
-    return null;
+function _normalize_workspace_entries(data) {
+    let raw = null;
+    if (Array.isArray(data)) raw = data;
+    else if (data && Array.isArray(data.result)) raw = data.result;
+    else if (data && Array.isArray(data.folders)) raw = data.folders;
+    else if (data && Array.isArray(data.results)) raw = data.results;
+    if (!raw) return [];
+    return raw
+        .map((entry) => {
+            if (typeof entry === 'string') return { name: entry };
+            if (entry && typeof entry === 'object') {
+                const name = entry.name || entry.folder || null;
+                if (!name) return null;
+                const normalized = { name };
+                if (Array.isArray(entry.packages)) normalized.packages = entry.packages;
+                if (Array.isArray(entry.structure_errors)) {
+                    normalized.structure_errors = entry.structure_errors;
+                }
+                return normalized;
+            }
+            return null;
+        })
+        .filter(Boolean);
 }
 
 /*
@@ -266,16 +311,68 @@ async function _fetch_folder_state(astools, name) {
         if (arr === null) {
             return { name, packages: [], packages_error: 'unexpected response shape' };
         }
+        /*
+         * The structure-QA build piggybacks `processed` (package names
+         * with uri.txt) and `structure_errors` on this response. Both
+         * are optional — older curation-services simply don't send them.
+         */
+        const processed = new Set(
+            Array.isArray(res.data && res.data.processed) ? res.data.processed : []
+        );
         return {
             name,
-            packages: arr.map((p) => ({
-                name: typeof p === 'string' ? p : p && p.name,
-                has_uri_txt: typeof p === 'object' && p ? !!p.has_uri_txt : false,
-            })),
+            packages: arr.map((p) => {
+                const pkg_name = typeof p === 'string' ? p : p && p.name;
+                return {
+                    name: pkg_name,
+                    has_uri_txt:
+                        processed.has(pkg_name) ||
+                        (typeof p === 'object' && p ? !!p.has_uri_txt : false),
+                };
+            }),
+            structure_errors:
+                res.data && Array.isArray(res.data.structure_errors)
+                    ? res.data.structure_errors
+                    : undefined,
         };
     } catch (err) {
         return { name, packages: [], packages_error: err.message };
     }
+}
+
+/*
+ * Server-side structure gate shared by run_make_digital_objects and
+ * submit_to_ingest. Fetches the folder's structure flags and refuses
+ * when any error-severity flag is present — the disabled buttons in
+ * the view are affordance only; this is the enforcement.
+ *
+ * Fails OPEN on transport errors or older curation-services that don't
+ * report flags: the actions were possible before this gate existed, and
+ * the curation-service still validates paths itself. Returns null when
+ * clear to proceed, or { error, structure_errors } when blocked.
+ */
+async function _structure_gate(astools, folder) {
+    let flags = [];
+    try {
+        const res = await astools.list_packages(folder);
+        if (res.status === 200 && res.data && Array.isArray(res.data.structure_errors)) {
+            flags = res.data.structure_errors;
+        }
+    } catch (err) {
+        log.warn({ event: 'structure_gate_unavailable', folder, err: err.message });
+        return null;
+    }
+    if (!structure_flags.has_blocking_errors(flags)) return null;
+    const notices = structure_flags
+        .format_structure_errors(flags, folder)
+        .filter((n) => n.severity === 'error')
+        .map((n) => n.text);
+    return {
+        error:
+            `The folder structure of "${folder}" has problems that must be ` +
+            `fixed first: ${notices.join(' ')}`,
+        structure_errors: flags,
+    };
 }
 
 function _extract_package_array(data) {
@@ -293,6 +390,11 @@ async function run_make_digital_objects(folder, deps = {}) {
     const astools = deps.astools || astools_default;
     if (!astools.is_configured()) {
         return { ok: false, status: 0, error: 'ASTools is not configured' };
+    }
+    const gate = await _structure_gate(astools, folder);
+    if (gate) {
+        log.warn({ event: 'workspace_mdo_blocked_structure', folder });
+        return { ok: false, status: 422, error: gate.error, structure_errors: gate.structure_errors };
     }
     try {
         const res = await astools.make_digital_objects(folder);
@@ -468,11 +570,20 @@ async function submit_to_ingest(folder, actor, deps = {}) {
     }
 
     /*
-     * PRE-FLIGHT GATE — runs before any queue inserts. If this
+     * PRE-FLIGHT GATES — run before any queue inserts. If either
      * fails, no queue rows are created and submit_to_ingest returns
-     * a sev-error envelope for the dashboard to render. See
-     * _ensure_collection_exists for the full contract.
+     * a sev-error envelope for the dashboard to render.
+     *
+     * 1. Structure gate: loose files / empty or nested packages in
+     *    the batch would crash or corrupt the ready-stage pipeline —
+     *    refuse with the same staff wording the list views show.
+     * 2. Collection gate: see _ensure_collection_exists.
      */
+    const structure_block = await _structure_gate(astools, folder);
+    if (structure_block) {
+        log.warn({ event: 'workspace_submit_blocked_structure', folder });
+        return { ok: false, error: structure_block.error };
+    }
     const gate = await _ensure_collection_exists(folder, deps);
     if (!gate.ok) {
         return { ok: false, error: gate.error };

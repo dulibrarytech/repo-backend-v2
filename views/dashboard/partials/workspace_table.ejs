@@ -88,21 +88,52 @@
             </tr>
         <% } else { %>
             <% folders.forEach(function (folder) { %>
+                <%
+                    // Structure-QA notices (feature-batch-packaging-qa).
+                    // list_workspace pre-renders staff wording into
+                    // folder.structure_notices [{severity, text}] and sets
+                    // folder.blocked when any error-severity flag exists.
+                    // Defaulted defensively for older callers/mocks.
+                    var notices = folder.structure_notices || [];
+                    var blocked = !!folder.blocked;
+                %>
                 <tr>
                     <td class="package-cell">
                         <div class="package-name"><%= folder.name %></div>
+                        <% if (blocked) { %>
+                            <span class="sev-badge sev-error" style="margin-top: 4px;">
+                                <span>Needs attention</span>
+                            </span>
+                        <% } else if (notices.length > 0) { %>
+                            <span class="sev-badge sev-warn" style="margin-top: 4px;">
+                                <span>Check notes</span>
+                            </span>
+                        <% } %>
                     </td>
                     <td>
                         <% if (folder.packages_error) { %>
                             <span class="text-muted small">
                                 <em>Could not load packages: <%= folder.packages_error %></em>
                             </span>
-                        <% } else if (folder.packages.length === 0) { %>
+                        <% } else if (folder.packages.length === 0 && notices.length === 0) { %>
                             <span class="text-muted small"><em>No packages</em></span>
                         <% } else { %>
                             <ul style="margin: 0; padding-left: 18px; list-style: disc;">
                                 <% folder.packages.forEach(function (pkg) { %>
                                     <li style="font-size: 13px; padding: 2px 0;"><%= pkg %></li>
+                                <% }); %>
+                            </ul>
+                        <% } %>
+                        <% if (notices.length > 0) { %>
+                            <ul class="structure-notices" style="margin: 6px 0 0; padding: 0; list-style: none;">
+                                <% notices.forEach(function (notice) { %>
+                                    <li class="structure-notice sev-<%= notice.severity %>"
+                                        style="font-size: 12.5px; padding: 4px 8px; margin-top: 4px; border-radius: 4px;
+                                               background: var(--sev-<%= notice.severity %>-bg);
+                                               border-left: 3px solid var(--sev-<%= notice.severity %>);
+                                               color: var(--text);">
+                                        <%= notice.text %>
+                                    </li>
                                 <% }); %>
                             </ul>
                         <% } %>
@@ -137,6 +168,22 @@
 
                                     <% if (actions.indexOf('make_digital_objects') !== -1) { %>
                                         <li>
+                                            <% if (blocked) { %>
+                                                <%/* Structure problems block MDO. Disabled item is
+                                                     affordance only — workspace.run_make_digital_objects
+                                                     re-checks server-side and refuses (HTTP-level gate),
+                                                     mirroring the ingest_in_progress submit pattern. */%>
+                                                <span class="dropdown-item disabled"
+                                                      aria-disabled="true"
+                                                      title="Fix the folder structure problems listed for this folder first.">
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                                        <circle cx="12" cy="12" r="10"/>
+                                                        <polygon points="10 8 16 12 10 16 10 8"/>
+                                                    </svg>
+                                                    Make Digital Objects
+                                                </span>
+                                            <% } else { %>
                                             <a href="#" class="dropdown-item"
                                                hx-post="<%= dashboard_base %>/ingest/workspace/<%= encodeURIComponent(folder.name) %>/make-digital-objects"
                                                hx-target="#workspace-action-result"
@@ -154,6 +201,7 @@
                                                 </svg>
                                                 Make Digital Objects
                                             </a>
+                                            <% } %>
                                         </li>
                                     <% } %>
 
@@ -178,15 +226,17 @@
 
                                     <% if (actions.indexOf('submit_ingest') !== -1) { %>
                                         <li>
-                                            <% if (ingest_in_progress) { %>
-                                                <%/* An ingest is already in the pipeline — AM runs one
-                                                     at a time, so submit is disabled until it finishes.
-                                                     The server also rejects a submit in this state (see
-                                                     ingester/dashboard.js submit_ingest_action), so this
-                                                     is UI affordance, not the enforcement. */%>
+                                            <% if (ingest_in_progress || blocked) { %>
+                                                <%/* Disabled when an ingest is already in the pipeline
+                                                     (AM runs one at a time) OR when the folder has
+                                                     structure problems. Both are re-checked server-side
+                                                     (submit_ingest_action / workspace.submit_to_ingest),
+                                                     so this is UI affordance, not the enforcement. */%>
                                                 <span class="dropdown-item disabled"
                                                       aria-disabled="true"
-                                                      title="An ingest is already in progress — wait until it completes.">
+                                                      title="<%= blocked
+                                                          ? 'Fix the folder structure problems listed for this folder first.'
+                                                          : 'An ingest is already in progress — wait until it completes.' %>">
                                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                                          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                                                         <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>
