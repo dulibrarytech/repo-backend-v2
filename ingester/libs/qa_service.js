@@ -206,29 +206,34 @@ function create_client(http = http_default) {
         },
 
         /*
-         * After Stage 5 COMPLETE the worker archives the folder to
-         * 003-ingested AND triggers the Wasabi S3 copy — both happen
-         * server-side inside the curation-API's move_to_ingested
-         * implementation (see digitaldu-backend-curation-service/lib/
-         * archivematica_ops.py move_to_ingested + move_to_s3).
-         * 
+         * After Stage 5 COMPLETE the worker archives the batch's
+         * staging copy (002-ingest/<uuid>/) to Wasabi S3, server-side
+         * inside the curation-API's move_to_ingested implementation
+         * (see digitaldu-backend-curation-service/lib/
+         * archivematica_ops.py move_to_ingested + move_to_s3; every
+         * uploaded file is head_object-verified before the staging
+         * copy is removed). The local 003-ingested archive copy was
+         * retired 2026-07-26 — the route name is historical (see
+         * repo/INGESTED_RETIREMENT_PLAN.md).
+         *
          * Two query params, BOTH required by the curation route:
          *   uuid   — the per-ingest qa_uuid (row.collection_uuid;
          *            falls back to q-<row.id> for legacy rows)
          *   folder — the staff-facing folder name (row.batch). The
-         *            curation route strips the `new_` prefix when
-         *            placing it into 003-ingested. Passing the literal
-         *            string `collection` triggers a
+         *            curation route strips the `new_` prefix to form
+         *            the S3 key prefix. Passing the literal string
+         *            `collection` triggers a
          *            get_collection_folder_name() lookup server-side;
          *            we never do that — we always send the real folder
          *            name so the audit log is unambiguous.
-         * 
+         *
          * Best-effort caller contract: a 5xx / timeout / Wasabi failure
          * MUST NOT unwind a completed ingest. The curation route always
          * returns HTTP 200 even when move_to_s3 fails (errors land in
          * the JSON body), so callers must inspect data.errors to see
          * whether Wasabi actually worked. The Stage 5 wrapper records
-         * both `status` and `errors` in the COMPLETE audit payload.
+         * both `status` and `errors` in the COMPLETE audit payload AND
+         * records a FAILED archive_to_wasabi job for staff visibility.
          */
         async move_to_ingested(uuid, folder) {
             const cfg = app_config().curation_api;

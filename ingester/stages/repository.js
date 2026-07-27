@@ -306,22 +306,26 @@ async function run(row, deps = {}) {
     const sftp_cleanup = await _cleanup_sftp_safely(qa, row);
 
     /*
-     * Archive 002-ingest/<uuid>/ to 003-ingested/<folder>/ AND copy to
-     * Wasabi S3 — the curation-API's move_to_ingested does both in one
-     * call (see digitaldu-backend-curation-service: move_to_ingested
-     * → move_to_s3). Without this, staff folders pile up in
+     * Archive 002-ingest/<uuid>/ to Wasabi S3 — the curation-API's
+     * move_to_ingested uploads the staging copy (head_object-verified
+     * per file) and removes it only on verified success (see
+     * digitaldu-backend-curation-service: move_to_ingested →
+     * move_to_s3). The local 003-ingested archive copy was retired
+     * 2026-07-26 (repo/INGESTED_RETIREMENT_PLAN.md); the route name
+     * is historical. Without this call, staff folders pile up in
      * 002-ingest forever and nothing reaches Wasabi.
-     * 
+     *
      * v1 fired this at UPLOAD_COMPLETE; v2 fires it at Stage 5 COMPLETE
      * — the folder stays in the staff view until the row is actually
      * a finished repository record, not just "bytes safely on AM".
-     * 
+     *
      * Best-effort: a non-2xx, a Wasabi failure in data.errors, or a
      * transport throw MUST NOT unwind the completed ingest. The
      * outcome lands in the COMPLETE event payload so staff can see
-     * in the timeline whether the move + S3 copy actually succeeded
+     * in the timeline whether the S3 copy actually succeeded
      * (the curation route always returns 200, even when move_to_s3
-     * fails, so we have to inspect data.errors).
+     * fails, so we have to inspect data.errors) — and any failure is
+     * additionally recorded as a FAILED archive_to_wasabi job below.
      */
     const archive_to_ingested = await _move_to_ingested_safely(qa, row);
 
