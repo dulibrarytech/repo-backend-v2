@@ -181,11 +181,13 @@ describe('ingest workspace pages — e2e', () => {
             /*
              * Matches the pattern from views/dashboard/collection_detail.ejs
              * ("← All collections"). The link is the only way OUT of
-             * the workflow when focus mode is active.
+             * the workflow when focus mode is active. The workspace
+             * (Make Digital Objects) view is the deliberate exception —
+             * its back-link was removed by request; see the companion
+             * test below.
              */
             const cookie = await cookie_for('back-link');
             for (const path of [
-                '/repo/dashboard/ingest/workspace',
                 '/repo/dashboard/ingest/aspace-qa',
                 '/repo/dashboard/ingest/packaging',
                 '/repo/dashboard/ingest',
@@ -196,6 +198,15 @@ describe('ingest workspace pages — e2e', () => {
                     /<a href="[^"]*\/dashboard\/collections"[^>]*>← Collection Management<\/a>/
                 );
             }
+        });
+
+        it('does NOT render the back-link on the Make Digital Objects view', async () => {
+            const cookie = await cookie_for('back-link-workspace');
+            const res = await supertest(app)
+                .get('/repo/dashboard/ingest/workspace')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).not.toContain('← Collection Management');
         });
 
         it('home page (out of workflow) keeps the standard sidebar items', async () => {
