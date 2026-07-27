@@ -159,6 +159,41 @@ async function get_entry_id_for_file(package_name, file) {
 // --- Maintenance -----------------------------------------------------
 
 /*
+ * Scoped clear — delete queue + IDs rows for the given package names
+ * only. Runs at the start of every /metadata batch so a retry REPLACES
+ * the batch's earlier rows instead of appending to them. Two failure
+ * modes this prevents (both observed in production on v1):
+ *   - duplicate rows accumulating one full set per re-run, and
+ *   - a stale status=2 row from a failed batch surviving forever and
+ *     failing every later batch until someone wiped the tables by hand.
+ * Deliberately NOT a global wipe: ingest Stage 5 reads tbl_kaltura_ids
+ * long after resolution (attach_kaltura_ids), so clearing other
+ * packages' rows here would strip kaltura_ids from in-flight or
+ * backfill ingests. IDs are deleted before queue rows for the same
+ * partial-failure reason as clear_queue below.
+ */
+async function clear_packages(package_names) {
+    if (!Array.isArray(package_names) || package_names.length === 0) {
+        return { ids: 0, queue: 0 };
+    }
+    package_names.forEach((p, i) => {
+        if (typeof p !== 'string' || p.length === 0) {
+            throw new ValidationError(`package_names[${i}] must be a non-empty string`);
+        }
+    });
+    const knex = db_queue();
+    const ids_count = await knex(IDS).whereIn('package', package_names).del();
+    const queue_count = await knex(QUEUE).whereIn('package', package_names).del();
+    log.info({
+        event: 'kaltura_packages_cleared',
+        packages: package_names.length,
+        ids: ids_count,
+        queue: queue_count,
+    });
+    return { ids: ids_count, queue: queue_count };
+}
+
+/*
  * Hard-delete both tables. Staff trigger this from the admin queue UI
  * when they want to retry a botched batch from scratch. We delete the
  * IDs first so a partial failure leaves an empty IDs table + a populated
@@ -184,5 +219,6 @@ module.exports = {
     save_entry_ids,
     list_entry_ids,
     get_entry_id_for_file,
+    clear_packages,
     clear_queue,
 };

@@ -115,6 +115,49 @@ describe('kaltura/model', () => {
         });
     });
 
+    describe('clear_packages', () => {
+        it('deletes rows for the named packages only', async () => {
+            await model.queue_packages([
+                { package: 'pkg-A', files: ['a'] },
+                { package: 'pkg-B', files: ['b'] },
+            ]);
+            await model.save_entry_ids([
+                { package: 'pkg-A', file: 'a', entry_id: '1_a', status: 1, message: 'ok' },
+                {
+                    package: 'pkg-A',
+                    file: 'a2',
+                    entry_id: '["1_x","1_y"]',
+                    status: 2,
+                    message: 'multi',
+                },
+                { package: 'pkg-B', file: 'b', entry_id: '1_b', status: 1, message: 'ok' },
+            ]);
+            const result = await model.clear_packages(['pkg-A']);
+            expect(result.ids).toBe(2);
+            expect(result.queue).toBe(1);
+            const surviving_ids = await db_queue()(tables.kaltura_ids);
+            expect(surviving_ids).toHaveLength(1);
+            expect(surviving_ids[0].package).toBe('pkg-B');
+            const surviving_queue = await db_queue()(tables.kaltura_package_queue);
+            expect(surviving_queue).toHaveLength(1);
+            expect(surviving_queue[0].package).toBe('pkg-B');
+        });
+
+        it('no-ops on an empty or missing package list', async () => {
+            await model.save_entry_ids([
+                { package: 'pkg-A', file: 'a', entry_id: '1_a', status: 1, message: 'ok' },
+            ]);
+            expect(await model.clear_packages([])).toEqual({ ids: 0, queue: 0 });
+            expect(await model.clear_packages(undefined)).toEqual({ ids: 0, queue: 0 });
+            expect(await db_queue()(tables.kaltura_ids)).toHaveLength(1);
+        });
+
+        it('rejects non-string package names', async () => {
+            await expect(model.clear_packages(['pkg-A', 42])).rejects.toThrow(ValidationError);
+            await expect(model.clear_packages([''])).rejects.toThrow(ValidationError);
+        });
+    });
+
     describe('clear_queue', () => {
         it('deletes both tables and returns the row counts', async () => {
             await model.queue_packages([{ package: 'pkg-A', files: ['a'] }]);

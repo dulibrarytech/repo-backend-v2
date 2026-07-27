@@ -110,6 +110,15 @@ async function post_metadata(req, res) {
     }
 
     /*
+     * Stage 0 — clear-on-start. Drop any earlier queue + IDs rows for
+     * THIS batch's packages so a retry replaces its previous results
+     * instead of appending to them. Scoped to the incoming package
+     * names on purpose — a global wipe would delete entry ids that
+     * in-flight ingests still read in Stage 5 (attach_kaltura_ids).
+     */
+    await model.clear_packages(req.body.packages.map((p) => p.package));
+
+    /*
      * Stage 1 — enqueue. JSON-stringify files at insert time so the
      * LONGTEXT column round-trips cleanly.
      */
