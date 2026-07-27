@@ -47,7 +47,8 @@ describe('admin archive browser — e2e', () => {
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
             expect(res.text).toContain('Ingested Batch Archive');
-            expect(res.text).toContain('never');
+            expect(res.text).toContain('Non-preservation snapshots');
+            expect(res.text).toContain('Preservation copies live in the AIP store (Wasabi)');
             /* HTMX container that loads the collections level. */
             expect(res.text).toContain('id="archive-level"');
             expect(res.text).toContain('/dashboard/admin/archive/list');
