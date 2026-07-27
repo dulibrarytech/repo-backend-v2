@@ -1,0 +1,39 @@
+<%/* Admin: Ingested Batch Archive browser.
+
+     Read-only view over the Wasabi batch archive (the retired
+     003-ingested folders' replacement). The page shell renders the
+     title + search box + an HTMX container; the container loads the
+     collections level on page load and then drives its own drill-down
+     — every folder link and the Load more button re-target the same
+     container via /dashboard/admin/archive/list. */%>
+<h1 class="page-title">Ingested Batch Archive</h1>
+<p class="page-subtitle">
+    Read-only snapshot of every ingested batch&rsquo;s original files,
+    stored in cloud storage (Wasabi). Open a collection folder to see its
+    archival object folders and files. Browsing and downloading here never
+    changes anything.
+</p>
+
+<div class="content-card">
+    <div class="content-card-header" style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+        <span>Archive contents</span>
+        <label style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
+            <span class="text-muted small">Filter loaded names:</span>
+            <input type="text" name="q" id="archive-filter"
+                   class="form-control form-control-sm" style="width: 220px;"
+                   placeholder="type to filter"
+                   hx-get="<%= dashboard_base %>/admin/archive/list"
+                   hx-target="#archive-level"
+                   hx-swap="innerHTML"
+                   hx-trigger="keyup changed delay:300ms"
+                   hx-include="#archive-level [name=collection], #archive-level [name=package]">
+        </label>
+    </div>
+
+    <div id="archive-level"
+         hx-get="<%= dashboard_base %>/admin/archive/list"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+        <div class="empty-state" style="padding: 24px;">Loading the archive&hellip;</div>
+    </div>
+</div>

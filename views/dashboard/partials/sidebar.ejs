@@ -271,6 +271,24 @@
             </svg>
         </a>
 
+        <%/* Ingested Batch Archive — read-only browse + download of
+             the Wasabi batch archive (retired 003-ingested
+             replacement). Archive-box icon. Reachable only via URL /
+             this admin focus mode while nav_show.admin_utils stays
+             off. */%>
+        <a href="<%= dashboard_base %>/admin/archive"
+           class="<%= page === 'archive' ? 'active' : '' %>"
+           <% if (page === 'archive') { %>aria-current="page"<% } %>
+           aria-label="Ingested Batch Archive (admin)"
+           title="Ingested Batch Archive (admin)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="2" y="4" width="20" height="5" rx="1"/>
+                <path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9"/>
+                <line x1="10" y1="13" x2="14" y2="13"/>
+            </svg>
+        </a>
+
     <% } else { %>
 
         <%/* Normal nav: Home / Collections / Objects / DPJ / Users /

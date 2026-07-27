@@ -1,0 +1,159 @@
+<%
+    // One drill-down level of the Ingested Batch Archive browser.
+    // Rendered by dashboard/archive_controller.archive_list_partial for
+    // all three levels:
+    //   level='collections' — folders = collection names
+    //   level='packages'    — folders = package names   (collection set)
+    //   level='files'       — files = [{name,key,size,last_modified}],
+    //                         folders = nested dir names + '/' (display
+    //                         only in v1), collection + package_name set
+    //
+    // Hidden inputs carry the current level so the page-shell filter
+    // box can hx-include them and stay on this level while filtering.
+    var list_url = dashboard_base + '/admin/archive/list';
+
+    function fmt_bytes(n) {
+        if (n === 0) return '0 B';
+        if (!n) return '';
+        var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        var i = 0;
+        while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+        return (i === 0 ? n : n.toFixed(1)) + ' ' + units[i];
+    }
+%>
+
+<input type="hidden" name="collection" value="<%= collection || '' %>">
+<input type="hidden" name="package" value="<%= package_name || '' %>">
+
+<%/* Breadcrumb: Archive → collection → package. Each ancestor is a
+     link that re-renders its level in the same container. */%>
+<nav aria-label="Archive location" style="padding: 10px 16px; font-size: 13.5px;">
+    <a href="#" hx-get="<%= list_url %>" hx-target="#archive-level" hx-swap="innerHTML">Archive</a>
+    <% if (collection) { %>
+        <span aria-hidden="true">›</span>
+        <% if (package_name) { %>
+            <a href="#"
+               hx-get="<%= list_url %>?collection=<%= encodeURIComponent(collection) %>"
+               hx-target="#archive-level" hx-swap="innerHTML"><%= collection %></a>
+            <span aria-hidden="true">›</span>
+            <strong><%= package_name %></strong>
+        <% } else { %>
+            <strong><%= collection %></strong>
+        <% } %>
+    <% } %>
+</nav>
+
+<% if (error) { %>
+    <div class="content-card sev-error" style="padding: 12px 16px; margin: 0 16px 12px;">
+        <strong>Error:</strong> <%= error %>
+    </div>
+<% } %>
+
+<table class="queue-table">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th style="width: 120px; text-align: right;">Size</th>
+            <th style="width: 190px;">Last modified</th>
+            <th style="width: 110px; text-align: center;">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        <% if (folders.length === 0 && files.length === 0 && !error) { %>
+            <tr>
+                <td colspan="4">
+                    <div class="empty-state" style="padding: 24px;">
+                        <% if (q && q.length > 0) { %>
+                            No loaded names match &ldquo;<%= q %>&rdquo;.
+                        <% } else { %>
+                            Nothing here.
+                        <% } %>
+                    </div>
+                </td>
+            </tr>
+        <% } %>
+
+        <% folders.forEach(function (name) { %>
+            <tr>
+                <td class="package-cell">
+                    <% if (level === 'files') { %>
+                        <%/* Nested folder inside a package — display-only
+                             in v1 (rare historical case; its files are
+                             still in the archive, just one level deeper). */%>
+                        <span class="text-muted" title="Nested folder — contents not browsable here yet">
+                            📁 <%= name %>
+                        </span>
+                    <% } else { %>
+                        <a href="#" class="package-name"
+                           hx-get="<%= list_url %>?<%=
+                               level === 'collections'
+                                   ? 'collection=' + encodeURIComponent(name)
+                                   : 'collection=' + encodeURIComponent(collection) +
+                                     '&package=' + encodeURIComponent(name)
+                           %>"
+                           hx-target="#archive-level" hx-swap="innerHTML">
+                            📁 <%= name %>
+                        </a>
+                    <% } %>
+                </td>
+                <td></td>
+                <td></td>
+                <td></td>
+            </tr>
+        <% }); %>
+
+        <% files.forEach(function (file) { %>
+            <tr>
+                <td class="package-cell"><span style="font-size: 13.5px;"><%= file.name %></span></td>
+                <td style="text-align: right; font-size: 13px;"><%= fmt_bytes(file.size) %></td>
+                <td style="font-size: 13px;">
+                    <%= file.last_modified ? file.last_modified.replace('T', ' ').slice(0, 19) : '' %>
+                </td>
+                <td style="text-align: center;">
+                    <%/* Key travels as PATH segments (each segment
+                         URI-encoded, slashes kept as separators) — a
+                         ?key= query param would be mangled by the
+                         global query sanitizer's entity-encoding. */%>
+                    <a href="<%= dashboard_base %>/admin/archive/download/<%= file.key.split('/').map(encodeURIComponent).join('/') %>"
+                       class="btn btn-sm btn-outline-secondary"
+                       title="Download <%= file.name %>"
+                       aria-label="Download <%= file.name %>">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="7 10 12 15 17 10"/>
+                            <line x1="12" y1="15" x2="12" y2="3"/>
+                        </svg>
+                        Download
+                    </a>
+                </td>
+            </tr>
+        <% }); %>
+    </tbody>
+</table>
+
+<% if (next_token) { %>
+    <div style="padding: 12px 16px; text-align: center;">
+        <button type="button" class="btn btn-sm btn-outline-secondary"
+                hx-get="<%= list_url %>?<%=
+                    'collection=' + encodeURIComponent(collection || '') +
+                    (package_name ? '&package=' + encodeURIComponent(package_name) : '') +
+                    '&token=' + encodeURIComponent(next_token)
+                %>"
+                hx-target="#archive-level" hx-swap="innerHTML">
+            Load more
+        </button>
+    </div>
+<% } %>
+
+<div class="app-pagination">
+    <div class="results-count">
+        <% if (level === 'files') { %>
+            <strong><%= files.length %></strong> file<%= files.length === 1 ? '' : 's' %>
+            <% if (folders.length > 0) { %> &middot; <strong><%= folders.length %></strong> nested folder<%= folders.length === 1 ? '' : 's' %><% } %>
+        <% } else { %>
+            <strong><%= folders.length %></strong> folder<%= folders.length === 1 ? '' : 's' %>
+        <% } %>
+        <%= next_token ? ' (more available — use Load more)' : '' %>
+    </div>
+</div>

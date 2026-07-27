@@ -7,6 +7,7 @@ const { login_limiter, write_limiter } = require('../auth/rate_limit');
 const controller = require('./controller');
 const aip_controller = require('./aip_controller');
 const aip_backfill_controller = require('./aip_backfill_controller');
+const archive_controller = require('./archive_controller');
 const thumbnails = require('./thumbnails');
 const errors = require('../libs/errors');
 
@@ -406,5 +407,37 @@ module.exports = function mount(app) {
         can_ingest,
         write_limiter(),
         aip_backfill_controller.backfill_cancel
+    );
+
+    /*
+     * Ingested Batch Archive browser — read-only browse + per-file
+     * download over the Wasabi batch archive (the retired 003-ingested
+     * folders' replacement). Gated on manage_ingest like the other
+     * ingest-infrastructure admin tools. All GETs; the surface has no
+     * mutating operations by design. Nav entry lives in the Admin
+     * Utils focus mode (currently nav-hidden), so these URLs are the
+     * only way in until nav_show.admin_utils is re-enabled.
+     */
+    app.get(
+        `${base}/admin/archive`,
+        require_dashboard_auth,
+        can_ingest,
+        archive_controller.archive_page
+    );
+    app.get(
+        `${base}/admin/archive/list`,
+        require_dashboard_auth,
+        can_ingest,
+        archive_controller.archive_list_partial
+    );
+    /*
+     * Wildcard path (not ?key=) because the query sanitizer entity-
+     * encodes `/` — see archive_controller.archive_download.
+     */
+    app.get(
+        `${base}/admin/archive/download/*key`,
+        require_dashboard_auth,
+        can_ingest,
+        archive_controller.archive_download
     );
 };
