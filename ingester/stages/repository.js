@@ -46,6 +46,7 @@ const mets_module = require('../libs/mets');
 const builder = require('../lib/repository_build');
 const repository_model = require('../../repository/model');
 const model_default = require('../model');
+const jobs_default = require('../jobs');
 const kaltura_model_default = require('../../kaltura/model');
 const app_config = require('../../config/app');
 const { sleep_or_abort } = require('../lib/polling');
@@ -58,6 +59,7 @@ async function run(row, deps = {}) {
     const parse_mets = (deps.mets && deps.mets.parse_mets) || mets_module.parse_mets;
     const repo = deps.repository_model || repository_model;
     const model = deps.model || model_default;
+    const jobs = deps.jobs || jobs_default;
     const kaltura_model = deps.kaltura_model || kaltura_model_default;
     const signal = deps.signal;
 
@@ -323,6 +325,23 @@ async function run(row, deps = {}) {
      */
     const archive_to_ingested = await _move_to_ingested_safely(qa, row);
 
+    /*
+     * LOUD failure surfacing (003-ingested retirement, phase 1).
+     * The archive copy is best-effort for the INGEST (a Wasabi outage
+     * must not unwind a completed repository record), but with the
+     * local 003-ingested copy retired, the Wasabi copy is the batch
+     * snapshot's only custodian — so a failure can no longer live
+     * only inside the COMPLETE event payload. Record a FAILED
+     * archive_to_wasabi row in tbl_ingest_jobs: it renders in the
+     * staff Job History view with a FAILED badge and is filterable
+     * by type. Success records nothing (history stays quiet unless
+     * something needs attention). The batch source remains in
+     * 002-ingest/<uuid> whenever the S3 upload fails (move_to_ingested
+     * only deletes it after a verified upload), so the staff remedy
+     * is: fix connectivity/creds, then re-run the archive.
+     */
+    await _record_archive_failure_safely(jobs, row, archive_to_ingested);
+
     const cfg = app_config().ingest_worker;
     await model.update_queue(
         { id: row.id },
@@ -505,6 +524,68 @@ async function _move_to_ingested_safely(qa, row) {
             err: err.message,
         });
         return { ok: false, error: err.message };
+    }
+}
+
+/*
+ * Record a FAILED archive_to_wasabi job when the end-of-ingest
+ * archive copy did not fully succeed (003-ingested retirement,
+ * phase 1 — see the call site in run() for the rationale).
+ *
+ * Recording rules:
+ *   ok:true                       → nothing recorded (quiet on success)
+ *   skipped:'missing_folder'      → nothing recorded (synthetic rows
+ *                                   without a batch; there is no
+ *                                   collection_folder to record against)
+ *   skipped:'qa_not_configured'   → recorded — an unconfigured
+ *                                   curation service means the batch
+ *                                   was NOT archived, which staff must
+ *                                   see once the local copy is retired
+ *   any other failure             → recorded with the error detail
+ *
+ * Best-effort like everything else at this point in Stage 5: a
+ * job-table insert failure is logged and swallowed — it must never
+ * unwind a completed ingest.
+ */
+async function _record_archive_failure_safely(jobs, row, archive_result) {
+    if (!archive_result || archive_result.ok === true) return;
+    if (archive_result.skipped === 'missing_folder') return;
+    if (!row.batch || row.batch === 'PENDING') return;
+
+    let error;
+    if (archive_result.skipped === 'qa_not_configured') {
+        error = 'Curation service is not configured — the batch was NOT archived to Wasabi.';
+    } else if (Array.isArray(archive_result.errors) && archive_result.errors.length > 0) {
+        error = archive_result.errors.join('; ');
+    } else if (archive_result.error) {
+        error = archive_result.error;
+    } else {
+        error = `Archive to Wasabi failed (HTTP ${archive_result.status || 'unknown'}).`;
+    }
+
+    try {
+        await jobs.record_job({
+            job_type: 'archive_to_wasabi',
+            status: 'FAILED',
+            collection_folder: row.batch,
+            packages: row.package ? [row.package] : [],
+            actor: 'worker',
+            resolved_actor_name: 'Ingest worker',
+            error,
+        });
+        log.error({
+            event: 'archive_to_wasabi_failed',
+            queue_id: row.id,
+            batch: row.batch,
+            package: row.package,
+            error,
+        });
+    } catch (err) {
+        log.warn({
+            event: 'archive_failure_job_record_failed',
+            queue_id: row.id,
+            err: err.message,
+        });
     }
 }
 

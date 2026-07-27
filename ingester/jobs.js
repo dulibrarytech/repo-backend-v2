@@ -32,6 +32,16 @@ const JOB_TYPES = new Set([
     'make_digital_objects',
     'archivesspace_description_qa',
     'packaging_and_ingesting',
+    /*
+     * Recorded by Stage 5 (worker) when the end-of-ingest archive
+     * copy to Wasabi fails — FAILED rows only, so Job History stays
+     * quiet unless something needs staff attention. Added for the
+     * 003-ingested retirement (phase 1): with the local archive copy
+     * retired, a silent Wasabi failure would leave the batch source
+     * unarchived, so the failure must be staff-visible, not buried
+     * in the COMPLETE event payload. See repo/INGESTED_RETIREMENT_PLAN.md.
+     */
+    'archive_to_wasabi',
 ]);
 
 const STATUSES = new Set(['SUCCESSFUL', 'FAILED']);

@@ -709,6 +709,13 @@ const JOB_TYPE_LABELS = {
     make_digital_objects: 'Make Digital Objects',
     archivesspace_description_qa: 'ArchivesSpace Description QA',
     packaging_and_ingesting: 'Packaging and Ingesting',
+    /*
+     * Worker-recorded, FAILED rows only: the end-of-ingest Wasabi
+     * archive copy did not succeed (003-ingested retirement, phase 1).
+     * The history filter dropdown derives from this map, so the entry
+     * doubles as the filter option.
+     */
+    archive_to_wasabi: 'Archive to Wasabi',
 };
 
 async function history_page(req, res) {

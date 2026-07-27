@@ -43,6 +43,11 @@ describe('ingest Job History — e2e', () => {
             expect(res.text).toContain('Make Digital Objects');
             expect(res.text).toContain('ArchivesSpace Description QA');
             expect(res.text).toContain('Packaging and Ingesting');
+            /*
+             * Worker-recorded archive failures (003-ingested
+             * retirement, phase 1) filter through the same dropdown.
+             */
+            expect(res.text).toContain('Archive to Wasabi');
             expect(res.text).toContain('SUCCESSFUL');
             expect(res.text).toContain('FAILED');
         });

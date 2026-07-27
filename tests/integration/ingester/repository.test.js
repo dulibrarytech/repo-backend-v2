@@ -624,4 +624,115 @@ describe('ingester/stages/repository', () => {
         const envelope = JSON.parse(obj.display_record);
         expect(envelope.parts[0].kaltura_id).toBeUndefined();
     });
+
+    /*
+     * --- archive_to_wasabi failure job (003-ingested retirement, ---
+     * --- phase 1) — loud surfacing in Job History                 ---
+     */
+    describe('archive_to_wasabi failure job', () => {
+        function make_jobs() {
+            const calls = [];
+            return {
+                async record_job(args) {
+                    calls.push(args);
+                    return 'job-uuid-test';
+                },
+                _calls: calls,
+            };
+        }
+
+        it('records a FAILED job when the Wasabi copy fails (200 body errors)', async () => {
+            const row = await seed_row();
+            const jobs = make_jobs();
+            const out = await stage.run(row, {
+                duracloud: make_duracloud({ mets_xml: happy_mets() }),
+                handles: make_handles(),
+                qa: make_qa({
+                    move_to_ingested_result: {
+                        status: 200,
+                        data: {
+                            result: 'packages_not_moved_to_ingested_folder',
+                            errors: ['ERROR: Unable to move packages to wasabi s3'],
+                        },
+                    },
+                }),
+                model,
+                jobs,
+            });
+            // The ingest itself still completes — the job row is the alarm.
+            expect(out.ok).toBe(true);
+            expect(jobs._calls).toHaveLength(1);
+            expect(jobs._calls[0].job_type).toBe('archive_to_wasabi');
+            expect(jobs._calls[0].status).toBe('FAILED');
+            expect(jobs._calls[0].collection_folder).toBe('batch-A');
+            expect(jobs._calls[0].packages).toEqual(['pkg-001']);
+            expect(jobs._calls[0].error).toContain('wasabi s3');
+        });
+
+        it('records a FAILED job on transport-level failure', async () => {
+            const row = await seed_row();
+            const jobs = make_jobs();
+            const out = await stage.run(row, {
+                duracloud: make_duracloud({ mets_xml: happy_mets() }),
+                handles: make_handles(),
+                qa: make_qa({ move_to_ingested_throws: true }),
+                model,
+                jobs,
+            });
+            expect(out.ok).toBe(true);
+            expect(jobs._calls).toHaveLength(1);
+            expect(jobs._calls[0].error).toContain('curation host down');
+        });
+
+        it('records a FAILED job when the curation service is not configured', async () => {
+            /*
+             * Unconfigured curation = the batch was NOT archived. With
+             * the local 003-ingested copy retired this must be visible,
+             * not a silent skip.
+             */
+            const row = await seed_row();
+            const jobs = make_jobs();
+            const out = await stage.run(row, {
+                duracloud: make_duracloud({ mets_xml: happy_mets() }),
+                handles: make_handles(),
+                qa: make_qa({ configured: false }),
+                model,
+                jobs,
+            });
+            expect(out.ok).toBe(true);
+            expect(jobs._calls).toHaveLength(1);
+            expect(jobs._calls[0].error).toContain('not configured');
+        });
+
+        it('records nothing on success', async () => {
+            const row = await seed_row();
+            const jobs = make_jobs();
+            const out = await stage.run(row, {
+                duracloud: make_duracloud({ mets_xml: happy_mets() }),
+                handles: make_handles(),
+                qa: make_qa(),
+                model,
+                jobs,
+            });
+            expect(out.ok).toBe(true);
+            expect(jobs._calls).toHaveLength(0);
+        });
+
+        it('a job-record failure never unwinds the completed ingest', async () => {
+            const row = await seed_row();
+            const jobs = {
+                async record_job() {
+                    throw new Error('jobs table unavailable');
+                },
+            };
+            const out = await stage.run(row, {
+                duracloud: make_duracloud({ mets_xml: happy_mets() }),
+                handles: make_handles(),
+                qa: make_qa({ move_to_ingested_throws: true }),
+                model,
+                jobs,
+            });
+            expect(out.ok).toBe(true);
+        });
+    });
 });
