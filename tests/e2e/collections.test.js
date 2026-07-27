@@ -238,6 +238,27 @@ describe('collections — e2e', () => {
             expect(res.text).toMatch(/2 objects/);
         });
 
+        it('does NOT render the "+ Create sub-collection" button on the detail page', async () => {
+            /*
+             * TEMPORARY (2026-07-27): the button is hidden by request via
+             * show_create_subcollection in
+             * views/dashboard/collection_detail.ejs. The
+             * /collections/new?parent=<pid> route stays live for direct
+             * URLs — covered by the sub-collection form tests below.
+             * Drop this test when the flag flips back to true.
+             */
+            const cookie = await cookie_for('detail-no-sub-btn');
+            const c = await db_helper.seed_object({
+                object_type: 'collection',
+                display_record: dr('No Sub Button Coll'),
+            });
+            const res = await supertest(app)
+                .get(`/repo/dashboard/collections/${c.pid}`)
+                .set('Cookie', cookie)
+                .expect(200);
+            expect(res.text).not.toContain('+ Create sub-collection');
+        });
+
         it('Collection detail page returns 404 for unknown pid', async () => {
             const cookie = await cookie_for('detail-404');
             const res = await supertest(app)

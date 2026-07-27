@@ -10,8 +10,12 @@
 <div class="d-flex justify-content-between align-items-start" style="gap: 12px;">
     <h1 class="page-title" style="margin: 0;"><%= collection.title || '(untitled collection)' %></h1>
     <%/* Create a sub-collection nested under this one (bound to its own ASpace
-         resource). Gated on edit_object. */%>
-    <% if (typeof can === 'function' && can('edit_object')) { %>
+         resource). Gated on edit_object.
+         TEMPORARY (2026-07-27): button hidden by request — flip
+         show_create_subcollection to true to restore. The
+         /collections/new?parent=<pid> route stays live for direct URLs. */%>
+    <% var show_create_subcollection = false; %>
+    <% if (show_create_subcollection && typeof can === 'function' && can('edit_object')) { %>
         <a href="<%= dashboard_base %>/collections/new?parent=<%= collection.pid %>"
            class="btn btn-sm btn-outline-primary text-nowrap">
             + Create sub-collection
