@@ -116,10 +116,10 @@ describe('ingest workspace pages — e2e', () => {
              * In focus mode the sidebar shows Home + the four workflow
              * icons + History. Collections, Objects, Users, Indexer,
              * and Metadata Refresh stay hidden so the sidebar reads as
-             * a focused pipeline. Home is kept as an escape hatch
-             * alongside the "← Collection Management" page-header
-             * back-link (added in task #114 — Home gives a one-click
-             * jump to the dashboard root from any workflow view).
+             * a focused pipeline. Home is the escape hatch — it gives
+             * a one-click jump to the dashboard root from any workflow
+             * view (the "← Collection Management" page-header
+             * back-links were removed 2026-07-27).
              */
             const cookie = await cookie_for('side-focus');
             for (const path of [
@@ -177,36 +177,25 @@ describe('ingest workspace pages — e2e', () => {
             expect(home_pos).toBeLessThan(mdo_pos);
         });
 
-        it('renders "← Collection Management" back-link on every workflow page', async () => {
+        it('does NOT render the "← Collection Management" back-link on any workflow page', async () => {
             /*
-             * Matches the pattern from views/dashboard/collection_detail.ejs
-             * ("← All collections"). The link is the only way OUT of
-             * the workflow when focus mode is active. The workspace
-             * (Make Digital Objects) view is the deliberate exception —
-             * its back-link was removed by request; see the companion
-             * test below.
+             * The back-link was removed from every workflow view by
+             * request (2026-07-27). The Home sidebar icon is now the
+             * exit from focus mode.
              */
             const cookie = await cookie_for('back-link');
             for (const path of [
+                '/repo/dashboard/ingest/workspace',
                 '/repo/dashboard/ingest/aspace-qa',
                 '/repo/dashboard/ingest/packaging',
                 '/repo/dashboard/ingest',
+                '/repo/dashboard/ingest/history',
+                '/repo/dashboard/ingest/recent',
             ]) {
                 const res = await supertest(app).get(path).set('Cookie', cookie);
                 expect(res.status).toBe(200);
-                expect(res.text).toMatch(
-                    /<a href="[^"]*\/dashboard\/collections"[^>]*>← Collection Management<\/a>/
-                );
+                expect(res.text).not.toContain('← Collection Management');
             }
-        });
-
-        it('does NOT render the back-link on the Make Digital Objects view', async () => {
-            const cookie = await cookie_for('back-link-workspace');
-            const res = await supertest(app)
-                .get('/repo/dashboard/ingest/workspace')
-                .set('Cookie', cookie);
-            expect(res.status).toBe(200);
-            expect(res.text).not.toContain('← Collection Management');
         });
 
         it('home page (out of workflow) keeps the standard sidebar items', async () => {

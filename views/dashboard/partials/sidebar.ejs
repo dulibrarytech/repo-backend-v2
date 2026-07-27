@@ -48,12 +48,11 @@
     <% if (in_workflow) { %>
 
         <%/* In-workflow: a focused four-step pipeline plus a Home
-             escape hatch at the top. The Home icon lets staff jump
-             back to the dashboard root without scrolling for the
-             "← Collection Management" back-link in the page header
-             — useful when several browser tabs are open at different
-             workflow steps. Collections / Objects / Users / Admin
-             Utils stay hidden to preserve focus mode.
+             escape hatch at the top. The Home icon is the way OUT of
+             focus mode — the "← Collection Management" page-header
+             back-links were removed from the workflow views
+             (2026-07-27, by request). Collections / Objects / Users /
+             Admin Utils stay hidden to preserve focus mode.
 
              Order: Home → MDO → ASpace QA → Packaging → Queue → History */%>
 

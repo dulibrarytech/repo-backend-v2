@@ -38,7 +38,8 @@ describe('ingest Job History — e2e', () => {
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
             expect(res.text).toContain('Job History');
-            expect(res.text).toContain('← Collection Management');
+            // Back-link removed 2026-07-27 — Home icon is the focus-mode exit.
+            expect(res.text).not.toContain('← Collection Management');
             // Filter chrome
             expect(res.text).toContain('Make Digital Objects');
             expect(res.text).toContain('ArchivesSpace Description QA');
