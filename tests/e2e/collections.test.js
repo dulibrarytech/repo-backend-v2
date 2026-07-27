@@ -158,6 +158,22 @@ describe('collections — e2e', () => {
             expect(res.text).toMatch(/name="q"/);
         });
 
+        it('does NOT render the "+ New collection" button on the list view', async () => {
+            /*
+             * TEMPORARY (2026-07-27): the button is hidden by request via
+             * show_new_collection in views/dashboard/collections.ejs.
+             * The /collections/new route stays live for direct URLs —
+             * covered by the create-form tests below. Drop this test
+             * when the flag flips back to true.
+             */
+            const cookie = await cookie_for('list-no-new-btn');
+            const res = await supertest(app)
+                .get('/repo/dashboard/collections')
+                .set('Cookie', cookie)
+                .expect(200);
+            expect(res.text).not.toContain('+ New collection');
+        });
+
         it('Collections list partial returns the table fragment', async () => {
             const cookie = await cookie_for('list-partial');
             await db_helper.seed_object({
