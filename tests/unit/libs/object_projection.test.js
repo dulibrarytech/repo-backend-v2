@@ -122,6 +122,50 @@ describe('libs/object_projection', () => {
             expect(out.subjects).toEqual(['One', 'Two']);
         });
 
+        it('exposes the ASpace identifier from the nested transform record', () => {
+            /*
+             * Real display_record shape: an index-doc envelope whose
+             * nested `display_record` carries the ASpace transform —
+             * identifiers live ONLY there, not at the top level.
+             */
+            const out = projection.enrich({
+                pid: 'p-id1',
+                display_record: JSON.stringify({
+                    title: 'Enveloped',
+                    display_record: {
+                        title: 'Enveloped',
+                        identifiers: [
+                            { type: 'local', identifier: 'B002.01.0098.0035.00008' },
+                        ],
+                    },
+                }),
+            });
+            expect(out.identifier).toBe('B002.01.0098.0035.00008');
+        });
+
+        it('falls back to flat identifiers and nulls a null identifier value', () => {
+            // Flat-shape fallback (parity with the AIP dashboard lookup).
+            const flat = projection.enrich({
+                pid: 'p-id2',
+                display_record: JSON.stringify({
+                    identifiers: [{ type: 'local', identifier: 'M123.01' }],
+                }),
+            });
+            expect(flat.identifier).toBe('M123.01');
+            // Exporter emits {type:'local', identifier:null} when AS has none.
+            const none = projection.enrich({
+                pid: 'p-id3',
+                display_record: JSON.stringify({
+                    display_record: {
+                        identifiers: [{ type: 'local', identifier: null }],
+                    },
+                }),
+            });
+            expect(none.identifier).toBeNull();
+            // No display_record at all.
+            expect(projection.enrich({ pid: 'p-id4' }).identifier).toBeNull();
+        });
+
         it('exposes media_category derived from the row mime_type', () => {
             expect(projection.enrich({ pid: 'a', mime_type: 'audio/mpeg' }).media_category).toBe('audio');
             expect(projection.enrich({ pid: 'b', mime_type: 'application/pdf' }).media_category).toBe('pdf');

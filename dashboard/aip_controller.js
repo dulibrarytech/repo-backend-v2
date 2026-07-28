@@ -109,10 +109,11 @@ function format_bytes(n) {
 }
 
 /*
- * Enrich list-page rows with the matching tbl_objects title. We do
- * this as a separate batch read (one query for all rows on the page)
- * rather than via a JOIN so the existing aip_store_model.list stays
- * scoped to its own table and tests don't need to seed tbl_objects.
+ * Enrich list-page rows with the matching tbl_objects title, ASpace
+ * identifier, and ASpace URI. We do this as a separate batch read
+ * (one query for all rows on the page) rather than via a JOIN so the
+ * existing aip_store_model.list stays scoped to its own table and
+ * tests don't need to seed tbl_objects.
  */
 async function _attach_titles(items) {
     const uuids = items.map((r) => r.uuid).filter(Boolean);
@@ -131,6 +132,7 @@ async function _attach_titles(items) {
     return items.map((r) => {
         const obj = by_pid[r.uuid];
         let title = null;
+        let identifier = null;
         if (obj && obj.display_record) {
             try {
                 const dr = JSON.parse(obj.display_record);
@@ -138,11 +140,30 @@ async function _attach_titles(items) {
                     (dr && dr.display_record && dr.display_record.title) ||
                     dr.title ||
                     null;
+                /*
+                 * ASpace identifier — component_id for objects, joined
+                 * id_0..id_3 for resources (see archivesspace_transform
+                 * _build_identifiers). The exporter always emits the
+                 * array but the identifier value itself can be null.
+                 * Same envelope-or-flat fallback as the title above.
+                 */
+                const ids =
+                    (dr && dr.display_record && dr.display_record.identifiers) ||
+                    (dr && dr.identifiers) ||
+                    null;
+                const first = Array.isArray(ids) && ids.length > 0 ? ids[0] : null;
+                identifier = (first && first.identifier) || null;
             } catch {
-                // Corrupt display_record — no title.
+                // Corrupt display_record — no title/identifier.
             }
         }
-        return { ...r, _object_title: title, _bytes_human: format_bytes(r.bytes) };
+        return {
+            ...r,
+            _object_title: title,
+            _object_identifier: identifier,
+            _object_uri: (obj && obj.uri) || null,
+            _bytes_human: format_bytes(r.bytes),
+        };
     });
 }
 

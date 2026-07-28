@@ -590,7 +590,7 @@ describe('collections — e2e', () => {
             expect(res.headers.location).toContain(`/collections/${c.pid}/add-objects`);
         });
 
-        it('detail page shows the Add objects button + a Sub-collections section', async () => {
+        it('detail page shows a Sub-collections section (Add objects button hidden)', async () => {
             const parent = await db_helper.seed_object({
                 object_type: 'collection',
                 display_record: dr('Parent Coll'),
@@ -606,8 +606,16 @@ describe('collections — e2e', () => {
                 .get(`/repo/dashboard/collections/${parent.pid}`)
                 .set('Cookie', cookie)
                 .expect(200);
-            // Add-objects affordance (editor).
-            expect(res.text).toContain(`/collections/${parent.pid}/add-objects`);
+            /*
+             * TEMPORARY (2026-07-28): the "+ Add objects" button is hidden
+             * by request via show_add_objects in
+             * views/dashboard/collection_detail.ejs. The
+             * /collections/:pid/add-objects route stays live for direct
+             * URLs — covered by the add-objects form tests above. Restore
+             * the toContain assertion when the flag flips back to true.
+             */
+            expect(res.text).not.toContain('+ Add objects');
+            expect(res.text).not.toContain(`/collections/${parent.pid}/add-objects`);
             // Sub-collections section + the child collection's title.
             expect(res.text).toMatch(/Sub-collections/);
             expect(res.text).toContain('Nested Child Coll');

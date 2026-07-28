@@ -52,6 +52,27 @@
                     </a>
                 </div>
             <% } %>
+            <% if (item._object_identifier) { %>
+                <%/* ASpace identifier (component id, e.g.
+                     B002.01.0098.0035.00008) — the human-meaningful
+                     call-number-style id staff quote when discussing
+                     an object. Muted like the filename: informational,
+                     not a link. */%>
+                <div class="font-monospace text-muted"
+                     style="font-size: 12px; word-break: break-all;"
+                     title="ArchivesSpace identifier">
+                    <%= item._object_identifier %>
+                </div>
+            <% } %>
+            <% if (item._object_uri) { %>
+                <%/* ASpace URI (API-style path, not a staff-UI URL) —
+                     plain text, same convention as collection rows. */%>
+                <div class="font-monospace text-muted"
+                     style="font-size: 12px; word-break: break-all;"
+                     title="ArchivesSpace URI">
+                    <%= item._object_uri %>
+                </div>
+            <% } %>
             <% if (aip_filename) { %>
                 <%/* AIP filename stays text-muted — it's informational
                      (the download is the kebab action), not a link.

@@ -147,13 +147,23 @@
 <% } %>
 
 <div class="content-card">
-    <div class="content-card-header">
+    <%/* Stacked header: heading on its own line, bulk controls in a
+         left-aligned row below. Deliberate (2026-07-28) — the default
+         space-between header only looked this way because the wide
+         button row happened to wrap; with "+ Add objects" hidden the
+         controls fit beside the heading and jumped up-right. */%>
+    <div class="content-card-header" style="flex-direction: column; align-items: stretch;">
         <h2 style="font-size: 18px; margin: 0;">Member objects</h2>
         <div class="control-group">
             <%/* Move existing objects into this collection (single-membership
                  reassign). Filled button to set the additive action apart from
-                 the outline bulk buttons. Gated on edit_object. */%>
-            <% if (typeof can === 'function' && can('edit_object')) { %>
+                 the outline bulk buttons. Gated on edit_object.
+                 TEMPORARY (2026-07-28): button hidden by request — flip
+                 show_add_objects to true to restore. The
+                 /collections/:pid/add-objects route stays live for
+                 direct URLs. */%>
+            <% var show_add_objects = false; %>
+            <% if (show_add_objects && typeof can === 'function' && can('edit_object')) { %>
                 <a class="btn btn-sm btn-primary text-nowrap"
                    href="<%= dashboard_base %>/collections/<%= collection.pid %>/add-objects">
                     + Add objects

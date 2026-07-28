@@ -93,9 +93,24 @@ function enrich(row) {
      * but present in fixtures + dev data).
      */
     const raw_thumbnail = dr.thumbnail || rest.thumbnail || null;
+    /*
+     * ASpace identifier (component_id for objects, joined id_0..id_3
+     * for resources — see archivesspace_transform _build_identifiers).
+     * The envelope's top level carries no identifiers array; it lives
+     * in the nested transform record. Flat fallback kept for parity
+     * with the AIP dashboard's lookup. The exporter always emits the
+     * array but the identifier value itself can be null.
+     */
+    const ids =
+        (dr.display_record && Array.isArray(dr.display_record.identifiers)
+            ? dr.display_record.identifiers
+            : null) ||
+        (Array.isArray(dr.identifiers) ? dr.identifiers : null);
+    const first_id = ids && ids.length > 0 ? ids[0] : null;
     return {
         ...rest,
         title: dr.title || null,
+        identifier: (first_id && first_id.identifier) || null,
         abstract: first_string(dr.abstract),
         handle: dr.handle || rest.handle || null,
         /*

@@ -860,6 +860,54 @@ describe('dashboard — e2e', () => {
             expect(res.text).not.toContain(`id="object-${noise.pid}"`);
         });
 
+        it('GET /objects/list keeps the PID line on rows without a handle', async () => {
+            /*
+             * The standalone PID line is suppressed when a handle
+             * renders (the handle embeds the PID), but a row whose
+             * ingest never minted a handle must keep the PID as its
+             * only identifier.
+             */
+            const cookie = await cookie_for('o-pid-fallback');
+            const seeded = await db_helper.seed_object({ handle: null });
+            const res = await supertest(app)
+                .get(`/repo/dashboard/objects/list?q=${seeded.pid}`)
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toMatch(
+                new RegExp(`title="${seeded.pid}"[^>]*>\\s*${seeded.pid}`)
+            );
+        });
+
+        it('GET /objects/list shows the ASpace identifier above the URI', async () => {
+            const cookie = await cookie_for('o-ident-list');
+            const seeded = await db_helper.seed_object({
+                uri: '/repositories/2/archival_objects/66574',
+                display_record: JSON.stringify({
+                    title: 'Identifier Row Object',
+                    display_record: {
+                        title: 'Identifier Row Object',
+                        identifiers: [
+                            { type: 'local', identifier: 'B002.01.0098.0035.00008' },
+                        ],
+                    },
+                }),
+            });
+            const res = await supertest(app)
+                .get(`/repo/dashboard/objects/list?q=${seeded.pid}`)
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toContain('B002.01.0098.0035.00008');
+            /*
+             * Ordering pin: identifier line renders BEFORE the URI line
+             * (same stacking as aip_row.ejs).
+             */
+            const ident_at = res.text.indexOf('B002.01.0098.0035.00008');
+            const uri_at = res.text.indexOf('/repositories/2/archival_objects/66574');
+            expect(ident_at).toBeGreaterThan(-1);
+            expect(uri_at).toBeGreaterThan(-1);
+            expect(ident_at).toBeLessThan(uri_at);
+        });
+
         it('kebab shows "View public handle" only on PUBLISHED objects', async () => {
             /*
              * The action links out to the public record, which only resolves
@@ -3360,6 +3408,59 @@ describe('dashboard — e2e', () => {
             expect(res.text).toMatch(/Copied/);
             // The download anchor links to /aips/:id/download.
             expect(res.text).toContain(`/dashboard/aips/${seeded.id}/download`);
+        });
+
+        it('GET /aips/list shows the object identifier and ASpace URI under the PID', async () => {
+            const cookie = await cookie_for('aip-ident');
+            const pid = 'aip-ident-pid-1';
+            await db_helper.seed_object({
+                pid,
+                uri: '/repositories/2/archival_objects/66574',
+                display_record: JSON.stringify({
+                    display_record: {
+                        title: 'Identifier Test Object',
+                        identifiers: [
+                            { type: 'local', identifier: 'B002.01.0098.0035.00008' },
+                        ],
+                    },
+                }),
+            });
+            await db_helper.seed_aip_store({ uuid: pid });
+            const res = await supertest(app)
+                .get('/repo/dashboard/aips/list')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toContain('Identifier Test Object');
+            expect(res.text).toContain('B002.01.0098.0035.00008');
+            expect(res.text).toContain('/repositories/2/archival_objects/66574');
+        });
+
+        it('GET /aips/list omits the identifier line when ASpace supplied none', async () => {
+            /*
+             * The exporter always emits identifiers[] but the value can
+             * be null ({type:'local', identifier:null}) — the row must
+             * skip the line rather than render "null".
+             */
+            const cookie = await cookie_for('aip-ident-null');
+            const pid = 'aip-ident-pid-2';
+            await db_helper.seed_object({
+                pid,
+                uri: '/repositories/2/archival_objects/70001',
+                display_record: JSON.stringify({
+                    display_record: {
+                        title: 'No Identifier Object',
+                        identifiers: [{ type: 'local', identifier: null }],
+                    },
+                }),
+            });
+            await db_helper.seed_aip_store({ uuid: pid });
+            const res = await supertest(app)
+                .get('/repo/dashboard/aips/list')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toContain('No Identifier Object');
+            expect(res.text).not.toMatch(/>\s*null\s*</);
+            expect(res.text).toContain('/repositories/2/archival_objects/70001');
         });
 
         it('GET /aips/list survives duplicated query params (last-wins coercion)', async () => {
