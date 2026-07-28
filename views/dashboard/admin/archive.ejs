@@ -15,8 +15,7 @@
 </p>
 
 <div class="content-card">
-    <div class="content-card-header" style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
-        <span>Backup contents</span>
+    <div class="content-card-header" style="display: flex; align-items: center; justify-content: flex-end; gap: 12px;">
         <label style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
             <span class="text-muted small">Filter loaded names:</span>
             <input type="text" name="q" id="archive-filter"
@@ -34,6 +33,6 @@
          hx-get="<%= dashboard_base %>/admin/archive/list"
          hx-trigger="load"
          hx-swap="innerHTML">
-        <div class="empty-state" style="padding: 24px;">Loading the archive&hellip;</div>
+        <div class="empty-state" style="padding: 24px;">Loading backups&hellip;</div>
     </div>
 </div>
