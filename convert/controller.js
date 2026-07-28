@@ -41,7 +41,7 @@ function render_partial(req, res, view, locals = {}) {
 function render_page(req, res, view, locals = {}) {
     const cfg = app_config();
     const base_locals = {
-        title: locals.title || 'Digital Archives @ DU',
+        title: locals.title || 'Digital Archives Manager @ DU',
         app_path: cfg.path,
         dashboard_base: `${cfg.path}/dashboard`,
         static_base: `${cfg.path}/static`,
@@ -117,7 +117,7 @@ async function convert_page(req, res) {
     render_page(req, res, 'dashboard/admin/convert', {
         page: 'convert',
         active: 'admin',
-        title: 'TIFF to JPG Conversion — Digital Archives @ DU',
+        title: 'TIFF to JPG Conversion — Digital Archives Manager @ DU',
     });
 }
 

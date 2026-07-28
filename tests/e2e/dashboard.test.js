@@ -84,8 +84,8 @@ describe('dashboard — e2e', () => {
         it('GET /login renders the standalone shell (no app chrome)', async () => {
             const res = await supertest(app).get('/repo/dashboard/login');
             expect(res.status).toBe(200);
-            // Header brand block shows "Digital Archives @ DU"; H1 is "Sign in"
-            expect(res.text).toMatch(/Digital Archives <span class="accent">@ DU<\/span>/);
+            // Header brand block shows "Digital Archives Manager @ DU"; H1 is "Sign in"
+            expect(res.text).toMatch(/Digital Archives Manager <span class="accent">@ DU<\/span>/);
             expect(res.text).toMatch(/<h1[^>]*>Sign in<\/h1>/);
             // login shell is standalone — no sidebar
             expect(res.text).not.toMatch(/class="app-sidebar"/);
@@ -504,10 +504,19 @@ describe('dashboard — e2e', () => {
             );
         });
 
-        it('breadcrumb nav on workflow pages carries aria-label="Breadcrumb"', async () => {
+        it('breadcrumb nav carries aria-label="Breadcrumb"', async () => {
+            /*
+             * TEMPORARY (2026-07-27) v1-familiar nav: the workflow views
+             * (ingest, packaging, aspace_qa, history, recent) lost their
+             * breadcrumb back-links — the Home icon is the exit. This
+             * originally asserted /repo/dashboard/ingest/packaging; it now
+             * asserts the Workflow Guide, which keeps its breadcrumb.
+             * When the temporary nav is reverted, point this back at a
+             * workflow page.
+             */
             const cookie = await cookie_for('a11y-breadcrumb');
             const res = await supertest(app)
-                .get('/repo/dashboard/ingest/packaging')
+                .get('/repo/dashboard/ingest/help')
                 .set('Cookie', cookie);
             expect(res.text).toMatch(
                 /<nav[^>]*class="small text-muted mb-2"[^>]*aria-label="Breadcrumb"/

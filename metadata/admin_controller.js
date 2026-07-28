@@ -47,7 +47,7 @@ function render_partial(req, res, view, locals = {}) {
 function render_page(req, res, view, locals = {}) {
     const cfg = app_config();
     const base_locals = {
-        title: locals.title || 'Metadata Refresh — Digital Archives @ DU',
+        title: locals.title || 'Metadata Refresh — Digital Archives Manager @ DU',
         app_path: cfg.path,
         dashboard_base: `${cfg.path}/dashboard`,
         static_base: `${cfg.path}/static`,
@@ -72,7 +72,7 @@ async function metadata_refresh_page(req, res) {
     render_page(req, res, 'dashboard/admin/metadata_refresh', {
         page: 'metadata_refresh',
         active: 'admin',
-        title: 'Metadata Refresh — Digital Archives @ DU',
+        title: 'Metadata Refresh — Digital Archives Manager @ DU',
     });
 }
 

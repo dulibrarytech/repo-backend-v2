@@ -51,7 +51,7 @@ function safe_next(raw, fallback) {
 function render_page(req, res, view, locals = {}) {
     const cfg = app_config();
     const base_locals = {
-        title: locals.title || 'Digital Archives @ DU',
+        title: locals.title || 'Digital Archives Manager @ DU',
         app_path: cfg.path,
         dashboard_base: `${cfg.path}/dashboard`,
         static_base: `${cfg.path}/static`,
@@ -204,7 +204,7 @@ async function home_page(req, res) {
     render_page(req, res, 'dashboard/stats', {
         page: 'stats',
         active: 'home',
-        title: 'Home — Digital Archives @ DU',
+        title: 'Home — Digital Archives Manager @ DU',
         user,
         summary,
         per_year,
@@ -272,7 +272,7 @@ async function collections_page(req, res) {
     render_page(req, res, 'dashboard/collections', {
         page: 'collections',
         active: 'collections',
-        title: 'Manage Collections — Digital Archives @ DU',
+        title: 'Manage Collections — Digital Archives Manager @ DU',
         filters: {
             q: req.query.q || '',
             /*
@@ -312,7 +312,7 @@ async function collection_detail_page(req, res) {
     render_page(req, res, 'dashboard/collection_detail', {
         page: 'collection_detail',
         active: 'collections',
-        title: `${collection.title || collection.pid} — Digital Archives @ DU`,
+        title: `${collection.title || collection.pid} — Digital Archives Manager @ DU`,
         collection,
         sub_collections,
         filters: {
@@ -466,7 +466,7 @@ async function collection_new_page(req, res) {
     render_page(req, res, 'dashboard/collections_new', {
         page: 'collections_new',
         active: 'collections',
-        title: parent ? 'Create Sub-collection — Digital Archives @ DU' : 'New Collection — Digital Archives @ DU',
+        title: parent ? 'Create Sub-collection — Digital Archives Manager @ DU' : 'New Collection — Digital Archives Manager @ DU',
         parent,
         form: { uri: '' },
         error: null,
@@ -497,8 +497,8 @@ async function collection_create(req, res) {
             page: 'collections_new',
             active: 'collections',
             title: parent
-                ? 'Create Sub-collection — Digital Archives @ DU'
-                : 'New Collection — Digital Archives @ DU',
+                ? 'Create Sub-collection — Digital Archives Manager @ DU'
+                : 'New Collection — Digital Archives Manager @ DU',
             parent,
             form: { uri: raw },
             error: message,
