@@ -192,10 +192,20 @@ async function list(filter = {}) {
 
     if (filter.q && typeof filter.q === 'string' && filter.q.trim()) {
         const needle = `%${filter.q.trim()}%`;
+        /*
+         * extra_uuids widens the text match: pids the CALLER resolved
+         * from another table (the AIPs dashboard passes objects whose
+         * display_record matched q, so ASpace identifiers hit). Kept
+         * as plain data so this model stays scoped to its own table.
+         */
+        const extra_uuids = Array.isArray(filter.extra_uuids)
+            ? filter.extra_uuids.filter((u) => typeof u === 'string' && u.length > 0)
+            : [];
         q.andWhere(function () {
             this.where('uuid', 'like', needle)
                 .orWhere('aip', 'like', needle)
                 .orWhere('wasabi_key', 'like', needle);
+            if (extra_uuids.length > 0) this.orWhereIn('uuid', extra_uuids);
         });
     }
 

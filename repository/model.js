@@ -132,6 +132,31 @@ async function list_by_pids(pids) {
 }
 
 /*
+ * Pids whose display_record text contains `q` — the same LIKE-over-JSON
+ * approach the staff search (search/model.js) uses, but projected down
+ * to bare pids. Used by the AIPs dashboard so a search by ASpace
+ * identifier (e.g. D009.22.0007.0041.00001, which lives only inside
+ * display_record) can resolve to tbl_aip_store rows via uuid=pid.
+ * Capped so a broad term can't balloon the caller's whereIn.
+ */
+async function list_pids_by_display_record_match(q, limit = 500) {
+    /*
+     * Min length 3 (mirrors search/model quick_lookup): the LIKE is a
+     * full longtext scan (~1s warm on the current corpus), and one- or
+     * two-char fragments match almost every row anyway — not worth a
+     * scan per keystroke of a live-search box.
+     */
+    if (typeof q !== 'string' || q.trim().length < 3) return [];
+    /* LIKE-escape user-supplied wildcards (mirrors search/model.js). */
+    const needle = '%' + q.trim().replace(/[\\%_]/g, (ch) => '\\' + ch) + '%';
+    const rows = await db()(tables.objects)
+        .select('pid')
+        .where('display_record', 'like', needle)
+        .limit(limit);
+    return rows.map((r) => r.pid);
+}
+
+/*
  * Publish and suppress BOTH dirty the row so the indexer reflects the
  * new state in ES on its next tick. This keeps the staff workflow
  * single-click: publish → public; suppress → not public. Without
@@ -722,6 +747,7 @@ module.exports = {
     MAX_BULK_PIDS,
     list,
     list_by_pids,
+    list_pids_by_display_record_match,
     get,
     publish,
     suppress,

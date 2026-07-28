@@ -204,10 +204,31 @@ async function aips_table_partial(req, res) {
     const source = _str(req.query.source);
     const status = _str(req.query.status);
 
+    /*
+     * Widen the text search to ASpace identifiers (e.g.
+     * D009.22.0007.0041.00001): they live only inside tbl_objects'
+     * display_record JSON, so resolve matching pids first and let the
+     * model OR them into its own-table match. Best-effort — a glitch
+     * reading tbl_objects degrades the search to AIP columns only
+     * rather than failing the page.
+     */
+    let extra_uuids = [];
+    if (q) {
+        try {
+            extra_uuids = await repository_model.list_pids_by_display_record_match(q);
+        } catch (err) {
+            log.warn({
+                event: 'aip_dashboard_identifier_lookup_failed',
+                err: err.message,
+            });
+        }
+    }
+
     const result = await aip_store_model.list({
         page: req.query.page,
         page_size: req.query.page_size || '25',
         q,
+        extra_uuids,
         source: source || undefined,
         status: status || undefined,
     });

@@ -3463,6 +3463,48 @@ describe('dashboard — e2e', () => {
             expect(res.text).toContain('/repositories/2/archival_objects/70001');
         });
 
+        it('GET /aips/list finds rows by the object ASpace identifier', async () => {
+            /*
+             * The identifier lives only in tbl_objects' display_record,
+             * so the controller resolves matching pids first and the
+             * model ORs them into its own-table text match.
+             */
+            const cookie = await cookie_for('aip-q-ident');
+            const pid = 'aip-ident-q-pid-1';
+            await db_helper.seed_object({
+                pid,
+                display_record: JSON.stringify({
+                    display_record: {
+                        title: 'Identifier Search Object',
+                        identifiers: [
+                            { type: 'local', identifier: 'D009.22.0007.0041.00001' },
+                        ],
+                    },
+                }),
+            });
+            const hit = await db_helper.seed_aip_store({ uuid: pid, aip: 'hit.7z' });
+            const miss = await db_helper.seed_aip_store({ aip: 'miss.7z' });
+            const res = await supertest(app)
+                .get('/repo/dashboard/aips/list?q=D009.22.0007.0041.00001')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toContain(`id="aip-row-${hit.id}"`);
+            expect(res.text).not.toContain(`id="aip-row-${miss.id}"`);
+        });
+
+        it('GET /aips/list still matches its own columns when no identifier resolves', async () => {
+            const cookie = await cookie_for('aip-q-own');
+            const seeded = await db_helper.seed_aip_store({
+                aip: 'own-col-match.7z',
+                wasabi_key: 'aip-store/own-col-match.7z',
+            });
+            const res = await supertest(app)
+                .get('/repo/dashboard/aips/list?q=own-col-match')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toContain(`id="aip-row-${seeded.id}"`);
+        });
+
         it('GET /aips/list survives duplicated query params (last-wins coercion)', async () => {
             /*
              * Regression: the pagination button used to embed q /
