@@ -1,5 +1,5 @@
 <%
-    // One drill-down level of the Ingested Batch Archive browser.
+    // One drill-down level of the Batch Backups (Wasabi) browser.
     // Rendered by dashboard/archive_controller.archive_list_partial for
     // all three levels:
     //   level='collections' — folders = collection names
@@ -25,10 +25,10 @@
 <input type="hidden" name="collection" value="<%= collection || '' %>">
 <input type="hidden" name="package" value="<%= package_name || '' %>">
 
-<%/* Breadcrumb: Archive → collection → package. Each ancestor is a
+<%/* Breadcrumb: Backups → collection → package. Each ancestor is a
      link that re-renders its level in the same container. */%>
-<nav aria-label="Archive location" style="padding: 10px 16px; font-size: 13.5px;">
-    <a href="#" hx-get="<%= list_url %>" hx-target="#archive-level" hx-swap="innerHTML">Archive</a>
+<nav aria-label="Backup location" style="padding: 10px 16px; font-size: 13.5px;">
+    <a href="#" hx-get="<%= list_url %>" hx-target="#archive-level" hx-swap="innerHTML">Backups</a>
     <% if (collection) { %>
         <span aria-hidden="true">›</span>
         <% if (package_name) { %>

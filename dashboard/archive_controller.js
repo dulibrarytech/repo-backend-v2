@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * Admin: Ingested Batch Archive browser — read-only browse + per-file
+ * Admin: Batch Backups (Wasabi) browser — read-only browse + per-file
  * download over the Wasabi batch archive (the retired 003-ingested
  * folders' replacement; design in repo/WASABI_ARCHIVE_BROWSER_PLAN.md).
  *
@@ -38,7 +38,7 @@ const { ValidationError } = require('../libs/errors');
 function render_page(req, res, view, locals = {}) {
     const cfg = app_config();
     const base_locals = {
-        title: locals.title || 'Ingested Batch Archive — Repo Dashboard',
+        title: locals.title || 'Batch Backups (Wasabi) — Repo Dashboard',
         app_path: cfg.path,
         dashboard_base: `${cfg.path}/dashboard`,
         static_base: `${cfg.path}/static`,
@@ -92,7 +92,7 @@ async function archive_page(req, res) {
     render_page(req, res, 'dashboard/admin/archive', {
         page: 'archive',
         active: 'admin',
-        title: 'Ingested Batch Archive — Repo Dashboard',
+        title: 'Batch Backups (Wasabi) — Repo Dashboard',
     });
 }
 

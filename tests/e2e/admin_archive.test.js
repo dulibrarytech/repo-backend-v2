@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * E2E for the Ingested Batch Archive browser
+ * E2E for the Batch Backups (Wasabi) browser
  * (/dashboard/admin/archive/* — repo/WASABI_ARCHIVE_BROWSER_PLAN.md).
  *
  * The curation API is unconfigured in test land (CURATION_API absent),
@@ -46,7 +46,7 @@ describe('admin archive browser — e2e', () => {
                 .get('/repo/dashboard/admin/archive')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            expect(res.text).toContain('Ingested Batch Archive');
+            expect(res.text).toContain('Batch Backups (Wasabi)');
             expect(res.text).toContain('Non-preservation snapshots');
             expect(res.text).toContain('Preservation copies live in the AIP store (Wasabi)');
             /* HTMX container that loads the collections level. */
@@ -76,7 +76,7 @@ describe('admin archive browser — e2e', () => {
                 .get('/repo/dashboard/admin/archive')
                 .set('Cookie', cookie);
             expect(res.text).toMatch(
-                /aria-current="page"[^>]*aria-label="Ingested Batch Archive \(admin\)"/
+                /aria-current="page"[^>]*aria-label="Batch Backups \(Wasabi\) \(admin\)"/
             );
         });
     });

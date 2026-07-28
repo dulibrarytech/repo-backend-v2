@@ -410,7 +410,7 @@ module.exports = function mount(app) {
     );
 
     /*
-     * Ingested Batch Archive browser — read-only browse + per-file
+     * Batch Backups (Wasabi) browser — read-only browse + per-file
      * download over the Wasabi batch archive (the retired 003-ingested
      * folders' replacement). Gated on manage_ingest like the other
      * ingest-infrastructure admin tools. All GETs; the surface has no

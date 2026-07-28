@@ -1,4 +1,4 @@
-<%/* Admin: Ingested Batch Archive browser.
+<%/* Admin: Batch Backups (Wasabi) browser.
 
      Read-only view over the Wasabi batch archive (the retired
      003-ingested folders' replacement). The page shell renders the
@@ -6,7 +6,7 @@
      collections level on page load and then drives its own drill-down
      — every folder link and the Load more button re-target the same
      container via /dashboard/admin/archive/list. */%>
-<h1 class="page-title">Ingested Batch Archive</h1>
+<h1 class="page-title">Batch Backups (Wasabi)</h1>
 <p class="page-subtitle">
     Non-preservation snapshots of ingested batches, stored in cloud
     storage (Wasabi). Preservation copies live in the AIP store (Wasabi)
@@ -16,7 +16,7 @@
 
 <div class="content-card">
     <div class="content-card-header" style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
-        <span>Archive contents</span>
+        <span>Backup contents</span>
         <label style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
             <span class="text-muted small">Filter loaded names:</span>
             <input type="text" name="q" id="archive-filter"
