@@ -122,6 +122,36 @@ describe('libs/object_projection', () => {
             expect(out.subjects).toEqual(['One', 'Two']);
         });
 
+        it('rewrites http hdl.handle.net handles to https at render time', () => {
+            /*
+             * All legacy handles were minted http:// — short-term
+             * render-time rewrite until the data backfill. Precise
+             * host match: junk handle values (stored v1 error
+             * strings, bare pids) must pass through untouched.
+             */
+            const out = projection.enrich({
+                pid: 'p-h1',
+                handle: 'http://hdl.handle.net/10176/p-h1',
+            });
+            expect(out.handle).toBe('https://hdl.handle.net/10176/p-h1');
+            // Already-https and non-handle values untouched.
+            expect(
+                projection.enrich({ pid: 'p-h2', handle: 'https://hdl.handle.net/10176/p-h2' }).handle
+            ).toBe('https://hdl.handle.net/10176/p-h2');
+            expect(
+                projection.enrich({ pid: 'p-h3', handle: 'Error: [/libs/handles lib] mint failed' }).handle
+            ).toBe('Error: [/libs/handles lib] mint failed');
+            expect(projection.enrich({ pid: 'p-h4', handle: null }).handle).toBeNull();
+            // display_record's copy wins and is rewritten too.
+            expect(
+                projection.enrich({
+                    pid: 'p-h5',
+                    handle: null,
+                    display_record: JSON.stringify({ handle: 'http://hdl.handle.net/10176/p-h5' }),
+                }).handle
+            ).toBe('https://hdl.handle.net/10176/p-h5');
+        });
+
         it('exposes the ASpace identifier from the nested transform record', () => {
             /*
              * Real display_record shape: an index-doc envelope whose

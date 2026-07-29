@@ -50,6 +50,21 @@ function first_string(value) {
  * inside the DB row isn't safe to put in a URL — it's user-controlled
  * at ingest time and could contain path-traversal segments).
  */
+/*
+ * Every legacy handle was minted as http:// (23k+ rows, zero https);
+ * the hdl.handle.net proxy fully serves https. Rewrite at render time
+ * so the dashboard never emits insecure handle links. Precise host
+ * match on purpose: the handle column also carries junk from v1-era
+ * mint failures (stored error strings, bare pids) that must pass
+ * through untouched. Short-term measure — the durable fix is a data
+ * backfill of the column + display_record JSON, tracked as a
+ * post-cutover chore.
+ */
+function secure_handle(value) {
+    if (typeof value !== 'string' || value === '') return value || null;
+    return value.replace(/^http:\/\/hdl\.handle\.net\//i, 'https://hdl.handle.net/');
+}
+
 function thumbnail_src(raw, pid) {
     if (!raw || typeof raw !== 'string') return null;
     if (/^https?:\/\//i.test(raw)) return raw;
@@ -112,7 +127,7 @@ function enrich(row) {
         title: dr.title || null,
         identifier: (first_id && first_id.identifier) || null,
         abstract: first_string(dr.abstract),
-        handle: dr.handle || rest.handle || null,
+        handle: secure_handle(dr.handle || rest.handle || null),
         /*
          * Keep the raw value so debuggers and the upload modal can
          * see what's stored, but synthesize the proxy URL for the
@@ -150,6 +165,7 @@ function is_empty_value(v) {
 module.exports = {
     parse_display_record,
     first_string,
+    secure_handle,
     thumbnail_src,
     media_category,
     enrich,
