@@ -294,6 +294,17 @@ function _normalize_workspace_entries(data) {
                 if (Array.isArray(entry.structure_errors)) {
                     normalized.structure_errors = entry.structure_errors;
                 }
+                /*
+                 * Batch size from the structure-QA scan. Carried
+                 * through explicitly — this normalizer WHITELISTS
+                 * fields, so a new response field is invisible to
+                 * list_workspace until it's added here (total_bytes
+                 * was silently dropped at first; the Size column
+                 * rendered dashes against a healthy API).
+                 */
+                if (Number.isFinite(entry.total_bytes)) {
+                    normalized.total_bytes = entry.total_bytes;
+                }
                 return normalized;
             }
             return null;

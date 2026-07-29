@@ -139,6 +139,42 @@ describe('workspace.list_workspace — structure-QA entries', () => {
         expect(broken.structure_notices[0].text).toContain('scan1.tif');
     });
 
+    it('carries total_bytes through the entry normalizer (regression)', async () => {
+        /*
+         * REGRESSION: _normalize_workspace_entries WHITELISTS fields,
+         * so total_bytes from the curation scan was silently dropped
+         * — the Size column rendered dashes against a healthy API.
+         * This test goes through the real normalizer (astools client
+         * injected, not list_workspace stubbed) so a future field
+         * drop fails here.
+         */
+        const astools = make_astools({
+            workspace_data: {
+                result: [
+                    {
+                        name: 'new_sized-resources_1',
+                        packages: ['pkg_a'],
+                        processed: [],
+                        structure_errors: [],
+                        total_bytes: 142400592265,
+                    },
+                    {
+                        name: 'new_unsized-resources_2',
+                        packages: ['pkg_b'],
+                        processed: [],
+                        structure_errors: [],
+                        total_bytes: null,
+                    },
+                ],
+                errors: [],
+            },
+        });
+
+        const data = await workspace.list_workspace({ scope: 'unprocessed', astools });
+        expect(data.folders[0].total_bytes).toBe(142400592265);
+        expect(data.folders[1].total_bytes).toBeNull();
+    });
+
     it('falls back to per-folder fetch for legacy flat-name entries', async () => {
         const astools = make_astools({
             workspace_data: { result: ['new_legacy-resources_3'], errors: [] },
