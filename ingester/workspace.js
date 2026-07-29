@@ -243,6 +243,13 @@ async function list_workspace(opts = {}) {
              */
             structure_notices: structure_flags.format_structure_errors(flags, name),
             blocked: structure_flags.has_blocking_errors(flags),
+            /*
+             * Batch size from the curation scan (null when the scan
+             * couldn't read the folder, or on legacy responses that
+             * pre-date the field). The view renders a Size column and
+             * a "Large batch" advisory above the threshold.
+             */
+            total_bytes: Number.isFinite(entry.total_bytes) ? entry.total_bytes : null,
         });
         total_packages += package_names.length;
     }

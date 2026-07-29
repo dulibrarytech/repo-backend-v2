@@ -379,6 +379,58 @@ describe('ingest workspace pages — e2e', () => {
             expect(res.text).toContain('No folders are awaiting Make Digital Objects');
         });
 
+        it('shows batch size and flags large batches; dashes when size unknown', async () => {
+            const cookie = await cookie_for('list-sizes');
+            const workspace = require('../../ingester/workspace');
+            const orig = workspace.list_workspace;
+            workspace.list_workspace = async () => ({
+                folders: [
+                    {
+                        name: 'new_huge-resources_1',
+                        packages: ['p1'],
+                        structure_notices: [],
+                        blocked: false,
+                        total_bytes: 47 * 1024 * 1024 * 1024, // 47 GB
+                    },
+                    {
+                        name: 'new_small-resources_2',
+                        packages: ['p2'],
+                        structure_notices: [],
+                        blocked: false,
+                        total_bytes: 2 * 1024 * 1024, // 2 MB
+                    },
+                    {
+                        name: 'new_unknown-resources_3',
+                        packages: ['p3'],
+                        structure_notices: [],
+                        blocked: false,
+                        total_bytes: null, // unreadable / legacy scan
+                    },
+                ],
+                total_folders: 3,
+                total_packages: 3,
+                q: '',
+            });
+            try {
+                const res = await supertest(app)
+                    .get('/repo/dashboard/ingest/workspace/list')
+                    .set('Cookie', cookie);
+                expect(res.status).toBe(200);
+                expect(res.text).toContain('>Size<');
+                expect(res.text).toContain('47.0 GB');
+                expect(res.text).toContain('Large batch');
+                expect(res.text).toContain('2.0 MB');
+                /*
+                 * Only the >10 GB folder carries the advisory badge —
+                 * match the badge's text node exactly (the tooltip
+                 * text also contains the words "Large batches").
+                 */
+                expect(res.text.match(/>Large batch</g)).toHaveLength(1);
+            } finally {
+                workspace.list_workspace = orig;
+            }
+        });
+
         it('collapses long package lists behind a native <details> disclosure', async () => {
             /*
              * A 95-package batch used to stretch its row across

@@ -15,7 +15,24 @@
     var actions = locals.actions || [];
     var view = locals.view || 'make-digital-objects';
     var has_actions = actions.length > 0;
-    var col_count = has_actions ? 4 : 3;
+    var col_count = has_actions ? 5 : 4;
+
+    /*
+     * Batch size display (folder.total_bytes from the curation scan).
+     * LARGE_BATCH_BYTES: above 10 GB the row carries a "Large batch"
+     * advisory — big batches can exceed the pipeline's stage time
+     * budgets, and the time to raise them (contact LDT) is BEFORE
+     * submission, not after a halt.
+     */
+    var LARGE_BATCH_BYTES = 10 * 1024 * 1024 * 1024;
+    function fmt_bytes(n) {
+        if (n === 0) return '0 B';
+        if (!n) return '';
+        var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        var i = 0;
+        while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+        return (i === 0 ? n : n.toFixed(1)) + ' ' + units[i];
+    }
     // Ingest-in-progress gate (packaging view only). Defaulted defensively
     // — the MDO / QA views render this same partial without these locals.
     var ingest_in_progress = (typeof locals.ingest_in_progress !== 'undefined') && locals.ingest_in_progress;
@@ -61,6 +78,7 @@
         <tr>
             <th>Collection Folder</th>
             <th>Archival Object Folder(s)</th>
+            <th style="width: 110px; text-align: right;">Size</th>
             <th style="width: 100px; text-align: center;">Packages</th>
             <% if (has_actions) { %>
                 <th class="actions-cell">Actions</th>
@@ -172,6 +190,21 @@
                                     </li>
                                 <% }); %>
                             </ul>
+                        <% } %>
+                    </td>
+                    <td style="text-align: right;">
+                        <% if (typeof folder.total_bytes === 'number') { %>
+                            <span style="font-size: 13px;"><%= fmt_bytes(folder.total_bytes) %></span>
+                            <% if (folder.total_bytes > LARGE_BATCH_BYTES) { %>
+                                <div>
+                                    <span class="sev-badge sev-warn" style="margin-top: 4px;"
+                                          title="Large batches can take many hours to ingest and may need raised time limits — contact LDT before submitting.">
+                                        <span>Large batch</span>
+                                    </span>
+                                </div>
+                            <% } %>
+                        <% } else { %>
+                            <span class="text-muted">—</span>
                         <% } %>
                     </td>
                     <td style="text-align: center;">
