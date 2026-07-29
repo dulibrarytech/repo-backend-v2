@@ -142,7 +142,7 @@
              For AIPs we just show the size and download count plainly
              — no parenthetical secondary value. */%>
         <% if (item.bytes !== null && item.bytes !== undefined) { %>
-            <strong><%= item._bytes_human %></strong>
+            <%= item._bytes_human %>
         <% } else { %>
             <span class="text-muted">—</span>
         <% } %>
