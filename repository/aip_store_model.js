@@ -40,6 +40,12 @@ const { NotFoundError, ValidationError } = require('../libs/errors');
 const AIP_STORE = tables.aip_store;
 
 /*
+ * Dashboard list sort keys. Anything else falls back to 'recent'
+ * (the pre-sort default ordering).
+ */
+const ALLOWED_SORTS = new Set(['recent', 'title', 'size', 'downloads']);
+
+/*
  * Status codes used by v2 Stage 6 + dashboard helpers. Legacy values
  * (2/3/5) are documented above but not surfaced as named exports —
  * nothing in v2 code writes them.
@@ -168,27 +174,29 @@ async function get(id) {
  * derived `display_status` field so the view doesn't have to know
  * the numeric codes.
  */
+const LIST_COLUMNS = [
+    'id',
+    'uuid',
+    'aip',
+    'aip_uuid',
+    'wasabi_bucket',
+    'wasabi_key',
+    'bytes',
+    'copied_at',
+    'source',
+    'attempts',
+    'next_attempt_at',
+    'error',
+    'message',
+    'is_migrated',
+    'downloaded',
+];
+
 async function list(filter = {}) {
     const page = Math.max(1, Number.parseInt(filter.page, 10) || 1);
     const page_size = Math.min(200, Math.max(1, Number.parseInt(filter.page_size, 10) || 25));
 
-    const q = db()(AIP_STORE).select(
-        'id',
-        'uuid',
-        'aip',
-        'aip_uuid',
-        'wasabi_bucket',
-        'wasabi_key',
-        'bytes',
-        'copied_at',
-        'source',
-        'attempts',
-        'next_attempt_at',
-        'error',
-        'message',
-        'is_migrated',
-        'downloaded'
-    );
+    const q = db()(AIP_STORE).select(LIST_COLUMNS);
 
     if (filter.q && typeof filter.q === 'string' && filter.q.trim()) {
         const needle = `%${filter.q.trim()}%`;
@@ -261,16 +269,86 @@ async function list(filter = {}) {
     const count_q = q.clone().clearSelect().clearOrder().count({ total: '*' }).first();
 
     /*
-     * Order: most-recent-copy first; rows without a copied_at (legacy
-     * bulk) fall to the bottom of the v2 sort. The id DESC tiebreaker
-     * gives a stable order for legacy rows (~20k of which share NULL).
+     * Sort (dashboard "Sort by" select — mirrors the Manage
+     * Collections options):
+     *   recent    — default: most-recent-copy first; rows without a
+     *               copied_at (legacy bulk) fall to the bottom. The
+     *               id DESC tiebreaker gives a stable order for
+     *               legacy rows (~20k of which share NULL).
+     *   title     — object title A–Z; see the branch below.
+     *   size      — bytes, largest first (NULL sizes last in DESC).
+     *   downloads — download count, highest first.
      */
-    q.orderBy([
-        { column: 'copied_at', order: 'desc' },
-        { column: 'id', order: 'desc' },
-    ])
-        .limit(page_size)
-        .offset((page - 1) * page_size);
+    const sort = ALLOWED_SORTS.has(filter.sort) ? filter.sort : 'recent';
+
+    if (sort === 'title' && typeof filter.title_of === 'function') {
+        /*
+         * Title order can't be computed in SQL at acceptable cost:
+         * MariaDB's json_extract over the ~21k 3KB display_records
+         * measured ~59s per query (correlated subquery AND join
+         * variants both). Instead the CALLER supplies a
+         * title_of(uuid) lookup — the AIPs controller keeps a
+         * short-TTL cached pid→title map (~0.7s to build) — and we
+         * sort the filtered id/uuid pairs in memory (tiny rows),
+         * page from the sorted list, then fetch just the page.
+         * Titles arrive as data so this model stays scoped to its
+         * own table, same reasoning as extra_uuids above. Rows
+         * without a resolvable title sort last; id DESC ties.
+         */
+        const pairs = await q.clone().clearSelect().select('id', 'uuid');
+        pairs.sort((a, b) => {
+            const ta = filter.title_of(a.uuid) || null;
+            const tb = filter.title_of(b.uuid) || null;
+            if (ta && tb) {
+                const cmp = ta.localeCompare(tb);
+                if (cmp !== 0) return cmp;
+            } else if (ta) {
+                return -1;
+            } else if (tb) {
+                return 1;
+            }
+            return b.id - a.id;
+        });
+        const total = pairs.length;
+        const page_ids = pairs
+            .slice((page - 1) * page_size, page * page_size)
+            .map((p) => p.id);
+        let rows = [];
+        if (page_ids.length > 0) {
+            const fetched = await db()(AIP_STORE)
+                .select(LIST_COLUMNS)
+                .whereIn('id', page_ids);
+            const by_id = new Map(fetched.map((r) => [r.id, r]));
+            rows = page_ids.map((id) => by_id.get(id)).filter(Boolean);
+        }
+        return {
+            page,
+            page_size,
+            total,
+            items: rows.map((r) => ({
+                ...r,
+                display_status: derive_display_status(r),
+            })),
+        };
+    }
+
+    if (sort === 'size') {
+        q.orderBy([
+            { column: 'bytes', order: 'desc' },
+            { column: 'id', order: 'desc' },
+        ]);
+    } else if (sort === 'downloads') {
+        q.orderBy([
+            { column: 'downloaded', order: 'desc' },
+            { column: 'id', order: 'desc' },
+        ]);
+    } else {
+        q.orderBy([
+            { column: 'copied_at', order: 'desc' },
+            { column: 'id', order: 'desc' },
+        ]);
+    }
+    q.limit(page_size).offset((page - 1) * page_size);
 
     const [rows, count] = await Promise.all([q, count_q]);
     return {

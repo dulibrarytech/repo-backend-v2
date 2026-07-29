@@ -132,6 +132,63 @@ async function list_by_pids(pids) {
 }
 
 /*
+ * Cached pid → lowercased-title map over ALL objects, for callers that
+ * need to ORDER BY title across a whole result set (the AIPs dashboard
+ * title sort). Titles live only inside display_record JSON and MariaDB
+ * json_extract at this scale measured ~59s/query, so extraction happens
+ * here in JS (~0.7s for the full corpus) behind a short TTL. Staleness
+ * is bounded at the TTL — acceptable for a sort key; a just-refreshed
+ * title sorts by its old value for at most a minute.
+ *
+ * Chunked by id so peak memory holds one 5k-row slice of 3KB blobs,
+ * not the whole table.
+ */
+const TITLE_MAP_TTL_MS = 60_000;
+let _title_map_cache = { at: 0, map: null };
+
+async function cached_title_map() {
+    const now = Date.now();
+    if (_title_map_cache.map && now - _title_map_cache.at < TITLE_MAP_TTL_MS) {
+        return _title_map_cache.map;
+    }
+    const map = new Map();
+    let last_id = 0;
+    for (;;) {
+        const rows = await db()(tables.objects)
+            .select('id', 'pid', 'display_record')
+            .where('id', '>', last_id)
+            .orderBy('id')
+            .limit(5000);
+        if (rows.length === 0) break;
+        for (const r of rows) {
+            last_id = r.id;
+            if (!r.display_record) continue;
+            try {
+                const dr =
+                    typeof r.display_record === 'string'
+                        ? JSON.parse(r.display_record)
+                        : r.display_record;
+                const t =
+                    (dr && dr.title) ||
+                    (dr && dr.display_record && dr.display_record.title) ||
+                    null;
+                if (t) map.set(r.pid, String(t).toLowerCase());
+            } catch {
+                // Corrupt display_record — no title.
+            }
+        }
+        if (rows.length < 5000) break;
+    }
+    _title_map_cache = { at: now, map };
+    return map;
+}
+
+/* Test hook — lets suites invalidate the cache between seeds. */
+function _reset_title_map_cache() {
+    _title_map_cache = { at: 0, map: null };
+}
+
+/*
  * Pids whose display_record text contains `q` — the same LIKE-over-JSON
  * approach the staff search (search/model.js) uses, but projected down
  * to bare pids. Used by the AIPs dashboard so a search by ASpace
@@ -748,6 +805,8 @@ module.exports = {
     list,
     list_by_pids,
     list_pids_by_display_record_match,
+    cached_title_map,
+    _reset_title_map_cache,
     get,
     publish,
     suppress,

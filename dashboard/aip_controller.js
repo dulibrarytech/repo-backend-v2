@@ -185,6 +185,7 @@ async function aips_page(req, res) {
             q: req.query.q || '',
             source: req.query.source || '',
             status: req.query.status || '',
+            sort: req.query.sort || 'recent',
         },
         aip_store_enabled: Boolean(app_config().aip_store && app_config().aip_store.enabled),
     });
@@ -203,6 +204,7 @@ async function aips_table_partial(req, res) {
     const q = _str(req.query.q).trim();
     const source = _str(req.query.source);
     const status = _str(req.query.status);
+    const sort = _str(req.query.sort);
 
     /*
      * Widen the text search to ASpace identifiers (e.g.
@@ -224,6 +226,26 @@ async function aips_table_partial(req, res) {
         }
     }
 
+    /*
+     * Title sort needs a pid→title lookup (titles live in tbl_objects'
+     * display_record; SQL-side extraction is prohibitively slow — see
+     * repository_model.cached_title_map). Best-effort: if the map
+     * can't be built, the model falls back to the default ordering
+     * rather than failing the page.
+     */
+    let title_of;
+    if (sort === 'title') {
+        try {
+            const title_map = await repository_model.cached_title_map();
+            title_of = (uuid) => title_map.get(uuid) || null;
+        } catch (err) {
+            log.warn({
+                event: 'aip_dashboard_title_map_failed',
+                err: err.message,
+            });
+        }
+    }
+
     const result = await aip_store_model.list({
         page: req.query.page,
         page_size: req.query.page_size || '25',
@@ -231,6 +253,8 @@ async function aips_table_partial(req, res) {
         extra_uuids,
         source: source || undefined,
         status: status || undefined,
+        sort: sort || undefined,
+        title_of,
     });
 
     const enriched = await _attach_titles(result.items);

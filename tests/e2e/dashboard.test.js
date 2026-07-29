@@ -3506,6 +3506,83 @@ describe('dashboard — e2e', () => {
             expect(res.text).toContain(`id="aip-row-${seeded.id}"`);
         });
 
+        it('GET /aips/list sorts by object title, size, and downloads', async () => {
+            /*
+             * Titles resolve through the correlated json_extract
+             * subquery into tbl_objects — seeding objects here also
+             * pins that the expression works on the sqlite test
+             * driver, not just MariaDB.
+             */
+            /*
+             * The title map is TTL-cached module-wide — reset it so this
+             * test sorts by the objects seeded below, not a map built by
+             * an earlier request in the same process.
+             */
+            require('../../repository/model')._reset_title_map_cache();
+            const cookie = await cookie_for('aip-sort');
+            const mk_obj = (pid, title) =>
+                db_helper.seed_object({
+                    pid,
+                    display_record: JSON.stringify({ title, display_record: { title } }),
+                });
+            await mk_obj('aip-sort-p1', 'Zebra Papers');
+            await mk_obj('aip-sort-p2', 'apple Records');
+            await mk_obj('aip-sort-p3', 'Middle Files');
+            const r1 = await db_helper.seed_aip_store({
+                uuid: 'aip-sort-p1', bytes: 500, downloaded: 2,
+            });
+            const r2 = await db_helper.seed_aip_store({
+                uuid: 'aip-sort-p2', bytes: 9000, downloaded: 0,
+            });
+            const r3 = await db_helper.seed_aip_store({
+                uuid: 'aip-sort-p3', bytes: 100, downloaded: 7,
+            });
+
+            const order_of = (text) =>
+                [r1, r2, r3]
+                    .map((r) => ({ id: r.id, at: text.indexOf(`id="aip-row-${r.id}"`) }))
+                    .sort((a, b) => a.at - b.at)
+                    .map((r) => r.id);
+
+            // Title A–Z (case-insensitive): apple, Middle, Zebra.
+            let res = await supertest(app)
+                .get('/repo/dashboard/aips/list?sort=title')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(order_of(res.text)).toEqual([r2.id, r3.id, r1.id]);
+
+            // Size, largest first: 9000, 500, 100.
+            res = await supertest(app)
+                .get('/repo/dashboard/aips/list?sort=size')
+                .set('Cookie', cookie);
+            expect(order_of(res.text)).toEqual([r2.id, r1.id, r3.id]);
+
+            // Downloads, highest first: 7, 2, 0.
+            res = await supertest(app)
+                .get('/repo/dashboard/aips/list?sort=downloads')
+                .set('Cookie', cookie);
+            expect(order_of(res.text)).toEqual([r3.id, r1.id, r2.id]);
+
+            // Unknown sort value falls back to the default ordering (200, all rows).
+            res = await supertest(app)
+                .get('/repo/dashboard/aips/list?sort=nonsense')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(order_of(res.text)).toHaveLength(3);
+        });
+
+        it('GET /aips renders the Sort by select with the four options', async () => {
+            const cookie = await cookie_for('aip-sort-ui');
+            const res = await supertest(app)
+                .get('/repo/dashboard/aips')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toMatch(/<select id="sort" name="sort"/);
+            for (const label of ['Most recent', 'Object (A–Z)', 'Size', 'Downloads']) {
+                expect(res.text).toContain(label);
+            }
+        });
+
         it('GET /aips/list survives duplicated query params (last-wins coercion)', async () => {
             /*
              * Regression: the pagination button used to embed q /

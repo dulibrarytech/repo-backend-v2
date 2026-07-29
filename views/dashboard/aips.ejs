@@ -17,30 +17,77 @@
 <% } %>
 
 <div class="content-card">
-    <div class="content-card-header">
-        <div class="control-group" style="flex: 1;">
+    <%/* Stacked header (2026-07-28, by request): row 1 = search +
+         Sort by; row 2 = the status filter full-width below the
+         search field, same shape as the collection-detail members
+         card's "All states" select. */%>
+    <%/* gap: 8px tightens the row spacing (header default is 16px);
+         align-items: flex-end drops the search field to the row's
+         baseline — the stacked Sort-by label makes row 1 tall, and a
+         centered search field would float away from the status
+         select below it. */%>
+    <div class="content-card-header" style="flex-direction: column; align-items: stretch; gap: 8px;">
+        <%/* flex-wrap: nowrap overrides .control-group's wrap — with
+             wrap on, this row reserved a phantom extra flex line
+             (~43px of dead space above the controls). Two compact
+             items never need to wrap; the input shrinks instead. */%>
+        <div class="control-group" style="justify-content: space-between; align-items: flex-end; flex-wrap: nowrap;">
             <%/* Search across uuid, aip basename, and full wasabi_key.
                  Server-side LIKE — fine for tbl_aip_store at its
                  expected size (~20k legacy + ~hundreds/month from
-                 Stage 6). */%>
+                 Stage 6).
+                 flex: 0 1 360px (not max-width alone) is load-bearing:
+                 Bootstrap's .form-control is width:100%, so without an
+                 explicit flex-basis the input claims the whole flex
+                 line and wraps the Sort-by group onto a second line —
+                 which read as a big dead band above the controls. */%>
             <input type="search" name="q" class="form-control"
                    aria-label="Search AIPs"
                    placeholder="Search PID, identifier, AIP filename…"
                    value="<%= filters.q || '' %>"
                    autocomplete="off"
-                   style="max-width: 360px;"
+                   style="flex: 0 1 360px;"
                    hx-get="<%= dashboard_base %>/aips/list"
                    hx-target="#aips-table"
                    hx-trigger="keyup changed delay:300ms, search"
-                   hx-include="[name=status]">
+                   hx-include="[name=status], [name=sort]">
+
+            <%/* Sort by, pinned to the row's right edge — same control
+                 pattern as Manage Collections (label + select, HTMX
+                 re-render on change). Title ordering runs through the
+                 cached pid→title map; the own-column sorts run in SQL
+                 (see aip_store_model). */%>
+            <span style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px;">
+                <label for="sort" class="text-muted" style="white-space: nowrap;">Sort by</label>
+                <span style="display: flex; align-items: center; gap: 8px;">
+                    <select id="sort" name="sort" class="form-select"
+                            hx-get="<%= dashboard_base %>/aips/list"
+                            hx-target="#aips-table"
+                            hx-trigger="change"
+                            hx-include="[name=q], [name=status]">
+                        <option value="recent" <%= filters.sort === 'recent' ? 'selected' : '' %>>Most recent</option>
+                        <option value="title" <%= filters.sort === 'title' ? 'selected' : '' %>>Object (A–Z)</option>
+                        <option value="size" <%= filters.sort === 'size' ? 'selected' : '' %>>Size</option>
+                        <option value="downloads" <%= filters.sort === 'downloads' ? 'selected' : '' %>>Downloads</option>
+                    </select>
+
+                    <span class="htmx-indicator">
+                        <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+                    </span>
+                </span>
+            </span>
         </div>
 
         <div class="control-group">
+            <%/* Status filter sits directly under the search field,
+                 matching its width. */%>
             <select name="status" class="form-select"
+                    aria-label="Filter by status"
+                    style="max-width: 360px;"
                     hx-get="<%= dashboard_base %>/aips/list"
                     hx-target="#aips-table"
                     hx-trigger="change"
-                    hx-include="[name=q]">
+                    hx-include="[name=q], [name=sort]">
                 <option value="" <%= filters.status === '' ? 'selected' : '' %>>
                     All statuses
                 </option>
@@ -61,10 +108,6 @@
                     Orphan (no AM record)
                 </option>
             </select>
-
-            <span class="htmx-indicator">
-                <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
-            </span>
         </div>
     </div>
 
@@ -73,7 +116,7 @@
     <div id="aips-table"
          hx-get="<%= dashboard_base %>/aips/list"
          hx-trigger="load"
-         hx-include="[name=q], [name=status]"
+         hx-include="[name=q], [name=status], [name=sort]"
          hx-swap="innerHTML"
          aria-live="polite"
          aria-atomic="false">
