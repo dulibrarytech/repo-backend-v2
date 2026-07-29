@@ -109,23 +109,42 @@
                 <td style="font-size: 13px;">
                     <%= file.last_modified ? file.last_modified.replace('T', ' ').slice(0, 19) : '' %>
                 </td>
-                <td style="text-align: center;">
-                    <%/* Key travels as PATH segments (each segment
-                         URI-encoded, slashes kept as separators) — a
-                         ?key= query param would be mangled by the
-                         global query sanitizer's entity-encoding. */%>
-                    <a href="<%= dashboard_base %>/admin/archive/download/<%= file.key.split('/').map(encodeURIComponent).join('/') %>"
-                       class="btn btn-sm btn-outline-secondary"
-                       title="Download <%= file.name %>"
-                       aria-label="Download <%= file.name %>">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                            <polyline points="7 10 12 15 17 10"/>
-                            <line x1="12" y1="15" x2="12" y2="3"/>
-                        </svg>
-                        Download
-                    </a>
+                <td class="actions-cell" style="text-align: center;">
+                    <%/* Kebab dropdown matching aip_row.ejs so the two
+                         Wasabi views read identically. Key travels as
+                         PATH segments (each segment URI-encoded,
+                         slashes kept as separators) — a ?key= query
+                         param would be mangled by the global query
+                         sanitizer's entity-encoding. */%>
+                    <div class="dropdown">
+                        <button type="button" class="kebab-btn"
+                                data-bs-toggle="dropdown"
+                                aria-expanded="false"
+                                aria-label="Actions for <%= file.name %>"
+                                title="Actions">
+                            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <circle cx="12" cy="5" r="1.75"/>
+                                <circle cx="12" cy="12" r="1.75"/>
+                                <circle cx="12" cy="19" r="1.75"/>
+                            </svg>
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li>
+                                <a href="<%= dashboard_base %>/admin/archive/download/<%= file.key.split('/').map(encodeURIComponent).join('/') %>"
+                                   target="_blank"
+                                   rel="noopener"
+                                   class="dropdown-item">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                        <polyline points="7 10 12 15 17 10"/>
+                                        <line x1="12" y1="15" x2="12" y2="3"/>
+                                    </svg>
+                                    Download
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
                 </td>
             </tr>
         <% }); %>
