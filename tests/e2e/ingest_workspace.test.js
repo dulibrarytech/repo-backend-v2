@@ -378,6 +378,62 @@ describe('ingest workspace pages — e2e', () => {
             // Empty state copy is the MDO-flavored message.
             expect(res.text).toContain('No folders are awaiting Make Digital Objects');
         });
+
+        it('collapses long package lists behind a native <details> disclosure', async () => {
+            /*
+             * A 95-package batch used to stretch its row across
+             * several screens. >8 packages: first 5 stay visible,
+             * the rest collapse behind a keyboard-accessible native
+             * details/summary with the real count. ≤8 render fully.
+             */
+            const cookie = await cookie_for('list-collapse');
+            const workspace = require('../../ingester/workspace');
+            const orig = workspace.list_workspace;
+            const many = Array.from(
+                { length: 20 },
+                (_, i) => `B002.01.0103.${String(100 + i).padStart(4, '0')}`
+            );
+            workspace.list_workspace = async () => ({
+                folders: [
+                    {
+                        name: 'new_big-resources_1',
+                        packages: many,
+                        structure_notices: [],
+                        blocked: false,
+                    },
+                    {
+                        name: 'new_small-resources_2',
+                        packages: many.slice(0, 4),
+                        structure_notices: [],
+                        blocked: false,
+                    },
+                ],
+                total_folders: 2,
+                total_packages: 24,
+                q: '',
+            });
+            try {
+                const res = await supertest(app)
+                    .get('/repo/dashboard/ingest/workspace/list')
+                    .set('Cookie', cookie);
+                expect(res.status).toBe(200);
+                // First 5 of the big batch visible, 6th only inside details.
+                expect(res.text).toContain('B002.01.0103.0104');
+                expect(res.text).toContain(
+                    'Show 15 more archival object folders'
+                );
+                expect(res.text).toContain('B002.01.0103.0119');
+                // Exactly ONE details block — the ≤8 folder renders flat.
+                expect(res.text.match(/<details/g)).toHaveLength(1);
+                const details_at = res.text.indexOf('<details');
+                // The 6th package sits after the disclosure opens…
+                expect(res.text.indexOf('B002.01.0103.0105')).toBeGreaterThan(details_at);
+                // …while the 5th is before it (visible without expanding).
+                expect(res.text.indexOf('B002.01.0103.0104')).toBeLessThan(details_at);
+            } finally {
+                workspace.list_workspace = orig;
+            }
+        });
     });
 
     describe('GET /dashboard/ingest/aspace-qa/list (HTMX partial)', () => {

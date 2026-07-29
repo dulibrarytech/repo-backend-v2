@@ -122,11 +122,43 @@
                         <% } else if (folder.packages.length === 0 && notices.length === 0) { %>
                             <span class="text-muted small"><em>No packages</em></span>
                         <% } else { %>
+                            <%
+                                /*
+                                 * Long package lists collapse behind a native
+                                 * <details> disclosure so one 95-package batch
+                                 * doesn't stretch its row across several
+                                 * screens. ≤8 render in full (no interaction
+                                 * cost for the common case); above that, the
+                                 * first 5 stay visible for scent and the rest
+                                 * sit one keyboard-accessible click away.
+                                 * Native details = free WCAG disclosure
+                                 * semantics and survives HTMX swaps with no
+                                 * JS re-init (same reasoning as the Workflow
+                                 * Guide's collapsibles). Structure notices
+                                 * render BELOW, outside the disclosure —
+                                 * warnings must never be collapsed away.
+                                 */
+                                var pkg_collapse = folder.packages.length > 8;
+                                var pkg_visible = pkg_collapse ? folder.packages.slice(0, 5) : folder.packages;
+                                var pkg_hidden = pkg_collapse ? folder.packages.slice(5) : [];
+                            %>
                             <ul style="margin: 0; padding-left: 18px; list-style: disc;">
-                                <% folder.packages.forEach(function (pkg) { %>
+                                <% pkg_visible.forEach(function (pkg) { %>
                                     <li style="font-size: 13px; padding: 2px 0;"><%= pkg %></li>
                                 <% }); %>
                             </ul>
+                            <% if (pkg_collapse) { %>
+                                <details style="margin-top: 4px;">
+                                    <summary style="cursor: pointer; font-size: 13px; color: var(--text-muted); padding: 2px 0;">
+                                        Show <%= pkg_hidden.length %> more archival object folders
+                                    </summary>
+                                    <ul style="margin: 0; padding-left: 18px; list-style: disc;">
+                                        <% pkg_hidden.forEach(function (pkg) { %>
+                                            <li style="font-size: 13px; padding: 2px 0;"><%= pkg %></li>
+                                        <% }); %>
+                                    </ul>
+                                </details>
+                            <% } %>
                         <% } %>
                         <% if (notices.length > 0) { %>
                             <ul class="structure-notices" style="margin: 6px 0 0; padding: 0; list-style: none;">
