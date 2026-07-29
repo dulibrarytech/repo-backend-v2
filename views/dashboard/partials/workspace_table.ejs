@@ -105,8 +105,12 @@
                                 <span>Needs attention</span>
                             </span>
                         <% } else if (notices.length > 0) { %>
+                            <%/* "Advisory" (not "Check notes") — the notes are
+                                 the callout bubbles in the next column of THIS
+                                 row; the old label read like a pointer to a
+                                 notes page that doesn't exist. */%>
                             <span class="sev-badge sev-warn" style="margin-top: 4px;">
-                                <span>Check notes</span>
+                                <span>Advisory</span>
                             </span>
                         <% } %>
                     </td>
