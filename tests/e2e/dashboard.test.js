@@ -506,17 +506,18 @@ describe('dashboard — e2e', () => {
 
         it('breadcrumb nav carries aria-label="Breadcrumb"', async () => {
             /*
-             * TEMPORARY (2026-07-27) v1-familiar nav: the workflow views
-             * (ingest, packaging, aspace_qa, history, recent) lost their
-             * breadcrumb back-links — the Home icon is the exit. This
-             * originally asserted /repo/dashboard/ingest/packaging; it now
-             * asserts the Workflow Guide, which keeps its breadcrumb.
-             * When the temporary nav is reverted, point this back at a
-             * workflow page.
+             * TEMPORARY (2026-07-27/28) v1-familiar nav: the workflow
+             * views, the Workflow Guide, and collection detail all lost
+             * their breadcrumb back-links — the Home icon / sidebar is
+             * the exit. This originally asserted
+             * /repo/dashboard/ingest/packaging; it now asserts the
+             * new-collection form, which keeps its breadcrumb. When the
+             * temporary nav is reverted, point this back at a workflow
+             * page.
              */
             const cookie = await cookie_for('a11y-breadcrumb');
             const res = await supertest(app)
-                .get('/repo/dashboard/ingest/help')
+                .get('/repo/dashboard/collections/new')
                 .set('Cookie', cookie);
             expect(res.text).toMatch(
                 /<nav[^>]*class="small text-muted mb-2"[^>]*aria-label="Breadcrumb"/
