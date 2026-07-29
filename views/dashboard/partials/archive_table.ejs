@@ -27,7 +27,7 @@
 
 <%/* Breadcrumb: Backups → collection → package. Each ancestor is a
      link that re-renders its level in the same container. */%>
-<nav aria-label="Backup location" style="padding: 10px 16px; font-size: 13.5px;">
+<nav aria-label="Backup location" style="padding: 10px 16px; font-size: 13px;">
     <a href="#" hx-get="<%= list_url %>" hx-target="#archive-level" hx-swap="innerHTML">Backups</a>
     <% if (collection) { %>
         <span aria-hidden="true">›</span>
@@ -104,9 +104,12 @@
 
         <% files.forEach(function (file) { %>
             <tr>
-                <td class="package-cell"><span style="font-size: 13.5px;"><%= file.name %></span></td>
-                <td style="text-align: right; font-size: 13px;"><%= fmt_bytes(file.size) %></td>
-                <td style="font-size: 13px;">
+                <%/* No inline font-size overrides — cells inherit the
+                     14px .queue-table default so this view matches the
+                     AIPs table's typography. */%>
+                <td class="package-cell"><%= file.name %></td>
+                <td style="text-align: right;"><%= fmt_bytes(file.size) %></td>
+                <td>
                     <%= file.last_modified ? file.last_modified.replace('T', ' ').slice(0, 19) : '' %>
                 </td>
                 <td class="actions-cell" style="text-align: center;">

@@ -15,7 +15,7 @@
 <div class="row g-3 p-3">
     <div class="col-md-4">
         <div class="text-muted small mb-1">Dirty (awaiting indexer)</div>
-        <div style="font-size: 24px; font-weight: 600;">
+        <div style="font-size: 22px; font-weight: 600;">
             <% if (counts.dirty > 0) { %>
                 <span class="text-warning"><%= counts.dirty.toLocaleString() %></span>
             <% } else { %>
@@ -29,7 +29,7 @@
 
     <div class="col-md-4">
         <div class="text-muted small mb-1">Eligible (published &amp; active)</div>
-        <div style="font-size: 24px; font-weight: 600;">
+        <div style="font-size: 22px; font-weight: 600;">
             <%= counts.eligible.toLocaleString() %>
         </div>
         <div class="text-muted small" style="margin-top: 4px;">
@@ -39,7 +39,7 @@
 
     <div class="col-md-4">
         <div class="text-muted small mb-1">ES doc count</div>
-        <div style="font-size: 24px; font-weight: 600;">
+        <div style="font-size: 22px; font-weight: 600;">
             <% if (es_configured) { %>
                 <%= index_count.toLocaleString() %>
             <% } else { %>
