@@ -155,7 +155,7 @@
         <strong class="small">If something goes wrong</strong>
         <ul class="small mb-0">
             <li>A submit that stalls can be sent back with <strong>Return to packaging</strong> from the Queue row's actions menu (⋮).</li>
-            <li>Very large video/audio batches can take hours and may halt because the system's time limits are set for normal-sized batches. This is a server-settings issue, not a problem with your files — contact LDT, who can raise the limits and then retry the halted row.</li>
+            <li>Very large video/audio batches are fine to submit — the system's time limits are already set to allow them — but expect the ingest to take many hours. In the rare case one still halts on a time limit, it isn't a problem with your files — contact LDT.</li>
         </ul>
     </div>
 </div>
@@ -196,7 +196,7 @@
     <div class="mt-2">
         <strong class="small">Common halts &amp; what to do</strong>
         <ul class="small mb-0">
-            <li><strong>Halt on a large video/audio batch</strong> — the system's time limits were likely exceeded, not an actual failure. Ask LDT to raise the large-media time limits, then reset/retry the row.</li>
+            <li><strong>Halt on a large video/audio batch</strong> — time limits are already raised for large media, so this should be rare. When it does happen it's usually the time limit, not an actual failure — contact LDT, who can check the limits and retry the row.</li>
             <li><strong>"AIP not found in AM Storage Service"</strong> — the system keeps retrying on its own for a while. If the package stays flagged, contact LDT.</li>
             <li><strong>An object finished ingesting but doesn't appear in search</strong> — a record with unusual data can occasionally fail to index. The system sets it aside so it doesn't hold up other packages — contact LDT to have it fixed and re-indexed.</li>
         </ul>

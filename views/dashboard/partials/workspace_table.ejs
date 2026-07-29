@@ -20,9 +20,10 @@
     /*
      * Batch size display (folder.total_bytes from the curation scan).
      * LARGE_BATCH_BYTES: above 10 GB the row carries a "Large batch"
-     * advisory — big batches can exceed the pipeline's stage time
-     * budgets, and the time to raise them (contact LDT) is BEFORE
-     * submission, not after a halt.
+     * advisory. The large-media time-limit overrides ship ON by
+     * default in the .env (≤250 GB budgets), so the badge sets a
+     * duration expectation — it is not a "get limits raised first"
+     * warning.
      */
     var LARGE_BATCH_BYTES = 10 * 1024 * 1024 * 1024;
     function fmt_bytes(n) {
@@ -198,7 +199,7 @@
                             <% if (folder.total_bytes > LARGE_BATCH_BYTES) { %>
                                 <div>
                                     <span class="sev-badge sev-warn" style="margin-top: 4px;"
-                                          title="Large batches can take many hours to ingest and may need raised time limits — contact LDT before submitting.">
+                                          title="Large batches are fine to submit — the system's time limits already allow them — but the ingest can take many hours to finish.">
                                         <span>Large batch</span>
                                     </span>
                                 </div>
