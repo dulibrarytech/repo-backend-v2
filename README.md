@@ -57,7 +57,7 @@ All other content is released under [CC-BY-4.0](https://creativecommons.org/lice
 
 **Prerequisites**
 
-* Node.js **20+** — pinned via `.nvmrc` (`nvm use`).
+* Node.js **20+** — pinned via `.nvmrc`.
 * MySQL **8+** or MariaDB **10.6+** — two databases: `repo` and `repo_queue`.
 * Optional (full functionality): Elasticsearch 8, ArchivesSpace, Archivematica, DuraCloud, the curation API, Kaltura, and the Handle/TN services are DU-internal — ingest, metadata refresh, indexing, and preservation flows need DU network/VPN. Core dashboard CRUD works without them.
 
@@ -111,7 +111,7 @@ Integration + e2e bootstrap an in-memory sqlite DB from the same migration files
 
 ## Architecture Overview
 
-An Express 5 application (CommonJS, EJS + HTMX partials, Bootstrap 5 with DU theme tokens) serving the staff dashboard and the REST API behind it. Content lives in MariaDB across two pools (`repo`, `repo_queue`); background workers run the ingest pipeline, ASpace metadata refresh, ES indexing, and TIFF conversion; published objects are projected into a single public Elasticsearch index that the public frontend reads directly.
+An Express 5 application (CommonJS, EJS + HTMX partials, Bootstrap 5) serving the staff dashboard and the REST API behind it. Content lives in MariaDB across two pools (`repo`, `repo_queue`); background workers run the ingest pipeline, ASpace metadata refresh, ES indexing, and TIFF conversion; published objects are projected into a single public Elasticsearch index that the public frontend reads directly.
 
 ```
 Staff ──▶ dashboard (EJS views + HTMX partials)
@@ -136,12 +136,12 @@ External: DU SSO (auth) · ArchivesSpace (metadata) · Archivematica + Storage S
 | **Archivematica + AM Storage Service** | Ingest pipeline target. Stage 3 starts transfers; Stage 4 polls ingest; AIP retrieved via Storage Service API for the preservation copy. |
 | **ArchivesSpace**             | Source of truth for descriptive metadata. On-demand + system-wide refresh both fetch from here.   |
 | **DuraCloud**                 | Active storage tier for AIPs (post-AM). Thumbnail proxy reads legacy thumbnails from here.        |
-| **Wasabi S3** (`library-repository/aip-store/`) | Preservation tier. Stage 6 + backfill copy AIPs here via the curation API.            |
+| **Wasabi S3**  | Preservation tier. Stage 6 + backfill copy AIPs here via the curation API.            |
 | **[Curation API](https://github.com/dulibrarytech/digitaldu-backend-curation-service)** (Python) | Wasabi gatekeeper. Holds the boto3 credentials; v2 talks HTTP to it for both SFTP-staging and AIP copies. Also owns AM-folder QA. |
 | **Handle service**            | Mints persistent identifiers per object.                                                          |
 | **TN service**                | Generates fresh thumbnails from source files.                                                     |
 | **Kaltura**                   | Streaming media for AV-bearing objects.                                                           |
-| **DU SSO** (authproxy)        | Single sign-on (layered defense: IP allowlist + timestamp + HMAC).                                |
+| **DU SSO**         | Single sign-on (layered defense: IP allowlist + timestamp + HMAC).                                |
 
 ### Ingest pipeline
 
@@ -153,10 +153,10 @@ Stage 2 (upload)           → SFTP push to Archivematica drop
 Stage 3 (transfer)         → AM start_transfer + approval + transfer polling
 Stage 4 (ingest)           → AM ingest poll + DuraCloud propagation wait
 Stage 5 (repository)       → tbl_objects insert + handle mint + SFTP cleanup + move-to-ingested
-Stage 6 (aip_store)        → Curation /copy-to-wasabi → AIP lands in library-repository/aip-store/
+Stage 6 (aip_store)        → Curation /copy-to-wasabi → AIP lands in Wasabi S3
 ```
 
-Stage 6 is gated by `AIP_STORE_ENABLED`. With the flag off, Stage 5 finalizes ingest the same way it did pre-Stage-6. The single-row AM gate at Stages 3–4 prevents AM from being overwhelmed by parallel transfers.
+Stage 6 is gated by `AIP_STORE_ENABLED`. With the flag off, Stage 5 finalizes ingest the same way it did pre-Stage-6. Stages 1–5 run serially — one package at a time clears metadata, upload, AM transfer, AM ingest, and repository record before the next package starts; only Stage 6 overlaps, running in the background while the next package proceeds.
 
 ### Companion service: curation API
 
@@ -168,7 +168,7 @@ Admin-initiated, queue-paced re-fetch of every active object's ASpace metadata. 
 
 ### Preservation tier (AIP store)
 
-AIPs produced by Archivematica land in DuraCloud as part of standard AM operation, then get a second copy in **Wasabi S3** (`library-repository/aip-store/`) for long-term preservation:
+AIPs produced by Archivematica land in DuraCloud as part of standard AM operation, then get a second copy in **Wasabi S3** for long-term preservation:
 
 - **Live ingest:** Stage 6 fires automatically when `AIP_STORE_ENABLED=true`.
 - **Backfill:** `/dashboard/admin/aip-backfill` chews through objects that pre-date the flag, in operator-controlled chunks.
@@ -179,7 +179,7 @@ Wasabi credentials live in the curation service's env, not v2's — v2 carries o
 
 ## Releases
 
-* v2.0.0-beta.30
+* v2.0.0.30-beta
 
 ## Contact
 
