@@ -80,10 +80,17 @@ function create_client(http = http_default) {
          * One page of package names in a collection.
          * `{result: {packages: [...], next_token}}`
          */
-        async list_packages(collection, { token } = {}) {
+        async list_packages(collection, { token, q } = {}) {
+            /*
+             * `q` = server-side S3 prefix search (2026-07-30): matches
+             * package names starting with q, bucket-side. Without it
+             * the dashboard could only filter the loaded page — a
+             * fresh backup in a 4,000-package migrated collection
+             * looked missing when it was pages deep.
+             */
             return _get(
                 http,
-                build_url(`collections/${encodeURIComponent(collection)}/packages`, { token }),
+                build_url(`collections/${encodeURIComponent(collection)}/packages`, { token, q }),
                 'packages'
             );
         },

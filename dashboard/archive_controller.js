@@ -137,7 +137,19 @@ async function archive_list_partial(req, res, deps = {}) {
                 locals.folders = r.data.result.collections || [];
             }
         } else if (level === 'packages') {
-            const r = await client.list_packages(collection, { token });
+            /*
+             * Package level searches SERVER-SIDE (2026-07-30): q goes
+             * to the curation API as an S3 prefix match (case
+             * SENSITIVE — send the raw text, not the lowercased local
+             * filter form), so a package pages deep in a
+             * thousands-of-packages migrated collection is findable
+             * by typing the start of its id.
+             */
+            const q_raw = (req.query.q || '').trim();
+            const r = await client.list_packages(collection, {
+                token,
+                q: q_raw || undefined,
+            });
             if (r.status !== 200 || !r.data || !r.data.result) {
                 locals.error = _upstream_error(r);
             } else {
@@ -159,11 +171,12 @@ async function archive_list_partial(req, res, deps = {}) {
     }
 
     /*
-     * Server-side name filter of the fetched page. With pagination in
-     * play this filters what has been loaded, which is the honest v1
-     * behavior — the input's help text says so.
+     * Name filter of the fetched page — collections and files levels
+     * only. The packages level already searched server-side above
+     * (S3 prefix match); re-filtering it locally would be a no-op at
+     * best and a case-sensitivity fight at worst.
      */
-    if (q) {
+    if (q && level !== 'packages') {
         locals.folders = locals.folders.filter((n) => n.toLowerCase().includes(q));
         locals.files = locals.files.filter((f) => (f.name || '').toLowerCase().includes(q));
     }
