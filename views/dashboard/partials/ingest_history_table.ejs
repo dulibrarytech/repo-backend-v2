@@ -67,11 +67,35 @@
                         <% if (!row.packages || row.packages.length === 0) { %>
                             <span class="text-muted small"><em>none</em></span>
                         <% } else { %>
+                            <%
+                                /*
+                                 * Long package lists collapse behind a native
+                                 * <details> disclosure — same pattern (and
+                                 * same 8/5 thresholds) as workspace_table.ejs,
+                                 * so a 95-package run doesn't stretch its
+                                 * history row across screens.
+                                 */
+                                var pkg_collapse = row.packages.length > 8;
+                                var pkg_visible = pkg_collapse ? row.packages.slice(0, 5) : row.packages;
+                                var pkg_hidden = pkg_collapse ? row.packages.slice(5) : [];
+                            %>
                             <ul style="margin: 0; padding-left: 18px; list-style: disc;">
-                                <% row.packages.forEach(function (pkg) { %>
+                                <% pkg_visible.forEach(function (pkg) { %>
                                     <li style="font-size: 13px; padding: 1px 0;"><%= pkg %></li>
                                 <% }); %>
                             </ul>
+                            <% if (pkg_collapse) { %>
+                                <details style="margin-top: 4px;">
+                                    <summary style="cursor: pointer; font-size: 13px; color: var(--text-muted); padding: 2px 0;">
+                                        Show <%= pkg_hidden.length %> more packages
+                                    </summary>
+                                    <ul style="margin: 0; padding-left: 18px; list-style: disc;">
+                                        <% pkg_hidden.forEach(function (pkg) { %>
+                                            <li style="font-size: 13px; padding: 1px 0;"><%= pkg %></li>
+                                        <% }); %>
+                                    </ul>
+                                </details>
+                            <% } %>
                         <% } %>
                     </td>
                     <td>

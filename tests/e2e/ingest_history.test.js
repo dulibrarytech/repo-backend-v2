@@ -132,6 +132,35 @@ describe('ingest Job History — e2e', () => {
             expect(res.text).toContain('Elizabeth Ferguson');
         });
 
+        it('collapses long package lists behind a details disclosure (first 5 visible)', async () => {
+            /*
+             * Same pattern + thresholds as workspace_table.ejs: >8
+             * packages → first 5 visible, rest behind a native
+             * <details> whose summary carries the real count.
+             */
+            const many = Array.from(
+                { length: 12 },
+                (_, i) => `B463.01.0005.${String(i + 1).padStart(4, '0')}`
+            );
+            await jobs.record_job({
+                job_type: 'make_digital_objects',
+                status: 'SUCCESSFUL',
+                collection_folder: 'new_big_history-resources_9',
+                packages: many,
+                actor: 'eferguson',
+            });
+            const cookie = await cookie_for('viewer-collapse');
+            const res = await supertest(app)
+                .get('/repo/dashboard/ingest/history/list')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toContain('Show 7 more packages');
+            const details_at = res.text.indexOf('Show 7 more packages');
+            // 5th package renders before the disclosure, 6th after it.
+            expect(res.text.indexOf('B463.01.0005.0005')).toBeLessThan(details_at);
+            expect(res.text.indexOf('B463.01.0005.0006')).toBeGreaterThan(details_at);
+        });
+
         it('applies the job_type filter', async () => {
             await db_helper.seed_user({ du_id: 'svc', first_name: 'Svc', last_name: 'Account' });
             for (const t of [
