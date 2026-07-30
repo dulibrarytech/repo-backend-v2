@@ -179,7 +179,7 @@ Wasabi credentials live in the curation service's env, not v2's — v2 carries o
 
 ## Releases
 
-* v2.0.0-alpha.16
+* v2.0.0-beta.30
 
 ## Contact
 
