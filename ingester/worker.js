@@ -92,6 +92,50 @@ function ready_states() {
 }
 
 /*
+ * Serial-pipeline sets (2026-07-30). Stages 1–5 form THE pipeline for
+ * serialization purposes: a package must clear metadata → upload →
+ * AM transfer → AM ingest → repository record before the next package
+ * starts. Stage 6 (AIP copy to Wasabi) is deliberately OUTSIDE the
+ * serial window — it can take hours for large packages and touches
+ * only Wasabi, so it runs in the background while the next package
+ * proceeds (user decision, 2026-07-30).
+ */
+const STAGE6_STATES = new Set(['AIP_STORE_PENDING', 'AIP_STORE_IN_PROGRESS']);
+const PIPELINE_STATES = new Set(
+    Object.keys(STAGE_BY_STATE).filter((s) => !STAGE6_STATES.has(s))
+);
+/* Mid-pipeline = a package already in flight (everything but the
+ * PENDING entry state). A halted/cancelled/terminal row is in NONE of
+ * these — so a failed package steps aside and the batch keeps
+ * flowing (user decision, 2026-07-30). */
+const PIPELINE_MID_STATES = new Set(
+    [...PIPELINE_STATES].filter((s) => s !== 'PENDING')
+);
+/*
+ * Claim order under serial mode: latest-stage first, so an in-flight
+ * package drains toward completion before anything behind it moves,
+ * and PENDING (a NEW package) is considered last. Stage 6 rows are
+ * appended — they claim independently of the serial gate.
+ */
+const SERIAL_CLAIM_ORDER = [
+    'CREATING_REPOSITORY_RECORD',
+    'METADATA_PROCESSED',
+    'WAITING_FOR_DURACLOUD',
+    'INGEST_COMPLETE',
+    'INGEST_IN_PROGRESS',
+    'TRANSFER_COMPLETE',
+    'TRANSFER_IN_PROGRESS',
+    'TRANSFER_STARTED',
+    'UPLOAD_COMPLETE',
+    'UPLOADING',
+    'QA_COMPLETE',
+    'PROCESSING_METADATA',
+    'PENDING',
+    'AIP_STORE_IN_PROGRESS',
+    'AIP_STORE_PENDING',
+];
+
+/*
  * "AM-active" — the window between `start_transfer` (Stage 3 entry)
  * and AM reporting ingest_status=COMPLETE (mid-Stage 4). Archivematica
  * chokes on parallel transfers in batches with hundreds of packages,
@@ -153,6 +197,13 @@ function create_worker(deps = {}) {
      * for new entries, this preserves the "1 AM at a time" invariant.
      */
     const am_dispatched = new Set();
+    /*
+     * IDs of rows currently dispatched in ANY stage-1–5 state — the
+     * in-memory half of the serial-pipeline gate (same reasoning as
+     * am_dispatched: a dispatched row's DB state lags the work, so
+     * the gate can't rely on the DB alone).
+     */
+    const pipeline_dispatched = new Set();
 
     async function dispatch_one(row) {
         const stage = stages[row.pipeline_state];
@@ -168,6 +219,8 @@ function create_worker(deps = {}) {
         abort_controllers.set(row.id, controller);
         const is_am = AM_ACTIVE_STATES.has(row.pipeline_state);
         if (is_am) am_dispatched.add(row.id);
+        const is_pipeline = PIPELINE_STATES.has(row.pipeline_state);
+        if (is_pipeline) pipeline_dispatched.add(row.id);
         try {
             await stage.run(row, { signal: controller.signal });
         } catch (err) {
@@ -211,6 +264,7 @@ function create_worker(deps = {}) {
         } finally {
             abort_controllers.delete(row.id);
             if (is_am) am_dispatched.delete(row.id);
+            if (is_pipeline) pipeline_dispatched.delete(row.id);
         }
     }
 
@@ -241,6 +295,32 @@ function create_worker(deps = {}) {
              * never sets this — AM crashes on parallel transfers.
              */
             const am_parallel = cfg.am_parallel === true;
+            /*
+             * SERIAL PIPELINE (2026-07-30, default ON): one package at
+             * a time through stages 1–5 — metadata, upload, AM
+             * transfer, AM ingest, repository record — before the next
+             * package starts. Two-part gate, mirroring the AM gate's
+             * proven shape:
+             *
+             *   - mid-pipeline claims (resumes/advances of the active
+             *     package): allowed only when NOTHING stage-1–5 is
+             *     currently dispatched. One per tick.
+             *   - PENDING claims (a NEW package): additionally require
+             *     ZERO rows resting in any mid-pipeline state in the
+             *     DB — the previous package must be fully done (or
+             *     halted/cancelled/rolled back, which removes it from
+             *     the mid set so the batch keeps flowing).
+             *
+             * Stage 6 (AIP→Wasabi) claims bypass the gate entirely.
+             * INGEST_PIPELINE_SERIAL=0 restores the old interleaved
+             * behavior (with the AM-only gate below).
+             */
+            const serial = !am_parallel && cfg.pipeline_serial !== false;
+            const mid_db_count = serial
+                ? await model.count_rows_in_states([...PIPELINE_MID_STATES])
+                : 0;
+            const pipeline_in_flight = pipeline_dispatched.size;
+            let pipeline_admitted_this_tick = 0;
             const inside_db_count = am_parallel
                 ? 0
                 : await model.count_rows_in_states([...AM_INSIDE_STATES]);
@@ -254,9 +334,15 @@ function create_worker(deps = {}) {
              * change for now. Phase 3b adds a dedicated claim_for_run.
              */
             const claimed = [];
-            for (const state of ready_states()) {
+            const claim_order = serial ? SERIAL_CLAIM_ORDER : ready_states();
+            for (const state of claim_order) {
                 if (claimed.length >= cfg.concurrency) break;
-                if (!am_parallel) {
+                if (serial && PIPELINE_STATES.has(state)) {
+                    /* One stage-1–5 dispatch at a time, period. */
+                    if (pipeline_in_flight + pipeline_admitted_this_tick > 0) continue;
+                    /* A NEW package needs the previous one fully done. */
+                    if (state === 'PENDING' && mid_db_count > 0) continue;
+                } else if (!am_parallel && !serial) {
                     if (AM_ENTRY_STATES.has(state)) {
                         /*
                          * ENTRY must also respect the IN-MEMORY
@@ -297,6 +383,11 @@ function create_worker(deps = {}) {
                     if (abort_controllers.has(row.id)) continue;
                     claimed.push(row);
                     if (AM_ACTIVE_STATES.has(state)) am_admitted_this_tick++;
+                    if (serial && PIPELINE_STATES.has(state)) {
+                        /* One stage-1–5 admit per tick, full stop. */
+                        pipeline_admitted_this_tick++;
+                        break;
+                    }
                     if (claimed.length >= cfg.concurrency) break;
                     /*
                      * Cap AM admits at one per tick — prevents two

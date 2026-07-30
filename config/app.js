@@ -760,6 +760,15 @@ function build() {
              * where AM is not under load. DO NOT enable in production.
              */
             am_parallel: boolean('INGEST_AM_PARALLEL', false),
+            /*
+             * Serial pipeline (2026-07-30, default ON): one package at
+             * a time through stages 1–5 — the next package starts only
+             * after the previous one's repository record is created.
+             * Stage 6 (AIP→Wasabi copy) runs in the background either
+             * way. Set INGEST_PIPELINE_SERIAL=0 to restore the old
+             * interleaved behavior (AM-only gating).
+             */
+            pipeline_serial: boolean('INGEST_PIPELINE_SERIAL', true),
 
             // Stage 2 (upload) — poll cadence + total budget.
             upload_poll_ms: integer('INGEST_UPLOAD_POLL_MS', 60000),

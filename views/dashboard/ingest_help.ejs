@@ -170,13 +170,19 @@
         <dt>What you do</dt>
         <dd>Monitor packages moving through the pipeline. Use a row's actions menu (⋮) to open its <strong>Timeline</strong>, <strong>Cancel</strong> an in-flight package, or <strong>roll back / retry</strong> one that has halted.</dd>
         <dt>What the system does</dt>
-        <dd>Runs a six-stage state machine. Each stage is idempotent on resume; the worker waits on external systems within bounded time budgets and only advances when the upstream confirms.</dd>
+        <dd>Runs a six-stage state machine, processing <strong>one package at a
+            time</strong>: each package finishes its metadata check, upload,
+            Archivematica processing, and repository record before the next
+            package starts (only the final long-term-copy step overlaps).
+            Each stage is idempotent on resume; the worker waits on external
+            systems within bounded time budgets and only advances when the
+            upstream confirms.</dd>
     </dl>
 
     <ol class="small mb-2">
         <li><strong>process_metadata</strong> — fetch the ArchivesSpace metadata and prepare the record the pipeline will ingest.</li>
         <li><strong>upload</strong> — SFTP push to the Archivematica drop (Archivematica SFTP server).</li>
-        <li><strong>transfer</strong> — Archivematica starts + approves the transfer, then we poll it (only one package occupies the Archivematica stages at a time, by design).</li>
+        <li><strong>transfer</strong> — Archivematica starts + approves the transfer, then we poll it.</li>
         <li><strong>ingest</strong> — poll Archivematica's ingest, then wait for DuraCloud propagation.</li>
         <li><strong>repository</strong> — create the object record, mint its Handle, clean up SFTP, and back up the original batch files to Wasabi (each file is verified before the local copy is removed).</li>
         <li><strong>aip_store</strong> — copy the AIP into the Wasabi preservation tier (when AIP-store is enabled).</li>

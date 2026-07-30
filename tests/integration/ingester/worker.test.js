@@ -48,6 +48,13 @@ describe('ingester/worker', () => {
         process.env.INGEST_WORKER_ENABLED = 'true';
         process.env.INGEST_WORKER_CONCURRENCY = '3';
         process.env.INGEST_WORKER_POLL_MS = '500';
+        /*
+         * The legacy interleaved behavior (multiple packages advancing
+         * concurrently, AM-only gating) is what most of this suite
+         * pins — run it under the escape hatch. The serial-pipeline
+         * default gets its own describe at the bottom.
+         */
+        process.env.INGEST_PIPELINE_SERIAL = 'false';
         app_config._reset();
         await db_helper.setup_schema();
     });
@@ -433,5 +440,119 @@ describe('ingester/worker', () => {
         expect(seen).toHaveLength(1);
         release();
         await first;
+    });
+
+    describe('serial pipeline (INGEST_PIPELINE_SERIAL, the default)', () => {
+        /*
+         * 2026-07-30: one package at a time through stages 1–5. A new
+         * package (PENDING) starts only when NOTHING is mid-pipeline;
+         * mid-pipeline rows advance one dispatch at a time; stage 6
+         * (AIP→Wasabi) runs alongside untouched.
+         */
+        beforeAll(() => {
+            process.env.INGEST_PIPELINE_SERIAL = 'true';
+            app_config._reset();
+        });
+        afterAll(() => {
+            process.env.INGEST_PIPELINE_SERIAL = 'false';
+            app_config._reset();
+        });
+
+        function noop_stage(seen, name) {
+            return {
+                async run(row) {
+                    seen.push({ name, id: row.id, state: row.pipeline_state });
+                },
+            };
+        }
+
+        it('admits exactly one PENDING package per tick, even under concurrency 3', async () => {
+            await seed('PENDING');
+            await seed('PENDING');
+            await seed('PENDING');
+            const seen = [];
+            const worker = create_worker({
+                stages: { PENDING: noop_stage(seen, 'process_metadata') },
+            });
+            await worker.tick();
+            expect(seen).toHaveLength(1);
+        });
+
+        it('a resting mid-pipeline row blocks any NEW package from starting', async () => {
+            // Previous package is between stages (e.g. metadata done,
+            // upload not yet claimed) — the next package must wait.
+            await seed('QA_COMPLETE');
+            await seed('PENDING');
+            const seen = [];
+            const worker = create_worker({
+                stages: { PENDING: noop_stage(seen, 'process_metadata') },
+            });
+            await worker.tick();
+            expect(seen).toHaveLength(0);
+        });
+
+        it('advancing the in-flight package wins over starting a new one', async () => {
+            await seed('UPLOAD_COMPLETE');
+            await seed('PENDING');
+            const seen = [];
+            const worker = create_worker({
+                stages: {
+                    UPLOAD_COMPLETE: noop_stage(seen, 'transfer'),
+                    PENDING: noop_stage(seen, 'process_metadata'),
+                },
+            });
+            await worker.tick();
+            expect(seen).toHaveLength(1);
+            expect(seen[0].name).toBe('transfer');
+        });
+
+        it('stage 6 (AIP store) dispatches alongside the serial pipeline', async () => {
+            await seed('UPLOAD_COMPLETE');
+            await seed('AIP_STORE_PENDING');
+            const seen = [];
+            const worker = create_worker({
+                stages: {
+                    UPLOAD_COMPLETE: noop_stage(seen, 'transfer'),
+                    AIP_STORE_PENDING: noop_stage(seen, 'aip_store'),
+                },
+            });
+            await worker.tick();
+            const names = seen.map((s) => s.name).sort();
+            expect(names).toEqual(['aip_store', 'transfer']);
+        });
+
+        it('the next package starts once the previous one completes (or halts)', async () => {
+            await seed('PENDING');
+            await seed('PENDING');
+            const seen = [];
+            const completing_stage = {
+                async run(row) {
+                    seen.push(row.id);
+                    /* Simulate the package finishing stage 5. */
+                    await model.update_queue(
+                        { id: row.id },
+                        { status: 'COMPLETE', is_complete: 1 }
+                    );
+                },
+            };
+            const worker = create_worker({ stages: { PENDING: completing_stage } });
+            await worker.tick();
+            expect(seen).toHaveLength(1);
+            await worker.tick();
+            expect(seen).toHaveLength(2);
+            expect(seen[0]).not.toBe(seen[1]);
+
+            // Halted packages step aside the same way: seed one halted
+            // mid-pipeline row — it must NOT block a new PENDING.
+            await db_helper.reset_data();
+            await seed('INGEST_HALTED');
+            const halted_seen = [];
+            const w2 = create_worker({
+                stages: { PENDING: noop_stage(halted_seen, 'process_metadata') },
+            });
+            await seed('PENDING');
+            await w2.tick();
+            expect(halted_seen).toHaveLength(1);
+        });
     });
 });
