@@ -447,6 +447,60 @@ describe('ingest dashboard — e2e', () => {
             expect((await model.get_queue_row({ id: other })).status).toBe('INGEST_HALTED');
         });
 
+        it('cancel_batch halts every moving row of the batch, then batch rollback cleans up', async () => {
+            /*
+             * 2026-07-30: batch rollback alone left PENDING/QA_COMPLETE
+             * rows marching forward. Halt = per-row cancel semantics
+             * for every cancellable row; already-halted rows stay put;
+             * other batches untouched. The follow-up batch rollback
+             * must then recover BOTH the cancelled and the halted rows.
+             */
+            const moving1 = await seed('PENDING');
+            const moving2 = await seed('QA_COMPLETE');
+            const moving3 = await seed('PROCESSING_METADATA');
+            const halted = await seed('INGEST_HALTED');
+            const other = await seed('PENDING', { batch: 'batch-B' });
+
+            const cookie = await cookie_for('halt-batch');
+            const res = await supertest(app)
+                .post(`/repo/dashboard/ingest/${moving1}/cancel-batch`)
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            const trigger = JSON.parse(res.headers['hx-trigger']);
+            expect(trigger['queue:refresh']).toBe(true);
+            expect(trigger.toast.message).toContain('3 packages cancelled');
+            expect(trigger.toast.message).toContain('1 already halted');
+
+            for (const id of [moving1, moving2, moving3]) {
+                const row = await model.get_queue_row({ id });
+                expect(row.status).toBe('CANCELLED_BY_USER');
+                expect(row.is_complete).toBe(0);
+            }
+            expect((await model.get_queue_row({ id: halted })).status).toBe('INGEST_HALTED');
+            expect((await model.get_queue_row({ id: other })).status).toBe('PENDING');
+
+            /*
+             * Step 2 — batch rollback recovers cancelled AND halted
+             * rows. Anchored on a CANCELLED row on purpose: a fully
+             * halted batch has no failure-state rows left, and the
+             * anchor check must accept the post-cancel state.
+             */
+            const rb = await supertest(app)
+                .post(`/repo/dashboard/ingest/${moving1}/rollback-batch-pre`)
+                .set('Cookie', cookie);
+            expect(rb.status).toBe(200);
+            const rb_trigger = JSON.parse(rb.headers['hx-trigger']);
+            expect(rb_trigger.toast.message).toContain('4 packages returned to Packaging');
+            for (const id of [moving1, moving2, moving3]) {
+                const row = await model.get_queue_row({ id });
+                expect(row.status).toBe('RETURNED_TO_PACKAGING');
+                expect(row.is_complete).toBe(1);
+            }
+            const halted_row = await model.get_queue_row({ id: halted });
+            expect(halted_row.status).toBe('ROLLED_BACK_TO_READY');
+            expect((await model.get_queue_row({ id: other })).status).toBe('PENDING');
+        });
+
         it('rollback_batch_pre refuses when the anchor row is not in a rollback-able state', async () => {
             const id = await seed('PROCESSING_METADATA');
             const cookie = await cookie_for('rb-batch-403');

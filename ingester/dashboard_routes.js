@@ -155,6 +155,13 @@ module.exports = function mount(app) {
         controller.rollback_pre_ingest_action
     );
     app.post(
+        `${base}/:id/cancel-batch`,
+        require_dashboard_auth,
+        can_ingest,
+        write_limiter(),
+        controller.cancel_batch_action
+    );
+    app.post(
         `${base}/:id/rollback-batch-pre`,
         require_dashboard_auth,
         can_ingest,

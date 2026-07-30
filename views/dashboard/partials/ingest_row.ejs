@@ -192,6 +192,42 @@
                     </li>
                 <% } %>
 
+                <% if (!row.is_complete) { %>
+                    <%/* Halt entire batch — stops EVERY open package of
+                         this batch (2026-07-30: after a partial-batch
+                         incident, batch rollback recovered the halted
+                         rows but the untouched PENDING/QA_COMPLETE rows
+                         kept marching forward). Server-side: per-row
+                         cancel semantics for every cancellable row;
+                         already-halted rows stay put; completed rows
+                         untouched. hx-swap="none" — the server fires
+                         queue:refresh + a summary toast. Offered on any
+                         open row so a halted row's kebab can stop the
+                         rest of its batch. */%>
+                    <li>
+                        <a href="#"
+                           class="dropdown-item"
+                           style="color: var(--du-crimson);"
+                           hx-post="<%= dashboard_base %>/ingest/<%= row.id %>/cancel-batch"
+                           hx-swap="none"
+                           hx-indicator="closest tr"
+                           data-confirm-title="Halt Entire Batch"
+                           data-confirm-severity="warn"
+                           data-confirm-proceed="Halt batch"
+                           hx-confirm="Halt ALL packages of '<%= row.batch %>'? Packages in a running stage stop on their next poll; packages waiting their turn are cancelled before they start. Already-halted and completed packages are not affected. After halting, use 'Return entire batch to Packaging' to clean up and re-submit later.">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                                 stroke="currentColor" stroke-width="1.75"
+                                 stroke-linecap="round" stroke-linejoin="round"
+                                 style="vertical-align: -2px; margin-right: 6px;">
+                                <circle cx="12" cy="12" r="10"/>
+                                <line x1="8" y1="9" x2="8" y2="15"/>
+                                <line x1="16" y1="9" x2="16" y2="15"/>
+                            </svg>
+                            Halt entire batch
+                        </a>
+                    </li>
+                <% } %>
+
                 <% if (actions.indexOf('rollback_to_packaging') !== -1) { %>
                     <%/* Return to Packaging — post-cancel cleanup that
                          lands the folder back in the Packaging and
@@ -254,14 +290,20 @@
                             Return to Packaging
                         </a>
                     </li>
-                    <%/* Batch-wide variant — recovers ALL halted
-                         packages of this batch in one action (born
-                         from the 95-package overload incident,
-                         2026-07-29). hx-swap="none": the response is
-                         empty; the server fires queue:refresh + a
-                         summary toast. Rows still running or needing
-                         an Archivematica-side rollback are skipped
-                         and counted in the toast. */%>
+                <% } %>
+
+                <% if (actions.indexOf('rollback_pre_ingest') !== -1 || actions.indexOf('rollback_to_packaging') !== -1) { %>
+                    <%/* Batch-wide variant — recovers ALL halted AND
+                         cancelled packages of this batch in one action
+                         (born from the 95-package overload incident,
+                         2026-07-29; extended 2026-07-30 to cover the
+                         post-"Halt entire batch" state, so it renders
+                         from either a halted or a cancelled row).
+                         hx-swap="none": the response is empty; the
+                         server fires queue:refresh + a summary toast.
+                         Rows still running or needing an
+                         Archivematica-side rollback are skipped and
+                         counted in the toast. */%>
                     <li>
                         <a href="#"
                            class="dropdown-item"
@@ -271,7 +313,7 @@
                            data-confirm-title="Return Entire Batch to Packaging"
                            data-confirm-severity="warn"
                            data-confirm-proceed="Return batch"
-                           hx-confirm="Return ALL halted packages of '<%= row.batch %>' to the Packaging and Ingesting view? Only packages that never reached Archivematica are affected — running or completed packages are skipped, and any package needing an Archivematica-side rollback keeps its own per-package action.">
+                           hx-confirm="Return ALL halted and cancelled packages of '<%= row.batch %>' to the Packaging and Ingesting view? Only packages that never reached Archivematica are affected — running or completed packages are skipped, and any package needing an Archivematica-side rollback keeps its own per-package action.">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
                                  stroke="currentColor" stroke-width="1.75"
                                  stroke-linecap="round" stroke-linejoin="round"

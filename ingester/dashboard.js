@@ -700,6 +700,53 @@ async function rollback_pre_ingest_action(req, res) {
  * text: HX-Trigger is an HTTP header (same gotcha documented in
  * aip_controller.js).
  */
+/*
+ * Batch halt wrapper — same empty-body + HX-Trigger contract as the
+ * batch rollback below (hx-swap="none"; queue:refresh redraws the
+ * table; ASCII-only toast text).
+ */
+async function cancel_batch_action(req, res) {
+    let status_code = 200;
+    let json_body = null;
+    const mock_res = {
+        status(code) {
+            status_code = code;
+            return this;
+        },
+        json(body) {
+            json_body = body;
+            return this;
+        },
+        set() {
+            return this;
+        },
+    };
+    await api_controller.cancel_batch(req, mock_res);
+    if (status_code >= 400) {
+        return res.status(status_code).json(json_body);
+    }
+    const s = json_body;
+    let message =
+        `Batch halted: ${s.cancelled} package${s.cancelled === 1 ? '' : 's'} cancelled` +
+        (s.was_running > 0 ? ` (${s.was_running} stopped mid-stage)` : '') +
+        '.';
+    if (s.already_halted > 0) {
+        message += ` ${s.already_halted} already halted.`;
+    }
+    if (s.skipped_other > 0) {
+        message += ` ${s.skipped_other} skipped.`;
+    }
+    message += ' Use "Return entire batch to Packaging" to clean up.';
+    res.set(
+        'HX-Trigger',
+        JSON.stringify({
+            'queue:refresh': true,
+            toast: { level: 'success', message },
+        })
+    );
+    res.status(200).send('');
+}
+
 async function rollback_batch_pre_action(req, res) {
     let status_code = 200;
     let json_body = null;
@@ -1162,6 +1209,7 @@ module.exports = {
     cancel_row_action,
     rollback_pre_ingest_action,
     rollback_batch_pre_action,
+    cancel_batch_action,
     rollback_archivematica_action,
     reset_row_action,
     return_to_packaging_action,

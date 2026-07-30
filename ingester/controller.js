@@ -411,7 +411,21 @@ async function rollback_batch_pre(req, res) {
     }
     const anchor = await model.get_queue_row({ id });
     if (!anchor) throw new NotFoundError(`queue row ${id} not found`);
-    if (!available_actions(anchor.pipeline_state).includes('rollback_pre_ingest')) {
+    /*
+     * Anchor must itself be batch-rollback-able: either a halt-state
+     * row (rollback_pre_ingest) or a post-cancel row
+     * (rollback_to_packaging — the "Halt entire batch" flow can leave
+     * a batch that is ALL cancelled rows, and staff anchor from one).
+     */
+    const anchor_prev =
+        anchor.pipeline_state === 'CANCELLED_BY_USER'
+            ? await model.get_prev_state_for_cancel(anchor.id)
+            : null;
+    const anchor_actions = available_actions(anchor.pipeline_state, anchor_prev);
+    if (
+        !anchor_actions.includes('rollback_pre_ingest') &&
+        !anchor_actions.includes('rollback_to_packaging')
+    ) {
         throw new ForbiddenError(
             `rollback_batch_pre not available from state ${anchor.pipeline_state}`
         );
@@ -430,16 +444,36 @@ async function rollback_batch_pre(req, res) {
         total_open: rows.length,
         rolled_back: 0,
         qa_errors: 0,
+        am_cleanup_needed: 0,
         skipped_in_flight: 0,
         skipped_am_side: 0,
         skipped_other: 0,
     };
     for (const row of rows) {
-        const actions = available_actions(row.pipeline_state);
+        /*
+         * CANCELLED_BY_USER rows need prev_state for both the
+         * action check and the state-aware cleanup — one audit read
+         * per cancelled row, same price the single endpoint pays.
+         */
+        const prev_state =
+            row.pipeline_state === 'CANCELLED_BY_USER'
+                ? await model.get_prev_state_for_cancel(row.id)
+                : null;
+        const actions = available_actions(row.pipeline_state, prev_state);
         if (actions.includes('rollback_pre_ingest')) {
             const r = await _rollback_pre_row(row, { actor, note });
             summary.rolled_back++;
             if (r.qa_error) summary.qa_errors++;
+        } else if (actions.includes('rollback_to_packaging')) {
+            /*
+             * Post-cancel rows (the "Halt entire batch" flow lands
+             * every moving row here) — same state-aware cleanup the
+             * per-row Return-to-Packaging runs.
+             */
+            const r = await _return_row_to_packaging(row, { actor, note, prev_state });
+            summary.rolled_back++;
+            if (r.qa_error) summary.qa_errors++;
+            if (r.needed_am_cleanup) summary.am_cleanup_needed++;
         } else if (actions.includes('rollback_archivematica')) {
             summary.skipped_am_side++;
         } else if (actions.includes('cancel')) {
@@ -449,6 +483,69 @@ async function rollback_batch_pre(req, res) {
         }
     }
     log.info({ event: 'rollback_batch_pre', ...summary, actor });
+    res.json(summary);
+}
+
+/*
+ * --- POST /api/ingest/:id/cancel-batch -----------------------------------
+ *
+ * Batch-wide HALT, anchored on any row of the batch. Companion to the
+ * batch rollback: that one only recovers rows already in a FAILURE
+ * state, so after a partial-batch incident the untouched
+ * PENDING/QA_COMPLETE rows kept marching forward (2026-07-30 report).
+ * This stops the whole batch: every open row in a cancellable state
+ * gets the same two-step the per-row cancel does — abort the worker's
+ * in-flight dispatch (if any), then flip to CANCELLED_BY_USER.
+ * Already-halted rows are left as they are (they're not moving), and
+ * completed rows are never touched. Follow with "Return entire batch
+ * to Packaging", which now also cleans up the cancelled rows.
+ */
+async function cancel_batch(req, res) {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+        throw new ValidationError('id must be a positive integer');
+    }
+    const anchor = await model.get_queue_row({ id });
+    if (!anchor) throw new NotFoundError(`queue row ${id} not found`);
+    const reason = (req.body && req.body.reason) || 'Batch halted by staff';
+    const actor = actor_of(req);
+
+    const rows = await model.list_queue(
+        { batch: anchor.batch, is_complete: 0 },
+        { limit: 1000, offset: 0 }
+    );
+
+    const summary = {
+        batch: anchor.batch,
+        total_open: rows.length,
+        cancelled: 0,
+        was_running: 0,
+        already_halted: 0,
+        skipped_other: 0,
+    };
+    const worker = worker_registry.get_active_worker();
+    for (const row of rows) {
+        if (!CANCELLABLE_STATES.has(row.pipeline_state)) {
+            if (available_actions(row.pipeline_state).some((a) => a.startsWith('rollback') || a === 'reset')) {
+                summary.already_halted++;
+            } else {
+                summary.skipped_other++;
+            }
+            continue;
+        }
+        if (worker && typeof worker.cancel_row === 'function') {
+            const out = worker.cancel_row(row.id);
+            if (out && out.aborted) summary.was_running++;
+        }
+        const result = await model.cancel(row.id, { actor, reason });
+        if (result.ok) {
+            summary.cancelled++;
+        } else {
+            /* Raced into a terminal state between list and cancel. */
+            summary.skipped_other++;
+        }
+    }
+    log.info({ event: 'cancel_batch', ...summary, actor });
     res.json(summary);
 }
 
@@ -711,6 +808,32 @@ async function return_to_packaging(req, res) {
     }
 
     const note = (req.body && req.body.note) || null;
+    const out = await _return_row_to_packaging(row, {
+        actor: actor_of(req),
+        note,
+        prev_state,
+    });
+    res.json({
+        id,
+        affected: out.affected,
+        new_state: 'RETURNED_TO_PACKAGING',
+        prev_state,
+        needed_qa_move: out.needed_qa_move,
+        needed_am_cleanup: out.needed_am_cleanup,
+        qa_outcome: out.qa_outcome,
+        qa_error: out.qa_error,
+    });
+}
+
+/*
+ * Shared core of the post-cancel Return-to-Packaging: state-aware QA
+ * folder move + queue flip + Job History record for ONE row. Callers
+ * have already verified the action is available for the row (and
+ * fetched prev_state — passed in so the batch path pays one audit
+ * read per row, same as the single path). Used by the single-row
+ * endpoint above and the batch rollback below.
+ */
+async function _return_row_to_packaging(row, { actor, note = null, prev_state }) {
     /*
      * Same SFTP folder Stage 2 created — see _qa_uuid helper for why
      * we ignore the legacy '0' default.
@@ -747,7 +870,7 @@ async function return_to_packaging(req, res) {
                     qa_uuid,
                     row.batch,
                     row.package,
-                    { actor: actor_of(req) }
+                    { actor }
                 );
                 qa_outcome = { status: r.status };
                 if (r.status !== 200) {
@@ -757,7 +880,7 @@ async function return_to_packaging(req, res) {
                 qa_error = `QA move failed: ${err.message}`;
                 log.warn({
                     event: 'return_to_packaging_qa_failed',
-                    queue_id: id,
+                    queue_id: row.id,
                     err: err.message,
                 });
             }
@@ -766,9 +889,8 @@ async function return_to_packaging(req, res) {
         }
     }
 
-    const actor = actor_of(req);
     const result = await model.update_queue(
-        { id },
+        { id: row.id },
         { status: 'RETURNED_TO_PACKAGING', is_complete: 1 },
         {
             actor,
@@ -798,16 +920,13 @@ async function return_to_packaging(req, res) {
         action: 'rollback_to_packaging',
         error_text,
     });
-    res.json({
-        id,
+    return {
         affected: result.affected,
-        new_state: 'RETURNED_TO_PACKAGING',
-        prev_state,
         needed_qa_move: needs_qa_move,
         needed_am_cleanup: needs_am_cleanup,
         qa_outcome,
         qa_error,
-    });
+    };
 }
 
 /*
@@ -829,6 +948,7 @@ module.exports = {
     get_timeline,
     rollback_pre_ingest,
     rollback_batch_pre,
+    cancel_batch,
     rollback_archivematica,
     reset_row,
     cancel_row,
