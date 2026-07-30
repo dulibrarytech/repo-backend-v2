@@ -378,33 +378,36 @@ module.exports = function mount(app) {
 
     /*
      * AIP backfill — admin-initiated catch-up for AIPs that ingested
-     * under v2 BEFORE Stage 6 existed (preservation/ingest operation →
-     * manage_ingest). See ingester/aip_backfill.js for the model + the
+     * under v2 BEFORE Stage 6 existed. Admin-only via manage_aip_store
+     * (2026-07-29; was manage_ingest, which staff hold — a bulk
+     * preservation operation belongs with the other Admin Utils write
+     * surfaces). See ingester/aip_backfill.js for the model + the
      * dashboard/aip_backfill_controller.js docstring for the surface.
      */
+    const can_manage_aip = require_permission(PERMISSIONS.MANAGE_AIP_STORE);
     app.get(
         `${base}/admin/aip-backfill`,
         require_dashboard_auth,
-        can_ingest,
+        can_manage_aip,
         aip_backfill_controller.backfill_page
     );
     app.get(
         `${base}/admin/aip-backfill/status`,
         require_dashboard_auth,
-        can_ingest,
+        can_manage_aip,
         aip_backfill_controller.backfill_status_partial
     );
     app.post(
         `${base}/admin/aip-backfill/start`,
         require_dashboard_auth,
-        can_ingest,
+        can_manage_aip,
         write_limiter(),
         aip_backfill_controller.backfill_start
     );
     app.post(
         `${base}/admin/aip-backfill/cancel`,
         require_dashboard_auth,
-        can_ingest,
+        can_manage_aip,
         write_limiter(),
         aip_backfill_controller.backfill_cancel
     );

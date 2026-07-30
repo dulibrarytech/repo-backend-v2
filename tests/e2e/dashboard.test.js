@@ -3667,6 +3667,30 @@ describe('dashboard — e2e', () => {
             expect(refreshed.error).toBeNull();
         });
 
+        it('AIP backfill is admin-only; Batch Backups stays staff-accessible', async () => {
+            /*
+             * 2026-07-29: backfill moved from manage_ingest (staff hold
+             * it) to admin-only manage_aip_store — a bulk preservation
+             * write belongs with the other Admin Utils write surfaces.
+             * The Batch Backups browser deliberately KEEPS manage_ingest
+             * (read-only browse) — pin both so neither drifts.
+             */
+            const staff = await db_helper.seed_user({ du_id: 'aip-bf-staff', role: 'staff' });
+            const cookie = `${jwt.COOKIE_NAME}=${jwt.sign({ sub: String(staff.id), du_id: 'aip-bf-staff' })}`;
+            const page = await supertest(app)
+                .get('/repo/dashboard/admin/aip-backfill')
+                .set('Cookie', cookie);
+            expect(page.status).toBe(403);
+            const start = await supertest(app)
+                .post('/repo/dashboard/admin/aip-backfill/start')
+                .set('Cookie', cookie);
+            expect(start.status).toBe(403);
+            const archive = await supertest(app)
+                .get('/repo/dashboard/admin/archive')
+                .set('Cookie', cookie);
+            expect(archive.status).toBe(200);
+        });
+
         it('GET /admin/aip-backfill renders the page with the missing count + Start button', async () => {
             const cookie = await cookie_for('aip-bf-page');
             /*

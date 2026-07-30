@@ -35,8 +35,16 @@ const PERMISSIONS = Object.freeze({
     PUBLISH_OBJECT: 'publish_object', // publish / suppress (public visibility)
     EDIT_OBJECT: 'edit_object', // metadata edits, thumbnails, per-object refresh/convert
     DELETE_OBJECT: 'delete_object', // soft-delete + bulk delete (→ AM deletion request)
-    MANAGE_INGEST: 'manage_ingest', // enqueue/reset/cancel ingest, Kaltura, AIP backfill
+    MANAGE_INGEST: 'manage_ingest', // enqueue/reset/cancel ingest, Kaltura, batch-backup browse
     MANAGE_INDEX: 'manage_index', // reindex, drop & rebuild, retry dead-lettered
+    /*
+     * AIP backfill start/cancel (bulk Stage-6 catch-up copies to
+     * Wasabi). Deliberately NOT in the staff set (2026-07-29): it was
+     * originally grouped under manage_ingest, but it drives a long
+     * bulk preservation operation — admin-only, like the other
+     * Admin Utils write surfaces. Admin holds it via ALL_PERMISSIONS.
+     */
+    MANAGE_AIP_STORE: 'manage_aip_store',
     MANAGE_METADATA_REFRESH: 'manage_metadata_refresh', // system-wide refresh start/cancel
     MANAGE_CONVERT: 'manage_convert', // TIFF→JPG batch convert queue
     MANAGE_USERS: 'manage_users', // user CRUD + role assignment
