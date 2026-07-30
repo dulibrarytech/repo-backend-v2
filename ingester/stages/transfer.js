@@ -83,6 +83,37 @@ async function run(row, deps = {}) {
             row.collection_uuid && row.collection_uuid !== 'PENDING'
                 ? row.collection_uuid
                 : `q-${row.id}`;
+        /*
+         * Timeline marker for the silent window ahead: start_transfer
+         * doesn't respond until AM has copied the ENTIRE package from
+         * the SFTP source into its transfer area, so the row rests at
+         * UPLOAD_COMPLETE with no other visible activity — for large
+         * media that's bounded only by start_transfer_timeout_ms.
+         * Best-effort: a marker failure must never block the handoff.
+         */
+        try {
+            if (typeof model.insert_event === 'function') {
+                await model.insert_event(row.id, {
+                    event_type: 'info',
+                    actor: 'worker',
+                    to_state: 'UPLOAD_COMPLETE',
+                    payload: {
+                        stage: 'transfer',
+                        step: 'am_copy_started',
+                        note:
+                            'Archivematica is copying the package into its' +
+                            ' transfer area. Large packages can stay in this' +
+                            ' step for a long time — this is normal.',
+                    },
+                });
+            }
+        } catch (err) {
+            log.warn({
+                event: 'am_copy_marker_failed',
+                queue_id: row.id,
+                err: err.message,
+            });
+        }
         let res;
         try {
             res = await am.start_transfer(collection_pid, row.package);

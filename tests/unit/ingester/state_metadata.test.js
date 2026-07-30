@@ -33,6 +33,19 @@ describe('ingester/state_metadata — get_status_metadata', () => {
         expect(meta).toEqual({ severity: 'INFO', suggested_action: null });
     });
 
+    it('gives UPLOAD_COMPLETE an INFO "hand-off" explanation (silent AM-copy window)', () => {
+        /*
+         * The row rests at UPLOAD_COMPLETE while AM's start_transfer
+         * copies the package — a long, event-free window for large
+         * media. The Details column must explain the wait or staff
+         * read the row as stuck.
+         */
+        const meta = get_status_metadata('UPLOAD_COMPLETE');
+        expect(meta.severity).toBe('INFO');
+        expect(meta.suggested_action).toMatch(/Archivematica/);
+        expect(meta.suggested_action).toMatch(/normal/i);
+    });
+
     it('falls back to INFO/null for an unknown status', () => {
         const meta = get_status_metadata('SOMETHING_NEW');
         expect(meta).toEqual({ severity: 'INFO', suggested_action: null });

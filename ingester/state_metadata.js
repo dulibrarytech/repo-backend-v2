@@ -42,7 +42,20 @@ const STATUS_METADATA = {
         severity: 'INFO',
         suggested_action: 'Wait — packages uploading to Archivematica SFTP.',
     },
-    UPLOAD_COMPLETE: { severity: 'INFO', suggested_action: null },
+    /*
+     * Stage 2 exit / Stage 3 entry. The row RESTS here visibly while
+     * Archivematica's start_transfer call is in flight — AM copies the
+     * entire package into its transfer area before responding, so a
+     * large media package can sit at this state for a long time with
+     * no timeline activity. Say so, or staff read it as "stuck".
+     */
+    UPLOAD_COMPLETE: {
+        severity: 'INFO',
+        suggested_action:
+            'Wait — handing off to Archivematica. Large packages stay at this' +
+            ' step while Archivematica copies the files into its transfer' +
+            ' area, which can take a long time. This is normal.',
+    },
     REPLICATING_PACKAGE: { severity: 'INFO', suggested_action: null },
     TRANSFER_STARTED: {
         severity: 'INFO',

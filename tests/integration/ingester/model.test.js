@@ -350,6 +350,45 @@ describe('ingester/model — update_queue', () => {
     });
 });
 
+describe('ingester/model — insert_event', () => {
+    beforeAll(async () => {
+        await db_helper.setup_schema();
+    });
+    beforeEach(async () => {
+        await db_helper.reset_data();
+    });
+    afterAll(async () => {
+        await db_helper.teardown();
+    });
+
+    it('appends a timeline event without touching the queue row', async () => {
+        const [id] = await model.queue_packages([row_template()]);
+        const before = await db_queue()(QUEUE).where({ id }).first();
+        await model.insert_event(id, {
+            event_type: 'info',
+            actor: 'worker',
+            to_state: 'PENDING',
+            payload: { step: 'marker' },
+        });
+        const after = await db_queue()(QUEUE).where({ id }).first();
+        expect(after.pipeline_state).toBe(before.pipeline_state);
+        expect(String(after.updated)).toBe(String(before.updated));
+        const events = await db_queue()(EVENTS).where({ queue_id: id, event_type: 'info' });
+        expect(events).toHaveLength(1);
+        expect(events[0].from_state).toBeNull();
+        expect(events[0].to_state).toBe('PENDING');
+        expect(events[0].actor).toBe('worker');
+        expect(JSON.parse(events[0].payload)).toEqual({ step: 'marker' });
+    });
+
+    it('requires queue_id and to_state', async () => {
+        await expect(model.insert_event(null, { to_state: 'X' })).rejects.toBeInstanceOf(
+            ValidationError
+        );
+        await expect(model.insert_event(1, {})).rejects.toBeInstanceOf(ValidationError);
+    });
+});
+
 describe('ingester/model — get_queue_row / list_queue', () => {
     beforeAll(async () => {
         await db_helper.setup_schema();

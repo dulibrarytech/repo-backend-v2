@@ -58,6 +58,25 @@ describe('ingest_row upload progress bar', () => {
         expect(html).not.toMatch(/class="progress"/);
     });
 
+    it('shows the AM hand-off explanation for an UPLOAD_COMPLETE row', async () => {
+        /*
+         * While start_transfer's copy runs, the row rests at
+         * UPLOAD_COMPLETE with no progress bar or heartbeat — the
+         * Details column must carry the state's suggested_action so
+         * a long silent window reads as normal, not stuck. The text
+         * itself lives in state_metadata (persisted to the row by the
+         * model); this pins the render path.
+         */
+        const { get_status_metadata } = require('../../../ingester/state_metadata');
+        const html = await render({
+            pipeline_state: 'UPLOAD_COMPLETE',
+            suggested_action: get_status_metadata('UPLOAD_COMPLETE').suggested_action,
+        });
+        expect(html).not.toMatch(/class="progress"/);
+        expect(html).toContain('handing off to Archivematica');
+        expect(html).toContain('This is normal');
+    });
+
     // Tier A + B: Archivematica step name + liveness heartbeat.
     it('shows the AM microservice + heartbeat for a TRANSFER_IN_PROGRESS row', async () => {
         const html = await render({

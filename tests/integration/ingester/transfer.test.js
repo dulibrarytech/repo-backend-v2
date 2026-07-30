@@ -206,6 +206,70 @@ describe('ingester/stages/transfer', () => {
         expect(am._calls.clear_transfer).toHaveLength(1);
     });
 
+    it('writes an am_copy_started timeline marker on fresh runs, but not on resume', async () => {
+        /*
+         * The marker covers start_transfer's silent window: AM copies
+         * the whole package before responding, and the row rests at
+         * UPLOAD_COMPLETE the entire time with no state transition.
+         * Resume paths (TRANSFER_STARTED+) skip start_transfer, so
+         * they must not write a second marker.
+         */
+        const am_script = {
+            start_transfer: {
+                status: 200,
+                data: { id: 'tx-uuid-1', directory: 'codu:test_pkg-001_transfer' },
+            },
+            get_unapproved_transfer_list: {
+                status: 200,
+                data: {
+                    results: [{ directory: 'codu:test_pkg-001_transfer', uuid: 'tx-uuid-1' }],
+                },
+            },
+            approve_transfer: { status: 200, data: { message: 'approved' } },
+            get_transfer_status: {
+                status: 200,
+                data: { status: 'COMPLETE', sip_uuid: 'sip-uuid-7' },
+            },
+        };
+        const row = await seed_row();
+        await stage.run(row, { am: make_am(am_script), model });
+        const markers = (
+            await db_queue()(tables.ingest_events).where({
+                queue_id: row.id,
+                event_type: 'info',
+            })
+        ).filter((e) => JSON.parse(e.payload).step === 'am_copy_started');
+        expect(markers).toHaveLength(1);
+        expect(markers[0].to_state).toBe('UPLOAD_COMPLETE');
+        expect(markers[0].actor).toBe('worker');
+
+        const resume_row = await seed_row({
+            package: 'pkg-002',
+            status: 'TRANSFER_STARTED',
+            transfer_uuid: 'tx-uuid-2',
+            transfer_folder: 'codu:test_pkg-002_transfer',
+        });
+        await stage.run(resume_row, {
+            am: make_am({
+                ...am_script,
+                get_unapproved_transfer_list: {
+                    status: 200,
+                    data: {
+                        results: [
+                            { directory: 'codu:test_pkg-002_transfer', uuid: 'tx-uuid-2' },
+                        ],
+                    },
+                },
+            }),
+            model,
+        });
+        const resume_markers = await db_queue()(tables.ingest_events).where({
+            queue_id: resume_row.id,
+            event_type: 'info',
+        });
+        expect(resume_markers).toHaveLength(0);
+    });
+
     it('halts with APPROVE_TIMEOUT when the unapproved list never includes our folder', async () => {
         const row = await seed_row();
         const am = make_am({

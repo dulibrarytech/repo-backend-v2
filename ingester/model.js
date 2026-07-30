@@ -211,6 +211,35 @@ async function _update_queue_txn(where, data, opts) {
 }
 
 /*
+ * Append an informational event to a queue row's timeline WITHOUT
+ * touching the queue row itself. update_queue only writes events when
+ * pipeline_state actually transitions; some long silent windows have
+ * no transition to record — e.g. Stage 3's start_transfer, where
+ * Archivematica copies the whole package before responding and the row
+ * rests at UPLOAD_COMPLETE the entire time. A one-off marker event
+ * keeps the timeline honest through such windows.
+ *
+ * `to_state` is required (the timeline renders it as the event label);
+ * `from_state` defaults to null so the entry reads as a single label,
+ * not a transition.
+ */
+async function insert_event(
+    queue_id,
+    { event_type = 'info', actor = 'system', from_state = null, to_state, payload } = {}
+) {
+    if (!queue_id) throw new ValidationError('queue_id is required');
+    if (!to_state) throw new ValidationError('to_state is required');
+    return db_queue()(EVENTS).insert({
+        queue_id,
+        from_state,
+        to_state,
+        event_type,
+        actor,
+        payload: serialize_payload(payload),
+    });
+}
+
+/*
  * MariaDB throws this specific error text when an InnoDB optimistic
  * row-version check fails between SELECT and UPDATE inside a
  * transaction. (Same family as ER_LOCK_DEADLOCK / ER_LOCK_WAIT_TIMEOUT,
@@ -482,6 +511,7 @@ async function _purge_batch(batch) {
 module.exports = {
     queue_packages,
     update_queue,
+    insert_event,
     get_queue_row,
     list_queue,
     count_rows_in_states,
