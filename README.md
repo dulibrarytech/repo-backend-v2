@@ -113,22 +113,6 @@ Integration + e2e bootstrap an in-memory sqlite DB from the same migration files
 
 An Express 5 application (CommonJS, EJS + HTMX partials, Bootstrap 5) serving the staff dashboard and the REST API behind it. Content lives in MariaDB across two pools (`repo`, `repo_queue`); background workers run the ingest pipeline, ASpace metadata refresh, ES indexing, and TIFF conversion; published objects are projected into a single public Elasticsearch index that the public frontend reads directly.
 
-```
-Staff ──▶ dashboard (EJS views + HTMX partials)
-               │  REST (JWT cookie)
-               ▼
-             routes ──▶ controller ──▶ model ──▶ MariaDB (repo · repo_queue)
-                              │
-              workers: ingester (6-stage) · metadata refresh · indexer · convert
-                              │
-                              ▼
-                       Elasticsearch ──▶ digitaldu-frontend (public site)
-
-External: DU SSO (auth) · ArchivesSpace (metadata) · Archivematica + Storage Service (ingest)
-          · DuraCloud (active AIP tier) · Wasabi S3 via Curation API (preservation tier)
-          · Handle service (PIDs) · TN service (thumbnails) · Kaltura (streaming A/V)
-```
-
 ### External services
 
 | Service                       | Role                                                                                              |
