@@ -793,17 +793,19 @@ describe('dashboard — e2e', () => {
             );
         });
 
-        it('hidden nav icons (Stats / AIPs / Admin Utils) are absent from the rail', async () => {
+        it('hidden nav icons (Stats / AIPs) are absent; Admin Utils is back', async () => {
             const cookie = await cookie_for('stats-7');
             const res = await supertest(app).get('/repo/dashboard/').set('Cookie', cookie);
             /*
-             * TEMPORARY (2026-07-24) v1-familiar nav: these three icons
-             * are hidden via the nav_show flags in sidebar.ejs. Routes
-             * stay live — only the rail links are gone.
+             * TEMPORARY (2026-07-24) v1-familiar nav: Stats and AIPs
+             * stay hidden via the nav_show flags in sidebar.ejs
+             * (routes live, rail links gone). Admin Utils was restored
+             * 2026-07-29 — admin-only via allow('manage_index'); the
+             * default test user is admin.
              */
             expect(res.text).not.toMatch(/aria-label="Stats"/);
             expect(res.text).not.toMatch(/aria-label="AIPs"/);
-            expect(res.text).not.toMatch(/aria-label="Admin Utils"/);
+            expect(res.text).toMatch(/aria-label="Admin Utils"/);
         });
     });
 

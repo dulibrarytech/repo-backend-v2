@@ -209,12 +209,12 @@ describe('ingest workspace pages — e2e', () => {
             expect(res.text).toContain('title="Digital Preservation Jobs"');
             /*
              * Admin Utils is the single entry icon for the admin tools
-             * (Indexer / Metadata Refresh / Services Health).
-             * TEMPORARY (2026-07-24) v1-familiar nav: the icon is
-             * hidden via nav_show in sidebar.ejs (routes stay live) —
-             * flip back to toContain when restored.
+             * (Indexer / Metadata Refresh / Services Health). Restored
+             * 2026-07-29 (admin-only via allow('manage_index'); the
+             * default test user is admin). The per-tool icons still
+             * only render inside the admin focus mode.
              */
-            expect(res.text).not.toContain('title="Admin Utils"');
+            expect(res.text).toContain('title="Admin Utils"');
             expect(res.text).not.toContain('title="Indexer (admin)"');
             expect(res.text).not.toContain('title="Metadata Refresh (admin)"');
             expect(res.text).not.toContain('title="Services Health (admin)"');
@@ -248,18 +248,18 @@ describe('ingest workspace pages — e2e', () => {
             expect(positions).toEqual(sorted);
         });
 
-        it('Admin Utils icon is temporarily hidden from the rail', async () => {
+        it('Admin Utils icon is back on the rail and points at /admin/services', async () => {
             /*
-             * TEMPORARY (2026-07-24) v1-familiar nav: the Admin Utils
-             * entry icon is hidden via nav_show in sidebar.ejs. The
-             * /admin/services route stays live (admin focus mode tests
-             * below still exercise it). Restore the original
-             * points-at-/admin/services assertion (git history) when
-             * the icon returns.
+             * Restored 2026-07-29 (nav_show.admin_utils back on).
+             * Entry point is the Services Health page; the icon is
+             * admin-only via allow('manage_index') — rbac.test.js pins
+             * the staff/viewer absence.
              */
             const cookie = await cookie_for('side-admin-link');
             const res = await supertest(app).get('/repo/dashboard/').set('Cookie', cookie);
-            expect(res.text).not.toMatch(/title="Admin Utils"/);
+            expect(res.text).toMatch(
+                /href="[^"]*\/dashboard\/admin\/services"[^>]*title="Admin Utils"/
+            );
         });
     });
 

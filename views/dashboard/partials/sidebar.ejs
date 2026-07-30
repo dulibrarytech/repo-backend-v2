@@ -40,9 +40,11 @@
         // TEMPORARY (2026-07-24) v1-familiar nav rollout: flip these back
         // to true to restore the hidden icons. Stats is hidden because the
         // stats view IS the home page for now (controller redirects
-        // /dashboard/stats → /dashboard/). AIPs and Admin Utils are hidden
-        // from the rail only — their routes stay live for direct URLs.
-        var nav_show = { stats: false, aips: false, admin_utils: false };
+        // /dashboard/stats → /dashboard/). AIPs is hidden from the rail
+        // only — its route stays live for direct URLs.
+        // admin_utils restored 2026-07-29 by request (icon is still
+        // admin-only via the allow('manage_index') gate below).
+        var nav_show = { stats: false, aips: false, admin_utils: true };
     %>
 
     <% if (in_workflow) { %>

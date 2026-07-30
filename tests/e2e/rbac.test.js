@@ -201,16 +201,15 @@ describe('RBAC e2e — admin surfaces gated by role', () => {
             return res.text;
         }
 
-        it('admin sees Users + DPJ links (Admin Utils temporarily hidden)', async () => {
+        it('admin sees Users + DPJ + Admin Utils links', async () => {
             const html = await home_html('admin');
             expect(html).toMatch(/aria-label="Users"/);
             /*
-             * TEMPORARY (2026-07-24) v1-familiar nav: the Admin Utils
-             * icon is hidden for everyone via nav_show in sidebar.ejs
-             * (routes stay live). Flip this back to toMatch when the
-             * icon is restored.
+             * Admin Utils icon restored 2026-07-29 (nav_show flag back
+             * on). Still admin-only: gated on allow('manage_index') in
+             * sidebar.ejs — the staff/viewer tests below pin that.
              */
-            expect(html).not.toMatch(/aria-label="Admin Utils"/);
+            expect(html).toMatch(/aria-label="Admin Utils"/);
             expect(html).toMatch(/aria-label="Digital Preservation Jobs"/);
         });
 
