@@ -540,6 +540,7 @@ async function cancel_batch(req, res) {
         const result = await model.cancel(row.id, { actor, reason });
         if (result.ok) {
             summary.cancelled++;
+            await _cancel_inflight_upload(row, result.prev_state);
         } else {
             /* Raced into a terminal state between list and cancel. */
             summary.skipped_other++;
@@ -741,6 +742,7 @@ async function cancel_row(req, res) {
             current_state: result.current_state,
         });
     }
+    await _cancel_inflight_upload(row, result.prev_state);
     res.json({
         id,
         affected: result.affected,
@@ -748,6 +750,27 @@ async function cancel_row(req, res) {
         prev_state: result.prev_state,
         new_state: 'CANCELLED_BY_USER',
     });
+}
+
+/*
+ * If the row we just cancelled was mid-upload, tell the curation side
+ * to stop the background put too (2026-07-30: cancelling the queue row
+ * stopped the Node poll, but the curation daemon thread kept uploading
+ * to completion). Best-effort — a failure here never blocks the
+ * cancel; the put just runs out its course like before.
+ */
+async function _cancel_inflight_upload(row, prev_state) {
+    if (prev_state !== 'UPLOADING') return;
+    if (!(qa_service.is_configured && qa_service.is_configured())) return;
+    try {
+        await qa_service.cancel_upload(_qa_uuid(row));
+    } catch (err) {
+        log.warn({
+            event: 'cancel_upload_request_failed',
+            queue_id: row.id,
+            err: err.message,
+        });
+    }
 }
 
 /*

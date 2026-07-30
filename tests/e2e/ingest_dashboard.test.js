@@ -447,6 +447,50 @@ describe('ingest dashboard — e2e', () => {
             expect((await model.get_queue_row({ id: other })).status).toBe('INGEST_HALTED');
         });
 
+        it('cancel_batch asks curation to stop the in-flight put for UPLOADING rows', async () => {
+            /*
+             * 2026-07-30: halting cancelled the queue rows but the
+             * curation-side background put kept uploading. The cancel
+             * flows must fire qa_service.cancel_upload for rows whose
+             * prior state was UPLOADING (and only those).
+             */
+            const qa_service = require('../../ingester/libs/qa_service');
+            const orig_conf = qa_service.is_configured;
+            const orig_cancel = qa_service.cancel_upload;
+            const cancels = [];
+            qa_service.is_configured = () => true;
+            qa_service.cancel_upload = async (uuid) => {
+                cancels.push(uuid);
+                return { status: 200, data: { message: 'cancel_requested' } };
+            };
+            try {
+                /*
+                 * The upload's qa_uuid is the row's collection_uuid
+                 * (the 002-ingest/<uuid> staging folder) — give the
+                 * UPLOADING row a distinct one to pin the plumbing.
+                 */
+                const uploading = await seed('UPLOADING', { collection_uuid: 'codu-up-1' });
+                const pending = await seed('PENDING', { collection_uuid: 'codu-up-2' });
+                const cookie = await cookie_for('halt-upload');
+                const res = await supertest(app)
+                    .post(`/repo/dashboard/ingest/${uploading}/cancel-batch`)
+                    .set('Cookie', cookie);
+                expect(res.status).toBe(200);
+                // Both rows cancelled; only the UPLOADING one triggers
+                // a curation-side upload cancel.
+                expect((await model.get_queue_row({ id: uploading })).status).toBe(
+                    'CANCELLED_BY_USER'
+                );
+                expect((await model.get_queue_row({ id: pending })).status).toBe(
+                    'CANCELLED_BY_USER'
+                );
+                expect(cancels).toEqual(['codu-up-1']);
+            } finally {
+                qa_service.is_configured = orig_conf;
+                qa_service.cancel_upload = orig_cancel;
+            }
+        });
+
         it('cancel_batch halts every moving row of the batch, then batch rollback cleans up', async () => {
             /*
              * 2026-07-30: batch rollback alone left PENDING/QA_COMPLETE

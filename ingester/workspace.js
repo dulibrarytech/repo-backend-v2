@@ -215,6 +215,14 @@ async function list_workspace(opts = {}) {
         let package_names;
         let packages_error;
         let flags = Array.isArray(entry.structure_errors) ? entry.structure_errors : [];
+        /*
+         * Size source depends on the path: the MDO view's /workspace
+         * entries carry total_bytes inline; the QA / Packaging views
+         * start from bare folder names and get it from the per-batch
+         * folder-state fetch below (2026-07-30 — the Size column was
+         * blank on those views until then).
+         */
+        let total_bytes = Number.isFinite(entry.total_bytes) ? entry.total_bytes : null;
         if (Array.isArray(entry.packages)) {
             package_names = entry.packages.map((p) =>
                 typeof p === 'string' ? p : p && p.name
@@ -225,6 +233,9 @@ async function list_workspace(opts = {}) {
             packages_error = folder.packages_error;
             if (Array.isArray(folder.structure_errors)) {
                 flags = folder.structure_errors;
+            }
+            if (Number.isFinite(folder.total_bytes)) {
+                total_bytes = folder.total_bytes;
             }
         }
 
@@ -249,7 +260,7 @@ async function list_workspace(opts = {}) {
              * pre-date the field). The view renders a Size column and
              * a "Large batch" advisory above the threshold.
              */
-            total_bytes: Number.isFinite(entry.total_bytes) ? entry.total_bytes : null,
+            total_bytes,
         });
         total_packages += package_names.length;
     }
@@ -352,6 +363,13 @@ async function _fetch_folder_state(astools, name) {
                 res.data && Array.isArray(res.data.structure_errors)
                     ? res.data.structure_errors
                     : undefined,
+            /*
+             * Batch size piggybacked on the same scan (2026-07-30).
+             * Optional — older curation-services don't send it.
+             */
+            total_bytes: Number.isFinite(res.data && res.data.total_bytes)
+                ? res.data.total_bytes
+                : null,
         };
     } catch (err) {
         return { name, packages: [], packages_error: err.message };

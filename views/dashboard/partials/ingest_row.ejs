@@ -214,6 +214,7 @@
                            data-confirm-title="Halt Entire Batch"
                            data-confirm-severity="warn"
                            data-confirm-proceed="Halt batch"
+                           data-busy-message="Halting the batch - cancelling every open package. This can take a minute for large batches..."
                            hx-confirm="Halt ALL packages of '<%= row.batch %>'? Packages in a running stage stop on their next poll; packages waiting their turn are cancelled before they start. Already-halted and completed packages are not affected. After halting, use 'Return entire batch to Packaging' to clean up and re-submit later.">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
                                  stroke="currentColor" stroke-width="1.75"
@@ -313,6 +314,7 @@
                            data-confirm-title="Return Entire Batch to Packaging"
                            data-confirm-severity="warn"
                            data-confirm-proceed="Return batch"
+                           data-busy-message="Returning the batch to Packaging - moving folders back one package at a time. This can take a few minutes for large batches..."
                            hx-confirm="Return ALL halted and cancelled packages of '<%= row.batch %>' to the Packaging and Ingesting view? Only packages that never reached Archivematica are affected — running or completed packages are skipped, and any package needing an Archivematica-side rollback keeps its own per-package action.">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
                                  stroke="currentColor" stroke-width="1.75"

@@ -59,6 +59,19 @@
         show_toast(evt.detail || {});
     });
 
+    /*
+     * Long-running actions (batch halt / batch rollback loop over up
+     * to ~100 rows with per-row curation calls) — surface immediate
+     * feedback the moment the request FIRES, so staff aren't staring
+     * at a silent page wondering whether the click took. Any element
+     * can opt in with data-busy-message="...".
+     */
+    document.body.addEventListener('htmx:beforeRequest', function (evt) {
+        var src = evt.detail && evt.detail.elt;
+        var msg = src && src.getAttribute && src.getAttribute('data-busy-message');
+        if (msg) show_toast({ level: 'info', message: msg });
+    });
+
     function show_toast(opts) {
         let stack = document.getElementById('toast-stack');
         if (!stack) {

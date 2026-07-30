@@ -55,7 +55,15 @@ function _pace(min_interval_ms, sleep) {
     if (!min_interval_ms || min_interval_ms <= 0) return Promise.resolve();
     const turn = _pace_chain.then(async () => {
         const wait = _pace_last_at + min_interval_ms - Date.now();
-        if (wait > 0) await sleep(wait);
+        if (wait > 0) {
+            /*
+             * Loud on purpose — lets ops verify the pacing is live
+             * (grep the log for aspace_fetch_paced) instead of
+             * guessing from ASpace's error rate.
+             */
+            log.info({ event: 'aspace_fetch_paced', waited_ms: wait, min_interval_ms });
+            await sleep(wait);
+        }
         _pace_last_at = Date.now();
     });
     /* Keep the chain alive even if a sleep implementation throws. */

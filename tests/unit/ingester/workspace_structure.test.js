@@ -178,7 +178,7 @@ describe('workspace.list_workspace — structure-QA entries', () => {
     it('falls back to per-folder fetch for legacy flat-name entries', async () => {
         const astools = make_astools({
             workspace_data: { result: ['new_legacy-resources_3'], errors: [] },
-            packages_data: { result: ['pkg_a'], errors: [] },
+            packages_data: { result: ['pkg_a'], total_bytes: 987654, errors: [] },
         });
 
         const data = await workspace.list_workspace({ scope: 'unprocessed', astools });
@@ -186,6 +186,22 @@ describe('workspace.list_workspace — structure-QA entries', () => {
         expect(astools.calls.list_packages).toEqual(['new_legacy-resources_3']);
         expect(data.folders[0].packages).toEqual(['pkg_a']);
         expect(data.folders[0].blocked).toBe(false);
+        /*
+         * Size flows from the per-batch fetch too (2026-07-30) — this
+         * is the path the ASpace QA / Packaging views use, where the
+         * Size column was blank until the folder-state response
+         * carried total_bytes.
+         */
+        expect(data.folders[0].total_bytes).toBe(987654);
+    });
+
+    it('per-folder fetch without total_bytes (older curation) yields null size', async () => {
+        const astools = make_astools({
+            workspace_data: { result: ['new_old-resources_5'], errors: [] },
+            packages_data: { result: ['pkg_a'], errors: [] },
+        });
+        const data = await workspace.list_workspace({ scope: 'unprocessed', astools });
+        expect(data.folders[0].total_bytes).toBeNull();
     });
 
     it('picks up piggybacked flags from the packages fetch (processed scope)', async () => {

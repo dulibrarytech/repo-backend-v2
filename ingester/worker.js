@@ -258,7 +258,20 @@ function create_worker(deps = {}) {
                 if (claimed.length >= cfg.concurrency) break;
                 if (!am_parallel) {
                     if (AM_ENTRY_STATES.has(state)) {
-                        if (inside_db_count > 0 || am_admitted_this_tick > 0) continue;
+                        /*
+                         * ENTRY must also respect the IN-MEMORY
+                         * dispatched set (am_in_flight), not just the
+                         * DB count (2026-07-30): a freshly admitted
+                         * row stays UPLOAD_COMPLETE in the DB until
+                         * AM's start_transfer returns — up to 30 min
+                         * under the large-media budget — and during
+                         * that window inside_db_count sees nothing,
+                         * so every tick could admit ANOTHER package
+                         * into AM. The set covers the same-process
+                         * window; the DB count covers restarts.
+                         */
+                        if (inside_db_count > 0 || am_in_flight > 0 || am_admitted_this_tick > 0)
+                            continue;
                     } else if (AM_INSIDE_STATES.has(state)) {
                         if (am_in_flight + am_admitted_this_tick > 0) continue;
                     }

@@ -158,6 +158,15 @@ function create_client(http = http_default) {
         },
 
         /*
+         * Ask the curation side to stop an in-flight background put
+         * (2026-07-30). Best-effort + idempotent — fired by the cancel
+         * flows when the row being cancelled was UPLOADING.
+         */
+        async cancel_upload(uuid) {
+            return _get(http, build_url('cancel-upload', { uuid }), 'cancel_upload');
+        },
+
+        /*
          * The worker's polling target during UPLOADING. Returns the
          * current upload count vs expected; the worker compares against
          * total_batch_file_count and advances to UPLOAD_COMPLETE when
