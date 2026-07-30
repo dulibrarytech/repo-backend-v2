@@ -267,6 +267,18 @@ function build() {
              */
             timeout_ms: integer('ARCHIVESPACE_TIMEOUT_MS', 15000),
             /*
+             * Minimum spacing between ingest-stage ArchivesSpace record
+             * fetches, process-wide (libs/aspace_session.js). ASpace
+             * can't take more than a few concurrent requests — a big
+             * batch's back-to-back per-package fetches read like an
+             * attack (2026-07-29 burst incident). One fetch per 10s
+             * mirrors the metadata-refresh worker's gentle cadence.
+             * 0 disables pacing. Does NOT affect the metadata worker
+             * (it has its own METADATA_UPDATE_TIMER cadence) or
+             * dashboard request paths.
+             */
+            fetch_min_interval_ms: integer('ASPACE_FETCH_MIN_INTERVAL_MS', 10000),
+            /*
              * Rotate the AS session token every N requests during a
              * long-running batch (e.g. the system-wide metadata
              * refresh). Mitigates AS-side per-session cache buildup

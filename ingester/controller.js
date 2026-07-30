@@ -284,6 +284,26 @@ async function rollback_pre_ingest(req, res) {
         );
     }
     const note = (req.body && req.body.note) || null;
+    const { affected, qa_outcome, qa_error } = await _rollback_pre_row(row, {
+        actor: actor_of(req),
+        note,
+    });
+    res.json({
+        id,
+        affected,
+        new_state: 'ROLLED_BACK_TO_READY',
+        qa_outcome,
+        qa_error,
+    });
+}
+
+/*
+ * Shared core of the pre-AM rollback: QA folder move + queue flip +
+ * Job History record for ONE row. Callers have already verified the
+ * row's state allows rollback_pre_ingest. Used by the single-row
+ * endpoint above and the batch endpoint below.
+ */
+async function _rollback_pre_row(row, { actor, note = null } = {}) {
     /*
      * Match upload.js's qa_uuid resolution exactly — the rollback
      * needs to target the same SFTP folder Stage 2 created. See
@@ -308,7 +328,7 @@ async function rollback_pre_ingest(req, res) {
              * folder stuck in 002-ingest.
              */
             const r = await qa_service.move_from_ingest_to_ready(qa_uuid, row.batch, row.package, {
-                actor: actor_of(req),
+                actor,
             });
             qa_outcome = { status: r.status };
             if (r.status !== 200) {
@@ -318,7 +338,7 @@ async function rollback_pre_ingest(req, res) {
             qa_error = `QA move failed: ${err.message}`;
             log.warn({
                 event: 'rollback_pre_qa_failed',
-                queue_id: id,
+                queue_id: row.id,
                 err: err.message,
             });
         }
@@ -327,9 +347,8 @@ async function rollback_pre_ingest(req, res) {
         qa_error = 'qa_service not configured';
     }
 
-    const actor = actor_of(req);
     const result = await model.update_queue(
-        { id },
+        { id: row.id },
         { status: 'ROLLED_BACK_TO_READY', is_complete: 1 },
         {
             actor,
@@ -362,13 +381,75 @@ async function rollback_pre_ingest(req, res) {
         action: 'rollback_pre_ingest',
         error_text,
     });
-    res.json({
-        id,
-        affected: result.affected,
-        new_state: 'ROLLED_BACK_TO_READY',
-        qa_outcome,
-        qa_error,
-    });
+    return { affected: result.affected, qa_outcome, qa_error };
+}
+
+/*
+ * --- POST /api/ingest/:id/rollback-batch-pre -----------------------------
+ *
+ * Batch-wide pre-AM rollback, anchored on any rolled-back-able row of
+ * the batch. Born from the 95-package overload incident (2026-07-29):
+ * a big submit burst tipped over ArchivesSpace logins and AM's SFTP
+ * connection cap, halting dozens of rows at once — recovering them
+ * one kebab click at a time doesn't scale.
+ *
+ * Semantics: every OPEN row of the anchor's batch whose state allows
+ * rollback_pre_ingest gets the exact same per-row rollback (QA folder
+ * move + flip + history). Everything else is counted and left alone:
+ *   - in-flight rows (cancellable) — staff must cancel them first;
+ *     yanking a row the worker is actively driving invites races.
+ *   - AM-side failures — those need the deliberate per-row
+ *     rollback-am (AIP deletion request) decision, never a bulk one.
+ *
+ * Rows are processed SEQUENTIALLY on purpose — the whole point is
+ * recovering from a burst; the recovery must not create another one.
+ */
+async function rollback_batch_pre(req, res) {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+        throw new ValidationError('id must be a positive integer');
+    }
+    const anchor = await model.get_queue_row({ id });
+    if (!anchor) throw new NotFoundError(`queue row ${id} not found`);
+    if (!available_actions(anchor.pipeline_state).includes('rollback_pre_ingest')) {
+        throw new ForbiddenError(
+            `rollback_batch_pre not available from state ${anchor.pipeline_state}`
+        );
+    }
+    const note = (req.body && req.body.note) || null;
+    const actor = actor_of(req);
+
+    /* Every open row of the batch — 1000 far exceeds any real batch. */
+    const rows = await model.list_queue(
+        { batch: anchor.batch, is_complete: 0 },
+        { limit: 1000, offset: 0 }
+    );
+
+    const summary = {
+        batch: anchor.batch,
+        total_open: rows.length,
+        rolled_back: 0,
+        qa_errors: 0,
+        skipped_in_flight: 0,
+        skipped_am_side: 0,
+        skipped_other: 0,
+    };
+    for (const row of rows) {
+        const actions = available_actions(row.pipeline_state);
+        if (actions.includes('rollback_pre_ingest')) {
+            const r = await _rollback_pre_row(row, { actor, note });
+            summary.rolled_back++;
+            if (r.qa_error) summary.qa_errors++;
+        } else if (actions.includes('rollback_archivematica')) {
+            summary.skipped_am_side++;
+        } else if (actions.includes('cancel')) {
+            summary.skipped_in_flight++;
+        } else {
+            summary.skipped_other++;
+        }
+    }
+    log.info({ event: 'rollback_batch_pre', ...summary, actor });
+    res.json(summary);
 }
 
 /*
@@ -747,6 +828,7 @@ module.exports = {
     get_one,
     get_timeline,
     rollback_pre_ingest,
+    rollback_batch_pre,
     rollback_archivematica,
     reset_row,
     cancel_row,

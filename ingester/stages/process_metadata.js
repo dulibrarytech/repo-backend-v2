@@ -34,6 +34,7 @@ const aspace_default = require('../../libs/archivesspace');
 const validator_default = require('../libs/aspace_validator');
 const model_default = require('../model');
 const log = require('../../libs/log');
+const { fetch_record_with_retry } = require('../../libs/aspace_session');
 
 async function run(row, deps = {}) {
     const aspace = deps.aspace || aspace_default;
@@ -60,7 +61,10 @@ async function run(row, deps = {}) {
     let metadata = null;
     let fetch_error = null;
     try {
-        metadata = await fetch_from_aspace(row.metadata_uri, aspace);
+        metadata = await fetch_from_aspace(row.metadata_uri, aspace, {
+            session: deps.session,
+            sleep: deps.sleep,
+        });
     } catch (err) {
         fetch_error = err;
         // Try the cached snapshot before halting.
@@ -131,19 +135,22 @@ async function run(row, deps = {}) {
 
 /*
  * Fetch the AS record. The shape we hand to the validator is the
- * `data` object as ASpace returned it; libs/archivesspace.js already
- * retries on 401 internally for known clients, but for the worker we
- * need explicit token management because we may be running outside
- * a metadata_worker session. We mint a session per call (cheap on
- * the AS side; the session lives 1h so the next call may even
- * re-use the underlying TCP connection).
+ * `data` object as ASpace returned it.
+ *
+ * 2026-07-29 (95-package burst incident): this used to mint a fresh
+ * ASpace session PER PACKAGE and halt the row on the first transport
+ * blip — a big batch fired dozens of rapid logins and ASpace started
+ * resetting them (ECONNRESET), halting rows that had nothing wrong
+ * with them. Now the session is shared process-wide (one login per
+ * worker lifetime, refreshed on 401) and transport failures / 5xx
+ * retry with backoff+jitter before the row is allowed to halt. See
+ * libs/aspace_session.js.
  */
-async function fetch_from_aspace(uri, aspace) {
+async function fetch_from_aspace(uri, aspace, { session, sleep } = {}) {
     if (!uri || typeof uri !== 'string') {
         throw new Error('row has no metadata_uri');
     }
-    const token = await aspace.get_session_token();
-    const res = await aspace.get_record(uri, token);
+    const res = await fetch_record_with_retry(uri, { aspace, session, sleep });
     if (res.status === 200 && res.data) return res.data;
     if (res.status === 401 || res.status === 403) {
         throw new Error(`ArchivesSpace auth failed: HTTP ${res.status}`);

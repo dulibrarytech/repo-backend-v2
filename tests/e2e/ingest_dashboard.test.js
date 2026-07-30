@@ -407,6 +407,55 @@ describe('ingest dashboard — e2e', () => {
             expect(res.text).toContain('ROLLED_BACK_TO_READY');
         });
 
+        it('rollback_batch_pre rolls back every halted row of the batch, skipping others', async () => {
+            /*
+             * Born from the 95-package overload (2026-07-29): a burst
+             * submit halted dozens of rows at once. The batch action
+             * must roll back every pre-AM-failure row of the batch,
+             * skip in-flight and AM-side rows, and leave other
+             * batches alone.
+             */
+            const a1 = await seed('INGEST_HALTED');
+            const a2 = await seed('UPLOAD_TIMEOUT'); // pre-AM failure too
+            const a3 = await seed('INGEST_HALTED');
+            const running = await seed('PROCESSING_METADATA'); // in-flight → skip
+            const am_side = await seed('FAILED'); // AM-side → skip
+            const other = await seed('INGEST_HALTED', { batch: 'batch-B' });
+
+            const cookie = await cookie_for('rb-batch');
+            const res = await supertest(app)
+                .post(`/repo/dashboard/ingest/${a1}/rollback-batch-pre`)
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            // Empty body; the UI is driven by HX-Trigger.
+            const trigger = JSON.parse(res.headers['hx-trigger']);
+            expect(trigger['queue:refresh']).toBe(true);
+            expect(trigger.toast.message).toContain('3 packages returned to Packaging');
+            expect(trigger.toast.message).toContain('2 skipped');
+
+            for (const id of [a1, a2, a3]) {
+                const row = await model.get_queue_row({ id });
+                expect(row.status).toBe('ROLLED_BACK_TO_READY');
+                expect(row.is_complete).toBe(1);
+            }
+            // Skipped rows untouched.
+            expect((await model.get_queue_row({ id: running })).status).toBe(
+                'PROCESSING_METADATA'
+            );
+            expect((await model.get_queue_row({ id: am_side })).status).toBe('FAILED');
+            // Other batch untouched.
+            expect((await model.get_queue_row({ id: other })).status).toBe('INGEST_HALTED');
+        });
+
+        it('rollback_batch_pre refuses when the anchor row is not in a rollback-able state', async () => {
+            const id = await seed('PROCESSING_METADATA');
+            const cookie = await cookie_for('rb-batch-403');
+            const res = await supertest(app)
+                .post(`/repo/dashboard/ingest/${id}/rollback-batch-pre`)
+                .set('Cookie', cookie);
+            expect(res.status).toBe(403);
+        });
+
         it('reset_row_action returns the rendered row partial', async () => {
             const id = await seed('AS_METADATA_INVALID');
             const cookie = await cookie_for('reset-html');

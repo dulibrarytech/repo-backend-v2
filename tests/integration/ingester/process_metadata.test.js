@@ -59,6 +59,38 @@ describe('ingester/stages/process_metadata', () => {
         await db_helper.teardown();
     });
 
+    it('survives a transient ASpace transport error via retry (2026-07-29 burst fix)', async () => {
+        /*
+         * First get_record throws ECONNRESET (the burst signature),
+         * the retry succeeds — the row must advance, NOT halt.
+         */
+        const row = await seed_row();
+        let calls = 0;
+        const aspace = {
+            is_configured: () => true,
+            async get_session_token() {
+                return 'tok-1';
+            },
+            async get_record() {
+                calls++;
+                if (calls === 1) {
+                    throw new Error('ArchivesSpace fetch failed: read ECONNRESET');
+                }
+                return { status: 200, data: { title: 'Recovered', uri: '/x' } };
+            },
+        };
+        const out = await stage.run(row, {
+            aspace,
+            validator: make_validator([]),
+            model,
+            sleep: async () => {},
+        });
+        expect(out.ok).toBe(true);
+        expect(calls).toBe(2);
+        const fresh = await db_queue()(tables.ingest_queue).where({ id: row.id }).first();
+        expect(fresh.pipeline_state).toBe('QA_COMPLETE');
+    });
+
     it('advances PENDING → QA_COMPLETE on validator success', async () => {
         const row = await seed_row();
         const aspace = make_aspace({

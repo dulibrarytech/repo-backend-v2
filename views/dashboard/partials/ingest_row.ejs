@@ -254,6 +254,35 @@
                             Return to Packaging
                         </a>
                     </li>
+                    <%/* Batch-wide variant — recovers ALL halted
+                         packages of this batch in one action (born
+                         from the 95-package overload incident,
+                         2026-07-29). hx-swap="none": the response is
+                         empty; the server fires queue:refresh + a
+                         summary toast. Rows still running or needing
+                         an Archivematica-side rollback are skipped
+                         and counted in the toast. */%>
+                    <li>
+                        <a href="#"
+                           class="dropdown-item"
+                           hx-post="<%= dashboard_base %>/ingest/<%= row.id %>/rollback-batch-pre"
+                           hx-swap="none"
+                           hx-indicator="closest tr"
+                           data-confirm-title="Return Entire Batch to Packaging"
+                           data-confirm-severity="warn"
+                           data-confirm-proceed="Return batch"
+                           hx-confirm="Return ALL halted packages of '<%= row.batch %>' to the Packaging and Ingesting view? Only packages that never reached Archivematica are affected — running or completed packages are skipped, and any package needing an Archivematica-side rollback keeps its own per-package action.">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                                 stroke="currentColor" stroke-width="1.75"
+                                 stroke-linecap="round" stroke-linejoin="round"
+                                 style="vertical-align: -2px; margin-right: 6px;">
+                                <polyline points="9 14 4 9 9 4"/>
+                                <polyline points="15 14 10 9 15 4"/>
+                                <path d="M20 20v-7a4 4 0 0 0-4-4H10"/>
+                            </svg>
+                            Return entire batch to Packaging
+                        </a>
+                    </li>
                 <% } %>
 
                 <% if (actions.indexOf('rollback_archivematica') !== -1) { %>

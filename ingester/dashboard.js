@@ -691,6 +691,56 @@ async function rollback_pre_ingest_action(req, res) {
     return _wrap_api_as_partial(api_controller.rollback_pre_ingest, req, res);
 }
 
+/*
+ * Batch rollback wrapper. Unlike the per-row actions this can't
+ * return a single row partial — it changes many rows — so it answers
+ * with an empty body (the kebab item uses hx-swap="none") and drives
+ * the UI through HX-Trigger: queue:refresh re-fetches the whole
+ * table, and the toast summarizes what happened. ASCII-only toast
+ * text: HX-Trigger is an HTTP header (same gotcha documented in
+ * aip_controller.js).
+ */
+async function rollback_batch_pre_action(req, res) {
+    let status_code = 200;
+    let json_body = null;
+    const mock_res = {
+        status(code) {
+            status_code = code;
+            return this;
+        },
+        json(body) {
+            json_body = body;
+            return this;
+        },
+        set() {
+            return this;
+        },
+    };
+    await api_controller.rollback_batch_pre(req, mock_res);
+    if (status_code >= 400) {
+        return res.status(status_code).json(json_body);
+    }
+    const s = json_body;
+    const skipped = s.skipped_in_flight + s.skipped_am_side + s.skipped_other;
+    let message =
+        `Batch rollback: ${s.rolled_back} package` +
+        `${s.rolled_back === 1 ? '' : 's'} returned to Packaging.`;
+    if (skipped > 0) {
+        message += ` ${skipped} skipped (still running, completed, or needs Archivematica rollback).`;
+    }
+    if (s.qa_errors > 0) {
+        message += ` ${s.qa_errors} folder move(s) reported errors - check the timelines.`;
+    }
+    res.set(
+        'HX-Trigger',
+        JSON.stringify({
+            'queue:refresh': true,
+            toast: { level: s.qa_errors > 0 ? 'warn' : 'success', message },
+        })
+    );
+    res.status(200).send('');
+}
+
 async function rollback_archivematica_action(req, res) {
     return _wrap_api_as_partial(api_controller.rollback_archivematica, req, res);
 }
@@ -1111,6 +1161,7 @@ module.exports = {
     ingest_timeline_partial,
     cancel_row_action,
     rollback_pre_ingest_action,
+    rollback_batch_pre_action,
     rollback_archivematica_action,
     reset_row_action,
     return_to_packaging_action,

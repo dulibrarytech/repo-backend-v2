@@ -39,6 +39,7 @@ const model_default = require('../model');
 const app_config = require('../../config/app');
 const log = require('../../libs/log');
 const { poll } = require('../lib/polling');
+const { fetch_record_with_retry } = require('../../libs/aspace_session');
 
 async function run(row, deps = {}) {
     const am = deps.am || am_default;
@@ -191,7 +192,12 @@ async function run(row, deps = {}) {
      * the drift check before going to DC wait.
      */
     if (row.pipeline_state === 'INGEST_COMPLETE') {
-        const drift_outcome = await check_for_drift(row, { aspace, validator });
+        const drift_outcome = await check_for_drift(row, {
+            aspace,
+            validator,
+            session: deps.session,
+            sleep: deps.sleep,
+        });
         if (!drift_outcome.ok) {
             await halt(model, row, 'AS_METADATA_DRIFT', {
                 stage: 'ingest',
@@ -355,10 +361,18 @@ async function run(row, deps = {}) {
  * it's drift". We keep that contract — extra-strict drift detection
  * (e.g. structural diff) is a future enhancement.
  */
-async function check_for_drift(row, { aspace, validator }) {
+async function check_for_drift(row, { aspace, validator, session, sleep }) {
     try {
-        const token = await aspace.get_session_token();
-        const res = await aspace.get_record(row.metadata_uri, token);
+        /*
+         * Shared session + transport retry (2026-07-29 burst
+         * hardening) — same treatment as stage 1's fetch; see
+         * libs/aspace_session.js.
+         */
+        const res = await fetch_record_with_retry(row.metadata_uri, {
+            aspace,
+            session,
+            sleep,
+        });
         if (res.status !== 200 || !res.data) {
             /*
              * We couldn't re-fetch; treat that as a non-drift halt
