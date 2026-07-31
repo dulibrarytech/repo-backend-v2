@@ -589,6 +589,23 @@ h1 {
     white-space: nowrap;
 }
 
+/*
+ * Admin > Handles.
+ *
+ * Every column here carries long secondary data — a prefixed identifier, a
+ * full target URL, a note, an actor id — with no short primary name to
+ * anchor on. At the 14px `tbody td` default the whole table reads heavier
+ * than the objects and collection tables, where only `.package-name` sits at
+ * 14px and everything supporting it drops to 12-13px. Matching that density
+ * keeps the admin tables consistent.
+ *
+ * The nested 12px detail lines (failure message, "in use by") are left as
+ * they are — they already match `.package-sub`.
+ */
+.handles-table tbody td {
+    font-size: 13px;
+}
+
 .queue-table .actions-cell {
     text-align: right;
     white-space: nowrap;
