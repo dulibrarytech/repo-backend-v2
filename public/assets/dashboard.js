@@ -660,16 +660,78 @@
      * The rail is server-rendered once (not htmx-swapped), so a one-time
      * init on load covers every link; getOrCreateInstance is idempotent.
      */
-    if (window.bootstrap && window.bootstrap.Tooltip) {
-        const nav_links = document.querySelectorAll('.app-sidebar a[title]');
-        nav_links.forEach(function (el) {
-            window.bootstrap.Tooltip.getOrCreateInstance(el, {
-                placement: 'right',
-                delay: { show: 100, hide: 50 },
-                customClass: 'sidebar-tooltip',
-            });
+    function init_tooltips(scope, selector, options) {
+        if (!window.bootstrap || !window.bootstrap.Tooltip) return;
+        (scope || document).querySelectorAll(selector).forEach(function (el) {
+            window.bootstrap.Tooltip.getOrCreateInstance(el, options);
         });
     }
+
+    function dispose_tooltips(scope, selector) {
+        if (!window.bootstrap || !window.bootstrap.Tooltip) return;
+        if (!scope || !scope.querySelectorAll) return;
+        scope.querySelectorAll(selector).forEach(function (el) {
+            const instance = window.bootstrap.Tooltip.getInstance(el);
+            if (instance) instance.dispose();
+        });
+    }
+
+    init_tooltips(document, '.app-sidebar a[title]', {
+        placement: 'right',
+        delay: { show: 100, hide: 50 },
+        customClass: 'sidebar-tooltip',
+    });
+
+    /*
+     * ---- 5b. Handle-link tooltips (Admin > Handles) ----
+     * Same prominent treatment as the rail, but this table IS htmx-swapped
+     * (mint, delete and the status filter all replace #handles-list), so a
+     * one-time init on load is not enough:
+     *
+     *   - re-init after every swap, or rows that arrive later get only the
+     *     slow native tooltip
+     *   - dispose BEFORE the swap, or a tooltip that happens to be showing
+     *     when the row is replaced is orphaned in the body with nothing to
+     *     anchor to — a bubble stranded mid-page. Clicking Delete while
+     *     hovering the handle is exactly that case.
+     */
+    const HANDLE_TOOLTIP = 'a.handle-link[title], a.handle-link[data-bs-original-title]';
+    const HANDLE_TOOLTIP_OPTS = {
+        placement: 'top',
+        delay: { show: 100, hide: 50 },
+        customClass: 'handle-tooltip',
+    };
+
+    init_tooltips(document, HANDLE_TOOLTIP, HANDLE_TOOLTIP_OPTS);
+
+    document.body.addEventListener('htmx:beforeSwap', function (evt) {
+        dispose_tooltips(evt.detail && evt.detail.target, HANDLE_TOOLTIP);
+    });
+
+    document.body.addEventListener('htmx:afterSwap', function (evt) {
+        const root = evt.detail && evt.detail.target;
+        if (root && root.querySelectorAll) {
+            init_tooltips(root, HANDLE_TOOLTIP, HANDLE_TOOLTIP_OPTS);
+        }
+    });
+
+    /*
+     * WCAG 2.1 SC 1.4.13 (Content on Hover or Focus) requires hover/focus
+     * content to be dismissible without moving the pointer or focus.
+     * Bootstrap tooltips do not handle Escape themselves, so do it here —
+     * this covers the rail as well as the handle links.
+     */
+    document.addEventListener('keydown', function (evt) {
+        if (evt.key !== 'Escape') return;
+        if (!window.bootstrap || !window.bootstrap.Tooltip) return;
+        document.querySelectorAll('.tooltip').forEach(function (bubble) {
+            const owner = document.querySelector(
+                '[aria-describedby="' + bubble.id + '"]'
+            );
+            const instance = owner && window.bootstrap.Tooltip.getInstance(owner);
+            if (instance) instance.hide();
+        });
+    });
 
     /*
      * ---- 6. Add-objects picker: persistent multi-select ----

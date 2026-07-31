@@ -58,8 +58,20 @@
     <% rows.forEach(function (row) { %>
         <tr>
             <td>
+                <%/* The cell shows the bare handle, which wraps over two
+                     lines and says nothing about where it resolves. The
+                     tooltip carries the full hdl.handle.net URL — the thing
+                     staff actually copy into a citation — plus the fact that
+                     the link opens elsewhere. Upgraded to a Bootstrap
+                     tooltip by dashboard.js; the native `title` still works
+                     with JS off. */%>
                 <% if (row.status === 'minted') { %>
-                    <a href="<%= row.resolver_url %>" target="_blank" rel="noopener noreferrer">
+                    <a href="<%= row.resolver_url %>"
+                       class="handle-link"
+                       target="_blank"
+                       rel="noopener noreferrer"
+                       data-bs-toggle="tooltip"
+                       title="<%= row.resolver_url %> — opens in a new tab">
                         <%= row.handle %>
                     </a>
                 <% } else { %>
