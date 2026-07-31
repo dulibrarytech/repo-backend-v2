@@ -184,15 +184,24 @@ async function main() {
      * attached: it proves the key file, the passphrase, the admin identity
      * and the route to port 2641 in one round trip, and writes nothing.
      */
-    process.stdout.write('Authentication (native protocol, prefix admin)\n');
+    process.stdout.write('Reachability (native protocol, port 2641)\n');
     let auth_ok = false;
     try {
         const result = await handle_writer.check();
-        auth_ok = report(Boolean(result.ok), 'authenticated as prefix administrator',
+        auth_ok = report(Boolean(result.ok),
+            'key loads, prefix resolves, handle server reachable',
             result.ok ? '' : `responseCode ${result.responseCode}: ${result.message}`);
         ok = auth_ok && ok;
     } catch (err) {
         ok = report(false, 'helper could not run', err.message) && ok;
+    }
+    if (auth_ok) {
+        process.stdout.write(
+            '        NOTE: this does not prove the credential is ACCEPTED —\n'
+            + '        the server answers not-found before authenticating, so no\n'
+            + '        read-only probe can tell a good key from a bad one. Only\n'
+            + '        --write below verifies that.\n'
+        );
     }
 
     if (!auth_ok) {
@@ -214,7 +223,10 @@ async function main() {
     process.stdout.write('Write authority\n');
     if (!do_write) {
         process.stdout.write('        skipped (pass --write to mint and delete a scratch handle)\n\n');
-        process.stdout.write(ok ? 'All checks passed.\n' : 'Some checks failed.\n');
+        process.stdout.write(ok
+            ? 'Pre-flight checks passed. Credential acceptance NOT yet verified —\n'
+              + 'run again with --write to confirm it.\n'
+            : 'Some checks failed.\n');
         return ok ? 0 : 1;
     }
 

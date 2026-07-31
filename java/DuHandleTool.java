@@ -29,9 +29,9 @@
  * passphrase arrives on stdin so it is never in argv — visible to `ps` —
  * and never written to disk.
  *
- * PROTOCOL
+ * PROTOCOL — SINGLE OPERATION
  *
- * One JSON request object on stdin, one JSON result object on stdout.
+ * One JSON object on stdin, one JSON result object on stdout.
  *
  *   in  {"op":"create","prefix":"10176","suffix":"<uuid>","url":"https://…",
  *        "index":2,"ttl":86400,"permissions":"1110",
@@ -39,19 +39,55 @@
  *        "keyPath":"/path/admpriv.bin","passphrase":"…"}
  *   out {"ok":true,"responseCode":1,"message":"SUCCESS"}
  *
- * ops: create | modify | delete   ("check" authenticates only, writes nothing)
+ * ops: create | modify | delete
  *
- * Exit status is 0 when the operation succeeded, 1 otherwise; callers
- * should read responseCode rather than relying on exit status alone.
+ * "check" is a PRE-FLIGHT ONLY — key loads, prefix resolves, server reachable.
+ * It does NOT prove the credential is accepted; see the comment on the case
+ * below for why no non-mutating probe can. Credential acceptance is verified
+ * by the create/delete round trip in scripts/verify_handle_auth.js --write.
  *
- * BUILD (target 11 — the repov2 host runs OpenJDK 11):
- *   javac --release 11 -cp "handle-client-9.3.1/lib/*" \
- *         -d java/build java/DuHandleTool.java
+ * PROTOCOL — BATCH (NDJSON)
+ *
+ * A run costs ~8s when it is one operation per process: JVM start-up plus a
+ * cold HandleResolver, which re-resolves 0.NA/<prefix> against the global
+ * registry to locate the site before it can talk to the handle server. Doing
+ * that 2,000 times for a bulk retarget would take hours, nearly all of it
+ * repeated site discovery.
+ *
+ * Batch mode pays both costs once: one JVM, one resolver with a warm site
+ * cache, one decrypted key. Input is newline-delimited JSON — a header line
+ * carrying the credentials and defaults, then one line per operation:
+ *
+ *   in   {"op":"batch","prefix":"10176","adminHandle":"0.NA/10176",
+ *         "adminIndex":300,"keyPath":"…","passphrase":"…",
+ *         "ttl":86400,"permissions":"1110"}
+ *        {"op":"modify","suffix":"<uuid>","url":"https://…","index":2}
+ *        {"op":"create","suffix":"<uuid>","url":"https://…"}
+ *        {"op":"delete","suffix":"<uuid>"}
+ *
+ *   out  {"suffix":"<uuid>","op":"modify","ok":true,"responseCode":1,…}
+ *        …one line per operation, flushed as it completes…
+ *        {"summary":true,"total":3,"succeeded":2,"failed":1}
+ *
+ * Results stream as each operation finishes, so a long run is watchable and
+ * a caller can checkpoint progress and resume. A failing operation is
+ * reported and the batch CONTINUES — one bad handle must not abandon the
+ * other 2,000.
+ *
+ * Exit status is 0 when everything succeeded, 1 otherwise; callers should
+ * read responseCode rather than relying on exit status alone.
+ *
+ * BUILD — on a dev machine, not the server (it has a JRE only):
+ *   HANDLE_CLIENT_LIB=…/handle-client-9.3.1/lib npm run build:handle-helper
  */
 
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.security.PrivateKey;
 
@@ -74,6 +110,12 @@ import net.handle.hdllib.Util;
 
 public class DuHandleTool {
 
+    private static final Gson GSON = new Gson();
+
+    private static final String UUID_PATTERN =
+        "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+        + "-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+
     public static void main(String[] args) {
         /*
          * Everything is written to stdout as JSON, including failures, so
@@ -82,21 +124,303 @@ public class DuHandleTool {
          */
         PrintStream out = new PrintStream(System.out, true, StandardCharsets.UTF_8);
         try {
-            JsonObject req = JsonParser.parseReader(
-                new InputStreamReader(System.in, StandardCharsets.UTF_8)
-            ).getAsJsonObject();
+            String input = readAll(System.in);
+            JsonObject single = tryParseObject(input);
 
-            JsonObject result = run(req);
-            out.println(new Gson().toJson(result));
-            System.exit(result.get("ok").getAsBoolean() ? 0 : 1);
+            if (single != null && !"batch".equals(str(single, "op", ""))) {
+                JsonObject result = runSingle(single);
+                out.println(GSON.toJson(result));
+                System.exit(result.get("ok").getAsBoolean() ? 0 : 1);
+            }
+
+            System.exit(runBatch(input, out));
         } catch (Throwable t) {
-            JsonObject err = new JsonObject();
-            err.addProperty("ok", false);
-            err.addProperty("responseCode", -1);
-            err.addProperty("message", String.valueOf(t.getMessage()));
-            err.addProperty("exception", t.getClass().getName());
-            out.println(new Gson().toJson(err));
+            out.println(GSON.toJson(fail(-1, String.valueOf(t.getMessage()),
+                t.getClass().getName())));
             System.exit(1);
+        }
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* single operation                                                  */
+    /* ---------------------------------------------------------------- */
+
+    private static JsonObject runSingle(JsonObject req) throws Exception {
+        String op = str(req, "op", "");
+        if (!isKnownOp(op)) return fail(-1, "Unknown op: " + op, null);
+
+        String prefix = str(req, "prefix", "");
+        String keyPath = str(req, "keyPath", "");
+        if (prefix.isEmpty() || keyPath.isEmpty()) {
+            return fail(-1, "prefix and keyPath are required", null);
+        }
+
+        /*
+         * Validate before constructing the Session, so a malformed suffix is
+         * refused without the private key ever being read or decrypted.
+         * Session.execute() checks again — batch mode has to load the key up
+         * front — but for a single operation the key should stay untouched.
+         */
+        String suffix = str(req, "suffix", "");
+        if (!"check".equals(op) && !suffix.matches(UUID_PATTERN)) {
+            return fail(-1, "Refusing to operate on malformed suffix: " + suffix, null);
+        }
+
+        Session session = new Session(req);
+        return session.execute(op, suffix, str(req, "url", ""), num(req, "index", 2));
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* batch                                                             */
+    /* ---------------------------------------------------------------- */
+
+    private static int runBatch(String input, PrintStream out) throws Exception {
+        BufferedReader reader = new BufferedReader(new StringReader(input));
+
+        String headerLine = nextMeaningfulLine(reader);
+        if (headerLine == null) {
+            out.println(GSON.toJson(fail(-1, "Batch input was empty", null)));
+            return 1;
+        }
+
+        JsonObject header = JsonParser.parseString(headerLine).getAsJsonObject();
+
+        /*
+         * The key is decrypted and the resolver constructed once here; every
+         * operation below reuses both. That reuse is the entire point of
+         * batch mode.
+         *
+         * A failure here is fatal to the whole run rather than to one entry,
+         * so mark it — otherwise a caller reading NDJSON cannot tell "the key
+         * would not load" from "one handle failed", and would report 2,000
+         * successes it never attempted.
+         */
+        Session session;
+        try {
+            session = new Session(header);
+        } catch (Exception e) {
+            JsonObject fatal = fail(-1, String.valueOf(e.getMessage()),
+                e.getClass().getName());
+            fatal.addProperty("fatal", true);
+            out.println(GSON.toJson(fatal));
+            return 1;
+        }
+
+        int total = 0;
+        int succeeded = 0;
+
+        String line;
+        while ((line = nextMeaningfulLine(reader)) != null) {
+            total++;
+            JsonObject result;
+            String suffix = "";
+            String op = "";
+            try {
+                JsonObject entry = JsonParser.parseString(line).getAsJsonObject();
+                op = str(entry, "op", "");
+                suffix = str(entry, "suffix", "");
+                result = isKnownOp(op) && !"batch".equals(op)
+                    ? session.execute(op, suffix, str(entry, "url", ""),
+                        num(entry, "index", 2))
+                    : fail(-1, "Unknown op: " + op, null);
+            } catch (Exception e) {
+                /*
+                 * One malformed or failing entry must not abandon the rest of
+                 * the batch — report it and carry on.
+                 */
+                result = fail(-1, String.valueOf(e.getMessage()),
+                    e.getClass().getName());
+            }
+
+            result.addProperty("suffix", suffix);
+            result.addProperty("op", op);
+            out.println(GSON.toJson(result));   /* autoflush: streams as it goes */
+
+            if (result.get("ok").getAsBoolean()) succeeded++;
+        }
+
+        JsonObject summary = new JsonObject();
+        summary.addProperty("summary", true);
+        summary.addProperty("total", total);
+        summary.addProperty("succeeded", succeeded);
+        summary.addProperty("failed", total - succeeded);
+        out.println(GSON.toJson(summary));
+
+        return succeeded == total ? 0 : 1;
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* session: decrypted key + auth + resolver, reused across a batch    */
+    /* ---------------------------------------------------------------- */
+
+    private static final class Session {
+        private final HandleResolver resolver = new HandleResolver();
+        private final AuthenticationInfo auth;
+        private final String prefix;
+        private final int ttl;
+        private final String permissions;
+
+        Session(JsonObject header) throws Exception {
+            prefix = str(header, "prefix", "");
+            ttl = num(header, "ttl", 86400);
+            permissions = str(header, "permissions", "1110");
+
+            String adminHandle = str(header, "adminHandle", "0.NA/" + prefix);
+            int adminIndex = num(header, "adminIndex", 300);
+            String keyPath = str(header, "keyPath", "");
+            String passphrase = str(header, "passphrase", null);
+
+            PrivateKey key = Util.getPrivateKeyFromFileWithPassphrase(
+                new File(keyPath), passphrase
+            );
+            auth = new PublicKeyAuthenticationInfo(
+                Util.encodeString(adminHandle), adminIndex, key
+            );
+        }
+
+        JsonObject execute(String op, String suffix, String url, int index)
+                throws Exception {
+            /*
+             * The suffix is re-validated here even though libs/handles.js
+             * already enforces it. This binary is executable on its own, and
+             * a malformed suffix is how 10176/0 and 10176/du-test-handle04
+             * ended up in the namespace. "check" targets no object.
+             */
+            if (!"check".equals(op) && !suffix.matches(UUID_PATTERN)) {
+                return fail(-1, "Refusing to operate on malformed suffix: "
+                    + suffix, null);
+            }
+
+            byte[] handle = Util.encodeString(prefix + "/" + suffix);
+            AbstractRequest request;
+
+            switch (op) {
+                case "check":
+                    /*
+                     * PRE-FLIGHT ONLY. This proves the key file loads and
+                     * decrypts, the prefix resolves, and the handle server is
+                     * reachable on the native protocol. It does NOT prove the
+                     * credential is accepted, and must not be reported as if
+                     * it does.
+                     *
+                     * No non-mutating probe can prove that against this
+                     * server. All three were tried and measured with a
+                     * deliberately unregistered key, and all three returned
+                     * success:
+                     *
+                     *  - resolution: the server never challenges for it
+                     *  - MODIFY on a nonexistent handle: answered
+                     *    HANDLE NOT FOUND before authenticating
+                     *  - the same with a forced session tracker: the
+                     *    not-found short-circuit still wins
+                     *
+                     * The one path that does force authentication is a MODIFY
+                     * against a handle and index that both exist (measured:
+                     * AUTHENTICATION FAILED with a bad key) — but that is a
+                     * write to a real object. So credential acceptance is
+                     * verified by the create/delete round trip in
+                     * scripts/verify_handle_auth.js --write instead.
+                     */
+                    request = new ModifyValueRequest(
+                        Util.encodeString(prefix + "/" + java.util.UUID.randomUUID()),
+                        new HandleValue(2, Util.encodeString("URL"),
+                            Util.encodeString("https://example.invalid/check")),
+                        auth
+                    );
+                    break;
+
+                case "create":
+                    request = new CreateHandleRequest(
+                        handle, new HandleValue[] { value(url, index) }, auth
+                    );
+                    break;
+
+                case "modify":
+                    request = new ModifyValueRequest(handle, value(url, index), auth);
+                    break;
+
+                case "delete":
+                    request = new DeleteHandleRequest(handle, auth);
+                    break;
+
+                default:
+                    return fail(-1, "Unknown op: " + op, null);
+            }
+
+            request.certify = true;
+            AbstractResponse response = resolver.processRequest(request);
+
+            /*
+             * For "check", HANDLE NOT FOUND is the success case — it means
+             * the server authenticated us and then found nothing to modify.
+             */
+            boolean ok = "check".equals(op)
+                ? response.responseCode == AbstractMessage.RC_HANDLE_NOT_FOUND
+                    || response.responseCode == AbstractMessage.RC_SUCCESS
+                : response.responseCode == AbstractMessage.RC_SUCCESS;
+
+            JsonObject result = new JsonObject();
+            result.addProperty("ok", ok);
+            result.addProperty("responseCode", response.responseCode);
+            result.addProperty("message", messageOf(response));
+            return result;
+        }
+
+        /*
+         * permissions is the Handle four-bit string in the order
+         * admin-read / admin-write / public-read / public-write. "1110"
+         * matches every existing 10176 handle and what the retired batch
+         * client emitted ("2 URL 86400 1110 UTF8 ...").
+         */
+        private HandleValue value(String url, int index) {
+            return new HandleValue(
+                index,
+                Util.encodeString("URL"),
+                Util.encodeString(url),
+                HandleValue.TTL_TYPE_RELATIVE,
+                ttl,
+                (int) (System.currentTimeMillis() / 1000L),
+                null,
+                permissions.charAt(0) == '1',
+                permissions.charAt(1) == '1',
+                permissions.charAt(2) == '1',
+                permissions.charAt(3) == '1'
+            );
+        }
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* helpers                                                           */
+    /* ---------------------------------------------------------------- */
+
+    private static boolean isKnownOp(String op) {
+        return "check".equals(op) || "create".equals(op)
+            || "modify".equals(op) || "delete".equals(op);
+    }
+
+    private static String nextMeaningfulLine(BufferedReader reader)
+            throws java.io.IOException {
+        String line;
+        while ((line = reader.readLine()) != null) {
+            if (!line.trim().isEmpty()) return line.trim();
+        }
+        return null;
+    }
+
+    private static String readAll(InputStream in) throws java.io.IOException {
+        ByteArrayOutputStream bout = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int r;
+        while ((r = in.read(buf)) >= 0) bout.write(buf, 0, r);
+        return new String(bout.toByteArray(), StandardCharsets.UTF_8);
+    }
+
+    /* Returns null when the input is not one complete JSON object. */
+    private static JsonObject tryParseObject(String input) {
+        try {
+            return JsonParser.parseString(input).getAsJsonObject();
+        } catch (Exception e) {
+            return null;
         }
     }
 
@@ -108,156 +432,20 @@ public class DuHandleTool {
         return o.has(k) && !o.get(k).isJsonNull() ? o.get(k).getAsInt() : fallback;
     }
 
-    private static JsonObject run(JsonObject req) throws Exception {
-        String op = str(req, "op", "");
-        String prefix = str(req, "prefix", "");
-        String suffix = str(req, "suffix", "");
-        String adminHandle = str(req, "adminHandle", "0.NA/" + prefix);
-        int adminIndex = num(req, "adminIndex", 300);
-        String keyPath = str(req, "keyPath", "");
-        String passphrase = str(req, "passphrase", null);
-
-        if (!op.equals("check") && !op.equals("create")
-                && !op.equals("modify") && !op.equals("delete")) {
-            return fail(-1, "Unknown op: " + op);
-        }
-        if (prefix.isEmpty() || keyPath.isEmpty()) {
-            return fail(-1, "prefix and keyPath are required");
-        }
-
-        /*
-         * The suffix is re-validated here even though libs/handles.js
-         * already enforces it. This binary is executable on its own, and a
-         * malformed suffix is how 10176/0 and 10176/du-test-handle04 ended
-         * up in the namespace. "check" targets the admin handle, not an
-         * object, so it carries no suffix.
-         */
-        if (!"check".equals(op)
-                && !suffix.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
-                        + "-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")) {
-            return fail(-1, "Refusing to operate on malformed suffix: " + suffix);
-        }
-
-        PrivateKey key = Util.getPrivateKeyFromFileWithPassphrase(
-            new File(keyPath), passphrase
-        );
-        AuthenticationInfo auth = new PublicKeyAuthenticationInfo(
-            Util.encodeString(adminHandle), adminIndex, key
-        );
-
-        byte[] handle = Util.encodeString(prefix + "/" + suffix);
-        HandleResolver resolver = new HandleResolver();
-
-        AbstractRequest request;
-        switch (op) {
-            case "check":
-                /*
-                 * Prove the credential without writing anything.
-                 *
-                 * Resolution would be a false positive: the server never
-                 * challenges for it, so a resolve succeeds even when the
-                 * key does not match the HS_PUBKEY on the admin handle.
-                 * Instead attempt a MODIFY against a randomly generated
-                 * suffix that cannot exist. MODIFY creates nothing, so the
-                 * only outcomes are:
-                 *
-                 *   RC_HANDLE_NOT_FOUND  -> the credential was accepted
-                 *   RC_INVALID_ADMIN /
-                 *   RC_AUTHENTICATION_*  -> the credential was rejected
-                 *
-                 * which is exactly the distinction we need.
-                 */
-                request = new ModifyValueRequest(
-                    Util.encodeString(prefix + "/" + java.util.UUID.randomUUID()),
-                    new HandleValue(2, Util.encodeString("URL"),
-                        Util.encodeString("https://example.invalid/check")),
-                    auth
-                );
-                break;
-
-            case "create":
-                request = new CreateHandleRequest(
-                    handle, new HandleValue[] { valueFrom(req) }, auth
-                );
-                break;
-
-            case "modify":
-                request = new ModifyValueRequest(handle, valueFrom(req), auth);
-                break;
-
-            case "delete":
-                request = new DeleteHandleRequest(handle, auth);
-                break;
-
-            default:
-                return fail(-1, "Unknown op: " + op);
-        }
-
-        request.certify = true;
-        AbstractResponse response = resolver.processRequest(request);
-
-        /*
-         * For "check", HANDLE NOT FOUND is the success case — it means the
-         * server authenticated us and then found nothing to modify. Only
-         * an auth-class response code counts as failure.
-         */
-        boolean ok;
-        if (op.equals("check")) {
-            ok = response.responseCode == AbstractMessage.RC_HANDLE_NOT_FOUND
-                || response.responseCode == AbstractMessage.RC_SUCCESS;
-        } else {
-            ok = response.responseCode == AbstractMessage.RC_SUCCESS;
-        }
-
-        JsonObject result = new JsonObject();
-        result.addProperty("ok", ok);
-        result.addProperty("responseCode", response.responseCode);
-        result.addProperty("message", messageOf(response));
-        return result;
-    }
-
-    /*
-     * permissions is the Handle four-bit string in the order
-     * admin-read / admin-write / public-read / public-write. "1110"
-     * matches every existing 10176 handle and what the retired batch
-     * client emitted ("2 URL 86400 1110 UTF8 ...").
-     */
-    private static HandleValue valueFrom(JsonObject req) {
-        String url = str(req, "url", "");
-        int index = num(req, "index", 2);
-        int ttl = num(req, "ttl", 86400);
-        String perms = str(req, "permissions", "1110");
-
-        return new HandleValue(
-            index,
-            Util.encodeString("URL"),
-            Util.encodeString(url),
-            HandleValue.TTL_TYPE_RELATIVE,
-            ttl,
-            (int) (System.currentTimeMillis() / 1000L),
-            null,
-            perms.charAt(0) == '1',
-            perms.charAt(1) == '1',
-            perms.charAt(2) == '1',
-            perms.charAt(3) == '1'
-        );
-    }
-
     private static String messageOf(AbstractResponse response) {
         if (response instanceof ErrorResponse) {
             byte[] m = ((ErrorResponse) response).message;
-            if (m != null && m.length > 0) {
-                return Util.decodeString(m);
-            }
+            if (m != null && m.length > 0) return Util.decodeString(m);
         }
         return AbstractMessage.getResponseCodeMessage(response.responseCode);
     }
 
-    private static JsonObject fail(int code, String message) {
+    private static JsonObject fail(int code, String message, String exception) {
         JsonObject o = new JsonObject();
         o.addProperty("ok", false);
         o.addProperty("responseCode", code);
         o.addProperty("message", message);
+        if (exception != null) o.addProperty("exception", exception);
         return o;
     }
 }
