@@ -14,9 +14,7 @@
 <p class="page-subtitle">
     Mint persistent identifiers under the <code><%= handle_prefix %></code>
     prefix for pages that are not repository records &mdash; exhibits,
-    finding aids, guides. Handles minted here are recorded locally; the
-    handle server itself cannot be listed, so this table is the only record
-    of them.
+    finding aids, guides.
 </p>
 
 <% if (!configured) { %>
@@ -38,8 +36,8 @@
           style="padding: 16px;">
 
         <p style="font-size: 13px; color: var(--text-muted, #6c757d); margin-top: 0;">
-            Up to <%= max_per_submission %> at a time. The identifier itself is
-            generated automatically &mdash; you supply only where it should
+            Add up to <%= max_per_submission %> at a time. The identifier itself
+            is generated automatically &mdash; supply only where it should
             point. Allowed hosts:
             <% allowed_hosts.forEach(function (h, i) { %><code><%= h %></code><%= i < allowed_hosts.length - 1 ? ', ' : '' %><% }); %>
             (and their subdomains), over https.
