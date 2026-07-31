@@ -65,5 +65,8 @@ docs/*
 # Ignore files containing '.orig' in the name
 *.orig*
 
-# Compiled Handle write helper (build with: npm run build:handle-helper)
+# Handle write helper: intermediate classes are ignored, but the built jar is
+# COMMITTED — the repov2 server has a JRE only (no javac), so the artifact has
+# to travel with the checkout. Rebuild with: npm run build:handle-helper
 java/build/
+!java/duhandletool.jar
