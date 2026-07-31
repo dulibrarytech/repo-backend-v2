@@ -1,20 +1,29 @@
 'use strict';
 
 /*
- * Handle.net client — talks to the handle server's HTTP JSON API directly.
+ * Handle.net client.
  *
  * Supersedes the standalone Python handles-service (digitaldu-backend-handles)
  * that ran on libsftp01 and shelled out to `hdl-genericbatch`. That service
  * had two criticals (shell injection via an unvalidated uuid, and batch-file
  * injection carrying full 10176 prefix authority) and reported HTTP 201 on
- * failure, so callers could not tell a real mint from a failed one. Removing
- * the hop deletes all of that rather than sanitizing around it:
+ * failure, so callers could not tell a real mint from a failed one.
  *
- *   - no subprocess, so no shell or batch-file injection surface
- *   - no admin passphrase written to disk per operation
- *   - no cross-host cleartext hop with the API key in a query string
- *   - the handle server's actual error reaches the ingest worker, which is
- *     what decides between retry and INGEST_HALTED
+ * TRANSPORT IS SPLIT, because the handle server offers no authentication
+ * over HTTP (see libs/handle_writer.js for the measurements):
+ *
+ *   reads  — resolution is public; straight from Node over the HTTP JSON API
+ *   writes — the native protocol on 2641, via the DuHandleTool Java helper
+ *
+ * What removing the old service bought, and what the split preserves:
+ *
+ *   - no batch-file text assembly, so no injection surface: the helper takes
+ *     typed library arguments, and the uuid is validated at both boundaries
+ *   - no admin passphrase written to disk — it travels on the helper's stdin,
+ *     never in argv
+ *   - no cross-host cleartext hop with an API key in a query string
+ *   - the handle server's actual response code reaches the ingest worker,
+ *     which is what decides between retry and INGEST_HALTED
  *
  * Public contract is unchanged so call sites do not move:
  * `is_configured()`, `build_handle_url()`, `create_handle()` and
@@ -26,7 +35,7 @@
 const http_default = require('axios');
 const app_config = require('../config/app');
 const log = require('./log');
-const handle_auth_default = require('./handle_auth');
+const writer_default = require('./handle_writer');
 const { UpstreamError } = require('./errors');
 
 /*
@@ -38,15 +47,21 @@ const URL_PERMISSIONS = '1110';
 const URL_INDEX = 2;
 
 /*
- * Existing handles under this prefix carry a single value — index 2, type
- * URL — and no per-handle HS_ADMIN; they are administered implicitly by
- * the prefix admin. Reproduce that exactly so new handles stay consistent
- * with the ~2,000 already minted.
+ * Handles minted by the retired Python service carry a single value —
+ * index 2, type URL — and no per-handle HS_ADMIN; they are administered
+ * implicitly by the prefix admin. New mints reproduce that shape.
+ *
+ * Older handles do NOT match it. Ones dating from 2019 (predating that
+ * service) carry the URL at index 1 plus an HS_ADMIN at index 100, e.g.
+ * 10176/844478c8-c87b-44b6-8eb7-24488c15769c. Anything that MODIFIES an
+ * existing handle must therefore discover the URL value's real index
+ * rather than assume 2 — writing to 2 on one of those adds a second,
+ * conflicting URL value instead of re-pointing the existing one.
  */
-function url_value(uuid) {
+function url_value(uuid, index = URL_INDEX) {
     const cfg = app_config().handles;
     return {
-        index: URL_INDEX,
+        index,
         type: 'URL',
         data: { format: 'string', value: `${cfg.target}${uuid}` },
         ttl: cfg.ttl,
@@ -58,9 +73,10 @@ function is_configured() {
     const cfg = app_config().handles;
     return Boolean(
         cfg
-        && cfg.admin_url
+        && cfg.admin_url          /* reads */
         && cfg.admin_id
         && cfg.admin_key_path
+        && cfg.helper_classpath   /* writes, via the Java helper */
         && cfg.target
         && cfg.prefix
         && cfg.server
@@ -101,42 +117,64 @@ function assert_valid_uuid(uuid) {
     }
 }
 
-function create_client(http = http_default, handle_auth = handle_auth_default) {
+function create_client(http = http_default, writer = writer_default) {
     /*
-     * Sessions expire server-side and we cannot see when. Rather than
-     * track a TTL, treat one 401/403 as "session died" — drop it and
-     * retry once with a fresh handshake. A second rejection is a real
-     * credential problem and propagates.
+     * Resolve a handle. Unauthenticated — resolution is public — so this
+     * deliberately skips the session handshake. Returns null when the
+     * handle does not exist, which is what a reconciliation sweep needs
+     * in order to tell a real handle from a phantom.
      */
-    async function authed_request(method, path, body, extra_params = {}) {
+    async function resolve(uuid) {
+        assert_valid_uuid(uuid);
         const cfg = app_config().handles;
+        const handle = qualified_handle(uuid);
+        const base = cfg.admin_url.endsWith('/')
+            ? cfg.admin_url.slice(0, -1)
+            : cfg.admin_url;
 
-        async function attempt() {
-            const authorization = await handle_auth.authorization(http);
-            const base = cfg.admin_url.endsWith('/')
-                ? cfg.admin_url.slice(0, -1)
-                : cfg.admin_url;
-            return http.request({
-                method,
-                url: `${base}${path}`,
-                data: body,
-                params: extra_params,
+        let res;
+        try {
+            res = await http.get(`${base}/api/handles/${handle}`, {
                 timeout: cfg.timeout_ms,
                 validateStatus: () => true,
-                headers: {
-                    Authorization: authorization,
-                    'Content-Type': 'application/json',
-                },
             });
+        } catch (err) {
+            throw new UpstreamError(`Handle resolve failed: ${err.message}`);
         }
 
-        let res = await attempt();
-        if (res.status === 401 || res.status === 403) {
-            log.info({ event: 'handle_session_expired_retrying', status: res.status });
-            handle_auth.reset_session();
-            res = await attempt();
+        if (res.status === 404 || (res.data && res.data.responseCode === 100)) {
+            return null;
         }
-        return res;
+        if (res.status !== 200) {
+            throw new UpstreamError(
+                `Handle resolve returned ${res.status} for ${handle}`
+            );
+        }
+        return res.data;
+    }
+
+    /*
+     * Which index holds this handle's URL value. Returns null when the
+     * handle does not exist. See url_value(): the corpus is not uniform,
+     * so this must be read per handle rather than assumed.
+     */
+    async function url_value_index(uuid) {
+        const found = await resolve(uuid);
+        if (!found) return null;
+
+        const urls = (found.values || []).filter((v) => v.type === 'URL');
+        if (urls.length === 0) {
+            /* handle exists but has no URL value — add one at the default */
+            return URL_INDEX;
+        }
+        if (urls.length > 1) {
+            log.warn({
+                event: 'handle_multiple_url_values',
+                uuid,
+                indexes: urls.map((v) => v.index),
+            });
+        }
+        return urls[0].index;
     }
 
     return {
@@ -155,14 +193,13 @@ function create_client(http = http_default, handle_auth = handle_auth_default) {
             assert_valid_uuid(uuid);
             const handle = qualified_handle(uuid);
 
+            const value = url_value(uuid);
             let res;
             try {
-                res = await authed_request(
-                    'put',
-                    `/api/handles/${handle}`,
-                    { values: [url_value(uuid)] },
-                    { overwrite: false },
-                );
+                res = await writer.write('create', uuid, {
+                    index: value.index,
+                    url: value.data.value,
+                });
             } catch (err) {
                 log.warn({ event: 'handle_create_failed', uuid, err: err.message });
                 throw new UpstreamError(`Handle create failed: ${err.message}`);
@@ -197,21 +234,28 @@ function create_client(http = http_default, handle_auth = handle_auth_default) {
          * the domain retarget (specialcollections -> digitalarchives) and
          * available to staff tooling for repointing a single object.
          *
-         * Unlike create this overwrites, but scoped to index 2 — any other
-         * values on the handle are left alone.
+         * Unlike create this overwrites, but scoped to the index that
+         * actually holds the URL — discovered per handle, because the
+         * corpus is not uniform (see url_value). Other values on the
+         * handle, including any HS_ADMIN, are left alone.
          */
         async update_handle(uuid) {
             assert_valid_uuid(uuid);
             const handle = qualified_handle(uuid);
 
+            const index = await url_value_index(uuid);
+            if (index === null) {
+                log.warn({ event: 'handle_update_not_found', uuid, handle });
+                return { status: 404, handle: null };
+            }
+
+            const value = url_value(uuid, index);
             let res;
             try {
-                res = await authed_request(
-                    'put',
-                    `/api/handles/${handle}`,
-                    { values: [url_value(uuid)] },
-                    { index: URL_INDEX },
-                );
+                res = await writer.write('modify', uuid, {
+                    index,
+                    url: value.data.value,
+                });
             } catch (err) {
                 log.warn({ event: 'handle_update_failed', uuid, err: err.message });
                 throw new UpstreamError(`Handle update failed: ${err.message}`);
@@ -231,40 +275,8 @@ function create_client(http = http_default, handle_auth = handle_auth_default) {
             return { status: res.status, handle: null };
         },
 
-        /*
-         * Resolve a handle. Unauthenticated — resolution is public — so this
-         * deliberately skips the session handshake. Returns null when the
-         * handle does not exist, which is what a reconciliation sweep needs
-         * in order to tell a real handle from a phantom.
-         */
-        async get_handle(uuid) {
-            assert_valid_uuid(uuid);
-            const cfg = app_config().handles;
-            const handle = qualified_handle(uuid);
-            const base = cfg.admin_url.endsWith('/')
-                ? cfg.admin_url.slice(0, -1)
-                : cfg.admin_url;
-
-            let res;
-            try {
-                res = await http.get(`${base}/api/handles/${handle}`, {
-                    timeout: cfg.timeout_ms,
-                    validateStatus: () => true,
-                });
-            } catch (err) {
-                throw new UpstreamError(`Handle resolve failed: ${err.message}`);
-            }
-
-            if (res.status === 404 || (res.data && res.data.responseCode === 100)) {
-                return null;
-            }
-            if (res.status !== 200) {
-                throw new UpstreamError(
-                    `Handle resolve returned ${res.status} for ${handle}`
-                );
-            }
-            return res.data;
-        },
+        get_handle: resolve,
+        url_value_index,
 
         /*
          * Remove a handle. Present because the retired service exposed it,
@@ -279,7 +291,7 @@ function create_client(http = http_default, handle_auth = handle_auth_default) {
 
             let res;
             try {
-                res = await authed_request('delete', `/api/handles/${handle}`);
+                res = await writer.write('delete', uuid);
             } catch (err) {
                 log.warn({ event: 'handle_delete_failed', uuid, err: err.message });
                 throw new UpstreamError(`Handle delete failed: ${err.message}`);

@@ -619,13 +619,20 @@ function build() {
          * that used to sit in between is retired — see
          * repo/HANDLES_SERVICE_REMEDIATION_PLAN.md.
          *
-         * `admin_url` is the handle server's admin-capable HTTP interface
-         * (its HS_SITE record advertises admin=true on port 8000).
+         * READS go over HTTP from Node; WRITES go through the DuHandleTool
+         * Java helper on the native protocol, because the handle server
+         * exposes no authentication mechanism over HTTP. See
+         * libs/handle_writer.js.
+         *
+         * `admin_url` is the handle server's HTTP interface — used for
+         * resolution only (origin only, no path).
          * `admin_id` is the prefix administrator, index and handle, in the
          * form "300:0.NA/10176".
-         * `admin_key_path` is a PKCS#8 PEM produced once from admpriv.bin
-         * via `hdl-convert-key`; keep it encrypted and supply the same
-         * passphrase as `admin_passphrase`.
+         * `admin_key_path` is the Handle-format private key (admpriv.bin);
+         * the Java helper reads it directly, so no conversion is needed.
+         * `admin_passphrase` decrypts it.
+         * `java_bin` / `helper_classpath` locate the helper — the classpath
+         * must include java/build plus the handle client's lib/*.
          * `target` is what handles resolve TO — changing it affects future
          * mints and updates only, never existing handles retroactively.
          * `server` + `prefix` form the public handle URL stored in the DB
@@ -638,6 +645,8 @@ function build() {
             admin_id: optional('HANDLE_ADMIN_ID', ''),
             admin_key_path: optional('HANDLE_ADMIN_KEY_PATH', ''),
             admin_passphrase: optional('HANDLE_ADMIN_PASSPHRASE', ''),
+            java_bin: optional('HANDLE_JAVA_BIN', 'java'),
+            helper_classpath: optional('HANDLE_HELPER_CLASSPATH', ''),
             target: optional('HANDLE_TARGET', ''),
             prefix: optional('HANDLE_PREFIX', ''),
             server: optional('HANDLE_SERVER', ''),

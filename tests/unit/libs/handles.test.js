@@ -1,11 +1,13 @@
 'use strict';
 
 /*
- * libs/handles now speaks the Handle HTTP JSON API directly rather than
- * proxying through the retired Python handles-service, so these exercise
- * the wire shape the handle server actually expects: PUT /api/handles/
- * <prefix>/<uuid> with a single index-2 URL value, overwrite=false on
- * create, and session re-auth on a 401.
+ * libs/handles replaced the retired Python handles-service. Transport is
+ * split: reads resolve over HTTP from Node, writes go through the
+ * DuHandleTool Java helper on the native protocol (the handle server
+ * offers no auth over HTTP). These fake both boundaries — `http` for
+ * resolution, `writer` for the helper — so the branching logic, the uuid
+ * guard and the per-handle URL-index discovery are all exercised without
+ * a JVM or a network.
  */
 
 const handles_module = require('../../../libs/handles');
@@ -16,9 +18,9 @@ const UUID = '2d569507-de89-41eb-9bb6-6be0d12b5eb8';
 const HANDLE_URL = `https://hdl.example.com/20.500.12345/${UUID}`;
 
 function make_fake_http() {
-    const calls = { request: [], get: [], post: [] };
+    const calls = { get: [] };
     let queue = [];
-    let next = { status: 201, data: '' };
+    let next = { status: 200, data: { responseCode: 1, values: [] } };
 
     function take() {
         const r = queue.length ? queue.shift() : next;
@@ -29,29 +31,46 @@ function make_fake_http() {
     return {
         calls,
         set_response(r) { next = r; queue = []; },
-        /* consumed in order, for multi-call flows like 401-then-retry */
         set_responses(list) { queue = [...list]; },
-        async request(opts) { calls.request.push(opts); return take(); },
         async get(url, opts) { calls.get.push({ url, opts }); return take(); },
-        async post(url, body, opts) { calls.post.push({ url, body, opts }); return take(); },
     };
 }
 
-function make_fake_auth() {
-    const state = { resets: 0, authorizations: 0 };
+function make_fake_writer() {
+    const calls = [];
+    let next = { status: 200, data: { responseCode: 1 } };
     return {
-        state,
-        async authorization() {
-            state.authorizations += 1;
-            return 'Handle version="0", sessionId="test-session"';
+        calls,
+        set_result(r) { next = r; },
+        async write(op, uuid, opts) {
+            calls.push({ op, uuid, opts });
+            if (next.throw) throw next.throw;
+            return next;
         },
-        reset_session() { state.resets += 1; },
     };
 }
 
-function client_with(http, auth = make_fake_auth()) {
-    return handles_module.create_client(http, auth);
+function client_with(http, writer = make_fake_writer()) {
+    return handles_module.create_client(http, writer);
 }
+
+function resolved(values) {
+    return { status: 200, data: { responseCode: 1, values } };
+}
+
+/*
+ * The corpus is not uniform. Handles minted by the retired Python service
+ * hold the URL at index 2 with no HS_ADMIN; 2019-era handles hold it at
+ * index 1 alongside an HS_ADMIN at 100. Writing to a fixed index 2 would
+ * add a second, conflicting URL value to the latter.
+ */
+const URL_AT_2 = [
+    { index: 2, type: 'URL', data: { format: 'string', value: 'https://old/x' } },
+];
+const URL_AT_1_WITH_ADMIN = [
+    { index: 100, type: 'HS_ADMIN', data: { format: 'admin', value: {} } },
+    { index: 1, type: 'URL', data: { format: 'string', value: 'https://old/x' } },
+];
 
 describe('libs/handles', () => {
     let original_env;
@@ -59,8 +78,10 @@ describe('libs/handles', () => {
         original_env = { ...process.env };
         process.env.HANDLE_ADMIN_URL = 'http://handle.example.edu:8000';
         process.env.HANDLE_ADMIN_ID = '300:0.NA/20.500.12345';
-        process.env.HANDLE_ADMIN_KEY_PATH = '/etc/repov2/handle_admin.pem';
+        process.env.HANDLE_ADMIN_KEY_PATH = '/etc/repov2/admpriv.bin';
         process.env.HANDLE_ADMIN_PASSPHRASE = 'secret';
+        process.env.HANDLE_HELPER_CLASSPATH = '/opt/repov2/java/build:/opt/handle/lib/*';
+        process.env.HANDLE_JAVA_BIN = 'java';
         process.env.HANDLE_TARGET = 'https://example.edu/object/';
         process.env.HANDLE_PREFIX = '20.500.12345';
         process.env.HANDLE_SERVER = 'https://hdl.example.com/';
@@ -74,7 +95,7 @@ describe('libs/handles', () => {
     });
 
     describe('is_configured', () => {
-        it('returns true when the admin credentials and target are set', () => {
+        it('returns true when read and write credentials are both present', () => {
             expect(handles_module.is_configured()).toBe(true);
         });
 
@@ -82,6 +103,7 @@ describe('libs/handles', () => {
             'HANDLE_ADMIN_URL',
             'HANDLE_ADMIN_ID',
             'HANDLE_ADMIN_KEY_PATH',
+            'HANDLE_HELPER_CLASSPATH',
             'HANDLE_TARGET',
             'HANDLE_PREFIX',
             'HANDLE_SERVER',
@@ -91,7 +113,7 @@ describe('libs/handles', () => {
             expect(handles_module.is_configured()).toBe(false);
         });
 
-        it('does not require a passphrase (an unencrypted PEM is valid)', () => {
+        it('does not require a passphrase (an unencrypted key is valid)', () => {
             delete process.env.HANDLE_ADMIN_PASSPHRASE;
             app_config._reset();
             expect(handles_module.is_configured()).toBe(true);
@@ -136,38 +158,27 @@ describe('libs/handles', () => {
             ['a path traversal', '../../../etc/passwd'],
             ['an empty string', ''],
             ['a non-string', 42],
-        ])('rejects %s without issuing a request', async (_label, bad) => {
+        ])('rejects %s without invoking the writer', async (_label, bad) => {
             const http = make_fake_http();
-            const client = client_with(http);
+            const writer = make_fake_writer();
+            const client = handles_module.create_client(http, writer);
             await expect(client.create_handle(bad)).rejects.toBeInstanceOf(UpstreamError);
-            expect(http.calls.request).toHaveLength(0);
+            expect(writer.calls).toHaveLength(0);
         });
     });
 
     describe('create_handle', () => {
-        it('PUTs a single index-2 URL value with overwrite=false', async () => {
+        it('asks the writer to create at index 2 with the configured target', async () => {
             const http = make_fake_http();
-            http.set_response({ status: 201, data: { responseCode: 1 } });
-            const res = await client_with(http).create_handle(UUID);
+            const writer = make_fake_writer();
+            const res = await handles_module.create_client(http, writer).create_handle(UUID);
 
             expect(res).toEqual({ status: 201, handle: HANDLE_URL });
-
-            const call = http.calls.request[0];
-            expect(call.method).toBe('put');
-            expect(call.url).toBe(
-                `http://handle.example.edu:8000/api/handles/20.500.12345/${UUID}`
-            );
-            expect(call.params).toEqual({ overwrite: false });
-            expect(call.timeout).toBe(5000);
-            expect(call.headers.Authorization).toContain('sessionId="test-session"');
-            expect(call.data).toEqual({
-                values: [{
-                    index: 2,
-                    type: 'URL',
-                    data: { format: 'string', value: `https://example.edu/object/${UUID}` },
-                    ttl: 86400,
-                    permissions: '1110',
-                }],
+            expect(writer.calls).toHaveLength(1);
+            expect(writer.calls[0]).toEqual({
+                op: 'create',
+                uuid: UUID,
+                opts: { index: 2, url: `https://example.edu/object/${UUID}` },
             });
         });
 
@@ -176,103 +187,102 @@ describe('libs/handles', () => {
          * proceed. Failing an otherwise-good ingest because a previous run
          * already minted the handle would be wrong.
          */
-        it('treats HTTP 409 as success and returns the handle URL', async () => {
+        it('treats "already exists" as success and returns the handle URL', async () => {
             const http = make_fake_http();
-            http.set_response({ status: 409, data: { responseCode: 101 } });
-            const res = await client_with(http).create_handle(UUID);
+            const writer = make_fake_writer();
+            writer.set_result({ status: 409, data: { responseCode: 101 } });
+            const res = await handles_module.create_client(http, writer).create_handle(UUID);
             expect(res).toEqual({ status: 201, handle: HANDLE_URL });
         });
 
-        it('treats responseCode 101 as success even on another status', async () => {
+        it('returns { handle: null } on an unexpected response code', async () => {
             const http = make_fake_http();
-            http.set_response({ status: 500, data: { responseCode: 101 } });
-            const res = await client_with(http).create_handle(UUID);
-            expect(res).toEqual({ status: 201, handle: HANDLE_URL });
+            const writer = make_fake_writer();
+            writer.set_result({ status: 502, data: { responseCode: 402 } });
+            const res = await handles_module.create_client(http, writer).create_handle(UUID);
+            expect(res).toEqual({ status: 502, handle: null });
         });
 
-        it('returns { handle: null } on an unexpected status', async () => {
+        it('throws UpstreamError when the helper cannot run', async () => {
             const http = make_fake_http();
-            http.set_response({ status: 500, data: { responseCode: 2 } });
-            const res = await client_with(http).create_handle(UUID);
-            expect(res).toEqual({ status: 500, handle: null });
-        });
-
-        it('throws UpstreamError on transport failure', async () => {
-            const http = make_fake_http();
-            http.set_response({ throw: new Error('ECONNRESET') });
-            await expect(client_with(http).create_handle(UUID))
+            const writer = make_fake_writer();
+            writer.set_result({ throw: new UpstreamError('Cannot run handle helper') });
+            await expect(handles_module.create_client(http, writer).create_handle(UUID))
                 .rejects.toBeInstanceOf(UpstreamError);
-        });
-
-        it('re-authenticates once and retries after a 401', async () => {
-            const http = make_fake_http();
-            const auth = make_fake_auth();
-            http.set_responses([
-                { status: 401, data: '' },
-                { status: 201, data: { responseCode: 1 } },
-            ]);
-            const res = await handles_module.create_client(http, auth).create_handle(UUID);
-
-            expect(res).toEqual({ status: 201, handle: HANDLE_URL });
-            expect(auth.state.resets).toBe(1);
-            expect(http.calls.request).toHaveLength(2);
-        });
-
-        it('gives up after a second rejection rather than looping', async () => {
-            const http = make_fake_http();
-            const auth = make_fake_auth();
-            http.set_responses([
-                { status: 403, data: '' },
-                { status: 403, data: '' },
-            ]);
-            const res = await handles_module.create_client(http, auth).create_handle(UUID);
-
-            expect(res).toEqual({ status: 403, handle: null });
-            expect(auth.state.resets).toBe(1);
-            expect(http.calls.request).toHaveLength(2);
         });
     });
 
     describe('update_handle', () => {
-        it('PUTs scoped to index 2 so other values on the handle survive', async () => {
+        it('updates index 2 for a service-minted handle', async () => {
             const http = make_fake_http();
-            http.set_response({ status: 200, data: { responseCode: 1 } });
-            const res = await client_with(http).update_handle(UUID);
+            const writer = make_fake_writer();
+            http.set_response(resolved(URL_AT_2));
+            const res = await handles_module.create_client(http, writer).update_handle(UUID);
 
             expect(res).toEqual({ status: 201, handle: HANDLE_URL });
-            const call = http.calls.request[0];
-            expect(call.method).toBe('put');
-            expect(call.params).toEqual({ index: 2 });
+            expect(writer.calls[0].op).toBe('modify');
+            expect(writer.calls[0].opts.index).toBe(2);
+        });
+
+        it('updates index 1 for a 2019-era handle rather than adding a second URL', async () => {
+            const http = make_fake_http();
+            const writer = make_fake_writer();
+            http.set_response(resolved(URL_AT_1_WITH_ADMIN));
+            const res = await handles_module.create_client(http, writer).update_handle(UUID);
+
+            expect(res).toEqual({ status: 201, handle: HANDLE_URL });
+            expect(writer.calls[0].opts.index).toBe(1);
+        });
+
+        it('adds a URL at the default index when the handle has none', async () => {
+            const http = make_fake_http();
+            const writer = make_fake_writer();
+            http.set_response(resolved([{ index: 100, type: 'HS_ADMIN', data: {} }]));
+            await handles_module.create_client(http, writer).update_handle(UUID);
+            expect(writer.calls[0].opts.index).toBe(2);
+        });
+
+        it('does not attempt a write when the handle does not exist', async () => {
+            const http = make_fake_http();
+            const writer = make_fake_writer();
+            http.set_response({ status: 404, data: { responseCode: 100 } });
+            const res = await handles_module.create_client(http, writer).update_handle(UUID);
+
+            expect(res).toEqual({ status: 404, handle: null });
+            expect(writer.calls).toHaveLength(0);
         });
 
         it('re-points at the current HANDLE_TARGET', async () => {
             process.env.HANDLE_TARGET = 'https://digitalarchives.example.edu/object/';
             app_config._reset();
             const http = make_fake_http();
-            http.set_response({ status: 200, data: { responseCode: 1 } });
-            await client_with(http).update_handle(UUID);
+            const writer = make_fake_writer();
+            http.set_response(resolved(URL_AT_2));
+            await handles_module.create_client(http, writer).update_handle(UUID);
 
-            expect(http.calls.request[0].data.values[0].data.value)
+            expect(writer.calls[0].opts.url)
                 .toBe(`https://digitalarchives.example.edu/object/${UUID}`);
         });
 
-        it('returns { handle: null } on an unexpected status', async () => {
+        it('returns { handle: null } on an unexpected write result', async () => {
             const http = make_fake_http();
-            http.set_response({ status: 404, data: { responseCode: 100 } });
-            const res = await client_with(http).update_handle(UUID);
+            const writer = make_fake_writer();
+            http.set_response(resolved(URL_AT_2));
+            writer.set_result({ status: 502, data: { responseCode: 2 } });
+            const res = await handles_module.create_client(http, writer).update_handle(UUID);
             expect(res.handle).toBeNull();
         });
     });
 
     describe('get_handle', () => {
-        it('resolves without authenticating — resolution is public', async () => {
+        it('resolves over HTTP without invoking the writer', async () => {
             const http = make_fake_http();
-            const auth = make_fake_auth();
-            http.set_response({ status: 200, data: { responseCode: 1, values: [] } });
-            const out = await handles_module.create_client(http, auth).get_handle(UUID);
+            const writer = make_fake_writer();
+            http.set_response(resolved([]));
+            const out = await handles_module.create_client(http, writer).get_handle(UUID);
 
             expect(out).toEqual({ responseCode: 1, values: [] });
-            expect(auth.state.authorizations).toBe(0);
+            expect(writer.calls).toHaveLength(0);
             expect(http.calls.get[0].url).toBe(
                 `http://handle.example.edu:8000/api/handles/20.500.12345/${UUID}`
             );
@@ -292,19 +302,35 @@ describe('libs/handles', () => {
         });
     });
 
-    describe('delete_handle', () => {
-        it('reports deletion on 200', async () => {
+    describe('url_value_index', () => {
+        it('reports the index actually holding the URL', async () => {
             const http = make_fake_http();
-            http.set_response({ status: 200, data: { responseCode: 1 } });
-            expect(await client_with(http).delete_handle(UUID))
-                .toEqual({ status: 200, deleted: true });
+            http.set_response(resolved(URL_AT_1_WITH_ADMIN));
+            expect(await client_with(http).url_value_index(UUID)).toBe(1);
+        });
+
+        it('returns null for a handle that does not exist', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 404, data: { responseCode: 100 } });
+            expect(await client_with(http).url_value_index(UUID)).toBeNull();
+        });
+    });
+
+    describe('delete_handle', () => {
+        it('reports deletion on success', async () => {
+            const http = make_fake_http();
+            const writer = make_fake_writer();
+            const out = await handles_module.create_client(http, writer).delete_handle(UUID);
+            expect(out).toEqual({ status: 200, deleted: true });
+            expect(writer.calls[0].op).toBe('delete');
         });
 
         it('reports not-found rather than throwing', async () => {
             const http = make_fake_http();
-            http.set_response({ status: 404, data: { responseCode: 100 } });
-            expect(await client_with(http).delete_handle(UUID))
-                .toEqual({ status: 404, deleted: false });
+            const writer = make_fake_writer();
+            writer.set_result({ status: 404, data: { responseCode: 100 } });
+            const out = await handles_module.create_client(http, writer).delete_handle(UUID);
+            expect(out).toEqual({ status: 404, deleted: false });
         });
     });
 });

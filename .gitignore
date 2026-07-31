@@ -64,3 +64,6 @@ docs/*
 
 # Ignore files containing '.orig' in the name
 *.orig*
+
+# Compiled Handle write helper (build with: npm run build:handle-helper)
+java/build/

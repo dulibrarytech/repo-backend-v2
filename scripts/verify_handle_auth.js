@@ -2,14 +2,14 @@
 'use strict';
 
 /*
- * Verify the Handle.net admin credentials and the HS_PUBKEY session
- * handshake, without touching any real object's handle.
+ * Verify the Handle.net admin credentials end to end, without touching any
+ * real object's handle.
  *
- * libs/handle_auth implements the handshake from the Handle 9 technical
- * manual, but the signature step cannot be exercised from a unit test —
- * it needs the real private key and the real server. Run this once after
- * converting admpriv.bin, and again on the production host before the
- * first ingest that mints a handle.
+ * Writes go through the DuHandleTool Java helper on the native protocol
+ * (libs/handle_writer.js), which no unit test can exercise — it needs a
+ * JVM, the real private key and the real server. Run this after building
+ * the helper, and again on the production host before the first ingest
+ * that mints a handle.
  *
  * Usage:
  *   node scripts/verify_handle_auth.js                 # read + auth only
@@ -45,7 +45,7 @@ async function main() {
 
     const app_config = require('../config/app');
     const handles = require('../libs/handles');
-    const handle_auth = require('../libs/handle_auth');
+    const handle_writer = require('../libs/handle_writer');
 
     const cfg = app_config().handles;
     let ok = true;
@@ -60,7 +60,7 @@ async function main() {
     process.stdout.write(`        key        ${cfg.admin_key_path || '(unset)'}\n`);
     process.stdout.write(`        target     ${cfg.target || '(unset)'}\n`);
     process.stdout.write(
-        `        passphrase ${cfg.admin_passphrase ? '(set)' : '(none — PEM must be unencrypted)'}\n\n`
+        `        passphrase ${cfg.admin_passphrase ? '(set)' : '(none — key must be unencrypted)'}\n\n`
     );
     if (!handles.is_configured()) {
         process.stdout.write('Stopping: configuration incomplete.\n');
@@ -68,30 +68,43 @@ async function main() {
     }
 
     /*
-     * --- 2. private key ------------------------------------------------
-     *
-     * A missing or undecryptable key is NOT fatal here. Everything up to
-     * the handshake — config, network path, prefix, resolution — is worth
-     * confirming on its own, and while the admin passphrase is being
-     * recovered that is the only part testable at all.
+     * Shape checks. These three mistakes are easy to make when adapting an
+     * old .env (the retired service's endpoint carried a /api/v1/handles
+     * path) or when copying .env-example without swapping the placeholder
+     * prefix. Each produces a confusing downstream error — a path on
+     * admin_url makes the server parse "api/sessions" as a handle name —
+     * so name them here instead.
      */
-    let key_ok = false;
-    process.stdout.write('Private key\n');
-    try {
-        const key = handle_auth.load_private_key();
-        const alg = handle_auth.signature_algorithm(key);
-        key_ok = report(true, `loaded and decrypted (${key.asymmetricKeyType.toUpperCase()})`,
-            `signing with ${alg.node}`);
-    } catch (err) {
-        ok = report(false, 'could not load key', err.message) && ok;
-        process.stdout.write(
-            '\n        Convert Handle\'s binary key format to PKCS#8 PEM:\n'
-            + '        hdl-convert-key -crypt admpriv.bin -format pem -o handle_admin.pem\n'
-            + '        The passphrase is HANDLE_PASSPHRASE in the retired Python\n'
-            + '        service\'s .env on libsftp01. Continuing with read-only checks.\n'
-        );
+    if (/\/api(\/|$)/.test(cfg.admin_url)) {
+        ok = report(false, 'HANDLE_ADMIN_URL must be an origin only, with no path',
+            `got "${cfg.admin_url}" — drop everything after the port`) && ok;
     }
-    process.stdout.write('\n');
+
+    const admin_id_match = /^(\d+):0\.NA\/(.+)$/.exec(cfg.admin_id);
+    if (!admin_id_match) {
+        ok = report(false, 'HANDLE_ADMIN_ID should look like "<index>:0.NA/<prefix>"',
+            `got "${cfg.admin_id}"`) && ok;
+    } else if (admin_id_match[2] !== cfg.prefix) {
+        ok = report(false, 'HANDLE_ADMIN_ID prefix does not match HANDLE_PREFIX',
+            `admin_id names "${admin_id_match[2]}", HANDLE_PREFIX is "${cfg.prefix}"`) && ok;
+    }
+
+    if (!ok) {
+        process.stdout.write('\nStopping: fix the configuration above first.\n');
+        return 1;
+    }
+
+    /*
+     * --- 2. the Java helper --------------------------------------------
+     *
+     * Writes go through DuHandleTool on the native protocol, because the
+     * handle server serves no authentication over HTTP. Confirm the helper
+     * is present and runnable before anything else — a missing classpath
+     * or JVM is by far the most likely setup mistake.
+     */
+    process.stdout.write('Write helper (DuHandleTool)\n');
+    process.stdout.write(`        java       ${cfg.java_bin}\n`);
+    process.stdout.write(`        classpath  ${cfg.helper_classpath || '(unset)'}\n\n`);
 
     /* --- 3. public resolution (no auth) -------------------------------- */
     process.stdout.write('Resolution (public read, no auth)\n');
@@ -113,31 +126,35 @@ async function main() {
     }
     process.stdout.write('\n');
 
-    /* --- 4. the handshake --------------------------------------------- */
-    process.stdout.write('Authentication (HS_PUBKEY session handshake)\n');
-    if (!key_ok) {
-        process.stdout.write('        blocked — no usable private key (see above)\n\n');
+    /*
+     * --- 4. authentication ---------------------------------------------
+     *
+     * The helper's "check" op resolves the admin handle with credentials
+     * attached: it proves the key file, the passphrase, the admin identity
+     * and the route to port 2641 in one round trip, and writes nothing.
+     */
+    process.stdout.write('Authentication (native protocol, prefix admin)\n');
+    let auth_ok = false;
+    try {
+        const result = await handle_writer.check();
+        auth_ok = report(Boolean(result.ok), 'authenticated as prefix administrator',
+            result.ok ? '' : `responseCode ${result.responseCode}: ${result.message}`);
+        ok = auth_ok && ok;
+    } catch (err) {
+        ok = report(false, 'helper could not run', err.message) && ok;
+    }
+
+    if (!auth_ok) {
+        process.stdout.write(
+            '\n        Check, in order: HANDLE_HELPER_CLASSPATH includes java/build and\n'
+            + '        the handle client lib/*; the key at HANDLE_ADMIN_KEY_PATH is\n'
+            + '        Handle binary format (admpriv.bin, NOT the PEM) and the\n'
+            + '        passphrase decrypts it; HANDLE_ADMIN_ID names the index and\n'
+            + '        handle holding the HS_PUBKEY (typically 300:0.NA/<prefix>);\n'
+            + '        TCP 2641 on the handle server is reachable from this host.\n\n'
+        );
         process.stdout.write('Write authority\n');
         process.stdout.write('        blocked — requires authentication\n\n');
-        process.stdout.write(
-            'Read-only checks complete. Authentication cannot be verified until the\n'
-            + 'admin key is recoverable or replaced.\n'
-        );
-        return 1;
-    }
-    try {
-        handle_auth.reset_session();
-        const session_id = await handle_auth.authenticate();
-        report(true, 'authenticated as prefix administrator',
-            `sessionId ${String(session_id).slice(0, 12)}…`);
-    } catch (err) {
-        ok = report(false, 'handshake rejected', err.message) && ok;
-        process.stdout.write(
-            '\n        Check, in order: the passphrase decrypts the key; HANDLE_ADMIN_ID\n'
-            + '        matches the index and handle holding the HS_PUBKEY (typically\n'
-            + '        300:0.NA/<prefix>); the admin_url host is reachable and its\n'
-            + '        HS_SITE record advertises admin=true for that port.\n'
-        );
         return 1;
     }
     process.stdout.write('\n');

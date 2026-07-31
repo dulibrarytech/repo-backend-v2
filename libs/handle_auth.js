@@ -3,6 +3,23 @@
 /*
  * Handle.net HTTP JSON API authentication (HS_PUBKEY session handshake).
  *
+ * ---------------------------------------------------------------------
+ * NOT CURRENTLY WIRED IN. Retained deliberately.
+ *
+ * The DU handle server does not serve the session endpoints — /api/sessions
+ * and /api/sessions/this both return a bare 403 — so this handshake has
+ * nowhere to go, and writes run through libs/handle_writer.js on the native
+ * protocol instead. If the handle administrator enables those endpoints,
+ * this module is the replacement for handle_writer: point
+ * libs/handles.js `create_client()` back at it and the Java helper can be
+ * dropped. Working the handshake out cost real effort; deleting it would
+ * mean paying that twice.
+ *
+ * Note it expects a PKCS#8 PEM (converted from admpriv.bin with
+ * hdl-convert-key), whereas the Java helper reads Handle's binary format
+ * directly. Only the HTTP path needs the conversion.
+ * ---------------------------------------------------------------------
+ *
  * Replaces the out-of-process `hdl-genericbatch` invocation that the
  * retired Python handles-service used. The DU site record for prefix
  * 10176 advertises an admin-capable HTTP interface on port 8000, so

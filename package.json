@@ -31,7 +31,8 @@
     "migrate:rollback:repo": "knex migrate:rollback --knexfile knexfile.js --env repo",
     "migrate:rollback:queue": "knex migrate:rollback --knexfile knexfile.js --env repo_queue",
     "migrate:make:repo": "knex migrate:make --knexfile knexfile.js --env repo",
-    "migrate:make:queue": "knex migrate:make --knexfile knexfile.js --env repo_queue"
+    "migrate:make:queue": "knex migrate:make --knexfile knexfile.js --env repo_queue",
+    "build:handle-helper": "sh java/build.sh"
   },
   "dependencies": {
     "@elastic/elasticsearch": "^8.15.0",
