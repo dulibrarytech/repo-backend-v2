@@ -6,7 +6,32 @@
  * fails at boot rather than at first request.
  */
 
+const path = require('node:path');
+
 const pkg = require('../package.json');
+
+/*
+ * Classpath for the DuHandleTool write helper (libs/handle_writer.js).
+ *
+ * Derived rather than configured. The jar ships inside the checkout, so its
+ * location is known relative to this file and follows the deploy wherever it
+ * lands — only the handle client's lib/ directory varies per host, and that
+ * is the same HANDLE_CLIENT_LIB the build script already takes. Absolute
+ * classpaths in .env were an easy thing to get wrong and a silent runtime
+ * failure when they were.
+ *
+ * HANDLE_HELPER_CLASSPATH still wins if set, for layouts this does not fit.
+ */
+function handle_helper_classpath() {
+    const override = process.env.HANDLE_HELPER_CLASSPATH;
+    if (override) return override;
+
+    const client_lib = process.env.HANDLE_CLIENT_LIB;
+    if (!client_lib) return '';
+
+    const jar = path.join(__dirname, '..', 'java', 'duhandletool.jar');
+    return `${jar}${path.delimiter}${path.join(client_lib, '*')}`;
+}
 
 function required(name) {
     const v = process.env[name];
@@ -631,8 +656,11 @@ function build() {
          * `admin_key_path` is the Handle-format private key (admpriv.bin);
          * the Java helper reads it directly, so no conversion is needed.
          * `admin_passphrase` decrypts it.
-         * `java_bin` / `helper_classpath` locate the helper — the classpath
-         * must include java/build plus the handle client's lib/*.
+         * `client_lib` is the handle client's lib/ directory — the only
+         * host-specific part of the helper's classpath, and the same var
+         * java/build.sh takes. `helper_classpath` is derived from it plus
+         * the jar's in-checkout location; set HANDLE_HELPER_CLASSPATH only
+         * to override that derivation.
          * `target` is what handles resolve TO — changing it affects future
          * mints and updates only, never existing handles retroactively.
          * `server` + `prefix` form the public handle URL stored in the DB
@@ -646,7 +674,8 @@ function build() {
             admin_key_path: optional('HANDLE_ADMIN_KEY_PATH', ''),
             admin_passphrase: optional('HANDLE_ADMIN_PASSPHRASE', ''),
             java_bin: optional('HANDLE_JAVA_BIN', 'java'),
-            helper_classpath: optional('HANDLE_HELPER_CLASSPATH', ''),
+            client_lib: optional('HANDLE_CLIENT_LIB', ''),
+            helper_classpath: handle_helper_classpath(),
             target: optional('HANDLE_TARGET', ''),
             prefix: optional('HANDLE_PREFIX', ''),
             server: optional('HANDLE_SERVER', ''),

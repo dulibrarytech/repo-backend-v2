@@ -80,7 +80,8 @@ describe('libs/handles', () => {
         process.env.HANDLE_ADMIN_ID = '300:0.NA/20.500.12345';
         process.env.HANDLE_ADMIN_KEY_PATH = '/etc/repov2/admpriv.bin';
         process.env.HANDLE_ADMIN_PASSPHRASE = 'secret';
-        process.env.HANDLE_HELPER_CLASSPATH = '/opt/repov2/java/build:/opt/handle/lib/*';
+        process.env.HANDLE_CLIENT_LIB = '/opt/handle-client/lib';
+        delete process.env.HANDLE_HELPER_CLASSPATH;
         process.env.HANDLE_JAVA_BIN = 'java';
         process.env.HANDLE_TARGET = 'https://example.edu/object/';
         process.env.HANDLE_PREFIX = '20.500.12345';
@@ -103,7 +104,7 @@ describe('libs/handles', () => {
             'HANDLE_ADMIN_URL',
             'HANDLE_ADMIN_ID',
             'HANDLE_ADMIN_KEY_PATH',
-            'HANDLE_HELPER_CLASSPATH',
+            'HANDLE_CLIENT_LIB',
             'HANDLE_TARGET',
             'HANDLE_PREFIX',
             'HANDLE_SERVER',

@@ -27,6 +27,8 @@
  */
 
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const PASS = '  PASS';
 const FAIL = '  FAIL';
@@ -54,16 +56,53 @@ async function main() {
 
     /* --- 1. configuration --------------------------------------------- */
     process.stdout.write('Configuration\n');
-    ok = report(handles.is_configured(), 'required HANDLE_* vars present') && ok;
     process.stdout.write(`        admin_url  ${cfg.admin_url || '(unset)'}\n`);
     process.stdout.write(`        admin_id   ${cfg.admin_id || '(unset)'}\n`);
     process.stdout.write(`        key        ${cfg.admin_key_path || '(unset)'}\n`);
     process.stdout.write(`        target     ${cfg.target || '(unset)'}\n`);
+    process.stdout.write(`        prefix     ${cfg.prefix || '(unset)'}\n`);
+    process.stdout.write(`        server     ${cfg.server || '(unset)'}\n`);
+    process.stdout.write(`        client lib ${cfg.client_lib || '(unset)'}\n`);
+    process.stdout.write(`        classpath  ${cfg.helper_classpath || '(empty)'}\n`);
     process.stdout.write(
         `        passphrase ${cfg.admin_passphrase ? '(set)' : '(none — key must be unencrypted)'}\n\n`
     );
-    if (!handles.is_configured()) {
-        process.stdout.write('Stopping: configuration incomplete.\n');
+
+    /*
+     * Name the missing variables individually. Reporting only that the set
+     * is "incomplete" is useless when every value above looks populated —
+     * the one that fails is often a derived field with no line of its own.
+     */
+    const missing = [
+        ['HANDLE_ADMIN_URL', cfg.admin_url],
+        ['HANDLE_ADMIN_ID', cfg.admin_id],
+        ['HANDLE_ADMIN_KEY_PATH', cfg.admin_key_path],
+        ['HANDLE_CLIENT_LIB (or HANDLE_HELPER_CLASSPATH)', cfg.helper_classpath],
+        ['HANDLE_TARGET', cfg.target],
+        ['HANDLE_PREFIX', cfg.prefix],
+        ['HANDLE_SERVER', cfg.server],
+    ].filter(([, value]) => !value).map(([name]) => name);
+
+    ok = report(missing.length === 0, 'required HANDLE_* vars present',
+        missing.length ? `missing: ${missing.join(', ')}` : '') && ok;
+
+    /*
+     * A set HANDLE_CLIENT_LIB that yields no classpath means this checkout's
+     * config/app.js predates the derived-classpath change and is still
+     * looking for HANDLE_HELPER_CLASSPATH. Deploying .env and code out of
+     * step is easy to do; say so rather than leaving it to be puzzled out.
+     */
+    if (process.env.HANDLE_CLIENT_LIB && !cfg.helper_classpath) {
+        process.stdout.write(
+            '\n        HANDLE_CLIENT_LIB is set but no classpath was derived from it.\n'
+            + '        This copy of config/app.js is out of date — re-deploy the code,\n'
+            + '        or set HANDLE_HELPER_CLASSPATH explicitly as a stopgap:\n'
+            + `          <repov2>/java/duhandletool.jar:${process.env.HANDLE_CLIENT_LIB}/*\n`
+        );
+    }
+
+    if (missing.length) {
+        process.stdout.write('\nStopping: configuration incomplete.\n');
         return 1;
     }
 
@@ -104,7 +143,19 @@ async function main() {
      */
     process.stdout.write('Write helper (DuHandleTool)\n');
     process.stdout.write(`        java       ${cfg.java_bin}\n`);
-    process.stdout.write(`        classpath  ${cfg.helper_classpath || '(unset)'}\n\n`);
+
+    /*
+     * Check the classpath entries exist before spawning. A missing jar or
+     * lib directory otherwise surfaces as an opaque NoClassDefFoundError
+     * from the JVM.
+     */
+    for (const entry of cfg.helper_classpath.split(path.delimiter)) {
+        const target = entry.endsWith(`${path.sep}*`) ? path.dirname(entry) : entry;
+        if (!fs.existsSync(target)) {
+            ok = report(false, 'classpath entry does not exist', target) && ok;
+        }
+    }
+    process.stdout.write('\n');
 
     /* --- 3. public resolution (no auth) -------------------------------- */
     process.stdout.write('Resolution (public read, no auth)\n');
