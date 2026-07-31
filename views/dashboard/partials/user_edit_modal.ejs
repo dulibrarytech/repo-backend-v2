@@ -79,7 +79,7 @@
             <label class="form-label small mb-1" for="edit-role">
                 Role <span class="required-badge">required</span>
             </label>
-            <% var sel = (form && form.role) || user.role || 'staff'; %>
+            <% const sel = (form && form.role) || user.role || 'staff'; %>
             <select id="edit-role" name="role" class="form-select form-select-sm" required>
                 <option value="viewer"<%= sel === 'viewer' ? ' selected' : '' %>>viewer — read-only</option>
                 <option value="staff"<%= sel === 'staff' ? ' selected' : '' %>>staff — curate &amp; ingest</option>

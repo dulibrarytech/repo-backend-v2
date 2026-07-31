@@ -107,8 +107,8 @@
         </div>
         <nav class="page-controls" aria-label="Pagination">
             <%
-                var prev = Math.max(1, page - 1);
-                var next = page * page_size < total ? page + 1 : page;
+                const prev = Math.max(1, page - 1);
+                const next = page * page_size < total ? page + 1 : page;
                 /* IMPORTANT: only `page` + `page_size` go in the URL.
                    The filter params (q, is_published, collection,
                    is_active) flow in via the parent #objects-table
@@ -120,8 +120,8 @@
                    Same hazard the aips_table.ejs pagination already
                    guards against. Be careful when editing either
                    file. */
-                var qs = function (p) {
-                    var u = new URLSearchParams();
+                const qs = function (p) {
+                    const u = new URLSearchParams();
                     u.set('page', String(p));
                     u.set('page_size', String(page_size));
                     return u.toString();

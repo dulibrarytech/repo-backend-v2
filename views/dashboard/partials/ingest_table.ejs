@@ -56,10 +56,10 @@
             <% if (has_more) { %>(more available)<% } %>
         </div>
         <%
-            var prev_offset = Math.max(0, offset - limit);
-            var next_offset = offset + limit;
-            var qs = function (off) {
-                var u = new URLSearchParams();
+            const prev_offset = Math.max(0, offset - limit);
+            const next_offset = offset + limit;
+            const qs = function (off) {
+                const u = new URLSearchParams();
                 u.set('limit', String(limit));
                 u.set('offset', String(off));
                 if (filters.status) u.set('status', filters.status);

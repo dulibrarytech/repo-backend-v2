@@ -43,22 +43,34 @@
             (and their subdomains), over https.
         </p>
 
+        <%/* ONE row is rendered server-side; dashboard.js clones it on
+             "Add another handle", up to max_per_submission.
+
+             Progressive enhancement: the Add and Remove controls start
+             `hidden` and are revealed by that script, so with JS off the
+             operator gets a working single-handle form rather than buttons
+             that do nothing.
+
+             Labels, ids and the Remove control's accessible name are all
+             (re)assigned by renumber() in the script, so they stay correct
+             as rows are added and removed. */%>
         <table class="queue-table" style="margin-bottom: 12px;">
+            <caption class="visually-hidden">Handles to mint</caption>
             <thead>
                 <tr>
-                    <th style="width: 60%;">Target URL</th>
+                    <th style="width: 55%;">Target URL</th>
                     <th>Note (optional)</th>
+                    <th style="width: 1%;"><span class="visually-hidden">Actions</span></th>
                 </tr>
             </thead>
-            <tbody>
-            <% for (var i = 0; i < max_per_submission; i++) { %>
-                <tr>
+            <tbody id="handle-rows" data-max="<%= max_per_submission %>">
+                <tr class="handle-row">
                     <td>
-                        <label for="target-<%= i %>" class="visually-hidden">
-                            Target URL <%= i + 1 %>
+                        <label data-for="target" for="target-1" class="visually-hidden">
+                            Target URL 1
                         </label>
                         <input type="url"
-                               id="target-<%= i %>"
+                               id="target-1"
                                name="target_url"
                                class="form-control form-control-sm"
                                placeholder="https://…"
@@ -66,11 +78,11 @@
                                <%= configured ? '' : 'disabled' %>>
                     </td>
                     <td>
-                        <label for="note-<%= i %>" class="visually-hidden">
-                            Note <%= i + 1 %>
+                        <label data-for="note" for="note-1" class="visually-hidden">
+                            Note 1
                         </label>
                         <input type="text"
-                               id="note-<%= i %>"
+                               id="note-1"
                                name="note"
                                class="form-control form-control-sm"
                                placeholder="What is this for?"
@@ -78,19 +90,42 @@
                                autocomplete="off"
                                <%= configured ? '' : 'disabled' %>>
                     </td>
+                    <td>
+                        <button type="button"
+                                class="btn btn-sm btn-outline-secondary handle-row-remove"
+                                aria-label="Remove handle 1"
+                                hidden>
+                            Remove
+                        </button>
+                    </td>
                 </tr>
-            <% } %>
             </tbody>
         </table>
 
-        <button type="submit"
-                class="btn btn-primary btn-sm"
+        <button type="button"
+                id="handle-add-row"
+                class="btn btn-sm btn-outline-secondary"
+                style="margin-bottom: 12px;"
+                hidden
                 <%= configured ? '' : 'disabled' %>>
-            Mint handles
+            + Add another handle
         </button>
-        <span class="htmx-indicator">
-            <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Minting"></span>
-        </span>
+
+        <%/* Row add/remove is a visual change a screen reader would
+             otherwise miss entirely — announce it, along with how many
+             more are allowed. */%>
+        <p id="handle-rows-status" class="visually-hidden" role="status" aria-live="polite"></p>
+
+        <div>
+            <button type="submit"
+                    class="btn btn-primary btn-sm"
+                    <%= configured ? '' : 'disabled' %>>
+                Mint handles
+            </button>
+            <span class="htmx-indicator">
+                <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Minting"></span>
+            </span>
+        </div>
         <p style="font-size: 12px; color: var(--text-muted, #6c757d); margin: 10px 0 0;">
             Minting contacts the handle server and takes a few seconds.
         </p>

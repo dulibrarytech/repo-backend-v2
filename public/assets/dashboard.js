@@ -67,8 +67,8 @@
      * can opt in with data-busy-message="...".
      */
     document.body.addEventListener('htmx:beforeRequest', function (evt) {
-        var src = evt.detail && evt.detail.elt;
-        var msg = src && src.getAttribute && src.getAttribute('data-busy-message');
+        const src = evt.detail && evt.detail.elt;
+        const msg = src && src.getAttribute && src.getAttribute('data-busy-message');
         if (msg) show_toast({ level: 'info', message: msg });
     });
 
@@ -782,5 +782,138 @@
         });
 
         render();
+    })();
+
+    /*
+     * ---- Admin > Handles: repeatable mint rows ----
+     *
+     * The page renders ONE row; this grows it to at most data-max. Rows are
+     * cloned client-side rather than fetched, so adding one is instant.
+     *
+     * Accessibility is most of the work here:
+     *   - focus moves to the new row's URL field on add, and to the previous
+     *     row on remove — otherwise a keyboard user has no idea the DOM
+     *     changed and has to hunt for where they are
+     *   - every add/remove is announced through a polite live region,
+     *     including how many more are allowed
+     *   - renumber() reassigns ids, label `for`, label text and each Remove
+     *     button's accessible name after ANY change, so "Remove handle 3"
+     *     always names the row it will actually remove
+     *   - Remove is hidden when only one row is left: there is nothing to
+     *     remove, and a dead control is worse than no control
+     */
+    (function handle_mint_rows() {
+        const tbody = document.getElementById('handle-rows');
+        if (!tbody) return;
+
+        const add_btn = document.getElementById('handle-add-row');
+        const status = document.getElementById('handle-rows-status');
+        const max = parseInt(tbody.dataset.max, 10) || 5;
+
+        function rows() {
+            return Array.prototype.slice.call(tbody.querySelectorAll('.handle-row'));
+        }
+
+        function announce(message) {
+            if (status) status.textContent = message;
+        }
+
+        function renumber() {
+            const list = rows();
+            list.forEach(function (row, i) {
+                const n = i + 1;
+                const url = row.querySelector('input[name="target_url"]');
+                const note = row.querySelector('input[name="note"]');
+                const url_label = row.querySelector('label[data-for="target"]');
+                const note_label = row.querySelector('label[data-for="note"]');
+                const remove = row.querySelector('.handle-row-remove');
+
+                url.id = 'target-' + n;
+                note.id = 'note-' + n;
+                url_label.setAttribute('for', url.id);
+                url_label.textContent = 'Target URL ' + n;
+                note_label.setAttribute('for', note.id);
+                note_label.textContent = 'Note ' + n;
+
+                if (remove) {
+                    remove.hidden = list.length === 1;
+                    remove.setAttribute('aria-label', 'Remove handle ' + n);
+                }
+            });
+
+            if (add_btn) {
+                /* Revealed here, not in the markup, so no-JS gets no dead button. */
+                add_btn.hidden = false;
+                add_btn.disabled = list.length >= max;
+            }
+        }
+
+        if (add_btn) {
+            add_btn.addEventListener('click', function () {
+                const list = rows();
+                if (list.length >= max) return;
+
+                const clone = list[0].cloneNode(true);
+                clone.querySelectorAll('input').forEach(function (input) {
+                    input.value = '';
+                });
+                tbody.appendChild(clone);
+                renumber();
+
+                const count = rows().length;
+                clone.querySelector('input[name="target_url"]').focus();
+                announce(
+                    count >= max
+                        ? 'Handle ' + count + ' added. Maximum of ' + max + ' reached.'
+                        : 'Handle ' + count + ' added. ' + (max - count) + ' more can be added.'
+                );
+            });
+        }
+
+        tbody.addEventListener('click', function (evt) {
+            const btn = evt.target.closest && evt.target.closest('.handle-row-remove');
+            if (!btn) return;
+
+            const list = rows();
+            if (list.length <= 1) return;
+
+            const row = btn.closest('.handle-row');
+            const removed_at = list.indexOf(row);
+            row.remove();
+            renumber();
+
+            const remaining = rows();
+            /* Land on the row above the one that vanished. */
+            const focus_row = remaining[Math.max(0, removed_at - 1)];
+            focus_row.querySelector('input[name="target_url"]').focus();
+            announce(
+                'Handle ' + (removed_at + 1) + ' removed. '
+                + remaining.length + ' remaining.'
+            );
+        });
+
+        /*
+         * Emitted by the mint POST via HX-Trigger, but ONLY when every handle
+         * succeeded. Clearing on a partial failure would throw away the URLs
+         * the operator still needs to correct; leaving values after a full
+         * success invites a second click that mints a duplicate.
+         *
+         * Focus is deliberately left on the Mint button — the operator's
+         * attention belongs on the toast and the refreshed list, not back in
+         * an empty field.
+         */
+        document.body.addEventListener('handles-reset', function () {
+            rows().slice(1).forEach(function (row) { row.remove(); });
+            const first = rows()[0];
+            if (first) {
+                first.querySelectorAll('input').forEach(function (input) {
+                    input.value = '';
+                });
+            }
+            renumber();
+            announce('Form cleared.');
+        });
+
+        renumber();
     })();
 })();

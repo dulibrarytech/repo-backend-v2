@@ -149,20 +149,20 @@
         // Layout constants. viewBox is logical units; the SVG scales
         // to fit its container via CSS. Picked to give comfortable
         // spacing at common card widths (~800-1200px).
-        var W = 720;
-        var H = 280;
-        var PADDING_TOP = 30;       // room for value labels above bars
-        var PADDING_BOTTOM = 30;    // room for year labels below bars
-        var PADDING_LEFT = 48;      // room for y-axis labels
-        var PADDING_RIGHT = 16;
-        var plot_w = W - PADDING_LEFT - PADDING_RIGHT;
-        var plot_h = H - PADDING_TOP - PADDING_BOTTOM;
+        const W = 720;
+        const H = 280;
+        const PADDING_TOP = 30;       // room for value labels above bars
+        const PADDING_BOTTOM = 30;    // room for year labels below bars
+        const PADDING_LEFT = 48;      // room for y-axis labels
+        const PADDING_RIGHT = 16;
+        const plot_w = W - PADDING_LEFT - PADDING_RIGHT;
+        const plot_h = H - PADDING_TOP - PADDING_BOTTOM;
 
         // Year buckets — already padded to a contiguous range by the
         // model. If everything's zero, still render the empty chart
         // so the layout doesn't collapse.
-        var years = per_year.length > 0 ? per_year : [{year: new Date().getFullYear(), count: 0}];
-        var max_value = years.reduce(function(m, y) { return Math.max(m, y.count); }, 0);
+        const years = per_year.length > 0 ? per_year : [{year: new Date().getFullYear(), count: 0}];
+        const max_value = years.reduce(function(m, y) { return Math.max(m, y.count); }, 0);
 
         // Round up to a nice number for the y-axis ceiling.
         // 0       → ceiling 10 (avoid div-by-zero downstream)
@@ -177,27 +177,27 @@
             if (n <= 10000) return Math.ceil(n / 500) * 500;
             return Math.ceil(n / 1000) * 1000;
         }
-        var nice_max = nice(max_value);
+        const nice_max = nice(max_value);
 
-        var bar_slot = plot_w / years.length;       // width per year column
-        var bar_width = Math.min(48, bar_slot * 0.6); // bar is centered in its slot
+        const bar_slot = plot_w / years.length;       // width per year column
+        const bar_width = Math.min(48, bar_slot * 0.6); // bar is centered in its slot
 
-        var gridline_count = 4;
+        const gridline_count = 4;
     %>
 
     <%
         // SR description summarizing the chart's data — combined with
         // aria-label this gives both a short name AND a longer
         // narrative summary that some screen readers prefer to read.
-        var _chart_total = 0;
-        var _chart_max = { year: null, count: 0 };
-        for (var _i = 0; _i < years.length; _i++) {
+        let _chart_total = 0;
+        let _chart_max = { year: null, count: 0 };
+        for (let _i = 0; _i < years.length; _i++) {
             _chart_total += years[_i].count;
             if (years[_i].count > _chart_max.count) {
                 _chart_max = years[_i];
             }
         }
-        var _chart_desc = 'Ingests per year, ' + years[0].year + ' to ' +
+        const _chart_desc = 'Ingests per year, ' + years[0].year + ' to ' +
             years[years.length - 1].year + '. ' +
             _chart_total.toLocaleString() + ' total ingests' +
             (_chart_max.year !== null
@@ -219,9 +219,9 @@
         <desc id="ingests-chart-desc"><%= _chart_desc %></desc>
 
         <%/* Y-axis gridlines + labels */%>
-        <% for (var g = 0; g <= gridline_count; g++) {
-               var grid_value = Math.round(nice_max * (1 - g / gridline_count));
-               var grid_y = PADDING_TOP + (plot_h * g / gridline_count); %>
+        <% for (let g = 0; g <= gridline_count; g++) {
+               const grid_value = Math.round(nice_max * (1 - g / gridline_count));
+               const grid_y = PADDING_TOP + (plot_h * g / gridline_count); %>
             <line x1="<%= PADDING_LEFT %>"
                   x2="<%= W - PADDING_RIGHT %>"
                   y1="<%= grid_y %>"
@@ -239,10 +239,10 @@
 
         <%/* Bars + per-bar value labels + year labels */%>
         <% years.forEach(function(y, idx) {
-               var slot_x = PADDING_LEFT + bar_slot * idx;
-               var bar_x = slot_x + (bar_slot - bar_width) / 2;
-               var bar_h = nice_max === 0 ? 0 : (plot_h * y.count) / nice_max;
-               var bar_y = PADDING_TOP + plot_h - bar_h; %>
+               const slot_x = PADDING_LEFT + bar_slot * idx;
+               const bar_x = slot_x + (bar_slot - bar_width) / 2;
+               const bar_h = nice_max === 0 ? 0 : (plot_h * y.count) / nice_max;
+               const bar_y = PADDING_TOP + plot_h - bar_h; %>
             <%/* Bar — v1's brick-red for brand continuity. */%>
             <rect x="<%= bar_x %>"
                   y="<%= bar_y %>"

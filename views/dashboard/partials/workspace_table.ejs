@@ -12,10 +12,10 @@
     //
     //   actions[]: subset of
     //     ['make_digital_objects', 'check_metadata', 'submit_ingest', 'revert_to_mdo']
-    var actions = locals.actions || [];
-    var view = locals.view || 'make-digital-objects';
-    var has_actions = actions.length > 0;
-    var col_count = has_actions ? 5 : 4;
+    const actions = locals.actions || [];
+    let view = locals.view || 'make-digital-objects';
+    const has_actions = actions.length > 0;
+    const col_count = has_actions ? 5 : 4;
 
     /*
      * Batch size display (folder.total_bytes from the curation scan).
@@ -25,25 +25,25 @@
      * duration expectation — it is not a "get limits raised first"
      * warning.
      */
-    var LARGE_BATCH_BYTES = 10 * 1024 * 1024 * 1024;
+    const LARGE_BATCH_BYTES = 10 * 1024 * 1024 * 1024;
     function fmt_bytes(n) {
         if (n === 0) return '0 B';
         if (!n) return '';
-        var units = ['B', 'KB', 'MB', 'GB', 'TB'];
-        var i = 0;
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let i = 0;
         while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
         return (i === 0 ? n : n.toFixed(1)) + ' ' + units[i];
     }
     // Ingest-in-progress gate (packaging view only). Defaulted defensively
     // — the MDO / QA views render this same partial without these locals.
-    var ingest_in_progress = (typeof locals.ingest_in_progress !== 'undefined') && locals.ingest_in_progress;
-    var ingest_in_progress_count = locals.ingest_in_progress_count || 0;
-    var empty_message = {
+    const ingest_in_progress = (typeof locals.ingest_in_progress !== 'undefined') && locals.ingest_in_progress;
+    const ingest_in_progress_count = locals.ingest_in_progress_count || 0;
+    const empty_message = {
         'make-digital-objects': 'No folders are awaiting Make Digital Objects.',
         'aspace-qa': 'No folders have completed Make Digital Objects yet.',
         'packaging-and-ingesting': 'No folders are ready to submit to the ingest pipeline.'
     }[view] || 'No folders.';
-    var revert_target = (view === 'aspace-qa') ? '#qa-action-result' : '#workspace-action-result';
+    const revert_target = (view === 'aspace-qa') ? '#qa-action-result' : '#workspace-action-result';
 %>
 <% if (locals.error) { %>
     <div class="content-card sev-error" style="padding: 12px 16px; margin-bottom: 12px;">
@@ -113,8 +113,8 @@
                     // folder.structure_notices [{severity, text}] and sets
                     // folder.blocked when any error-severity flag exists.
                     // Defaulted defensively for older callers/mocks.
-                    var notices = folder.structure_notices || [];
-                    var blocked = !!folder.blocked;
+                    const notices = folder.structure_notices || [];
+                    const blocked = !!folder.blocked;
                 %>
                 <tr>
                     <td class="package-cell">
@@ -157,9 +157,9 @@
                                  * render BELOW, outside the disclosure —
                                  * warnings must never be collapsed away.
                                  */
-                                var pkg_collapse = folder.packages.length > 8;
-                                var pkg_visible = pkg_collapse ? folder.packages.slice(0, 5) : folder.packages;
-                                var pkg_hidden = pkg_collapse ? folder.packages.slice(5) : [];
+                                const pkg_collapse = folder.packages.length > 8;
+                                const pkg_visible = pkg_collapse ? folder.packages.slice(0, 5) : folder.packages;
+                                const pkg_hidden = pkg_collapse ? folder.packages.slice(5) : [];
                             %>
                             <ul style="margin: 0; padding-left: 18px; list-style: disc;">
                                 <% pkg_visible.forEach(function (pkg) { %>

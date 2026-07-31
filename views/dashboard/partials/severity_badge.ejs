@@ -12,10 +12,10 @@
     //
     // Carries no controller logic; the caller has already resolved
     // severity from state_metadata.js.
-    var sev = (locals.severity || 'INFO').toUpperCase();
-    var label = locals.label || sev;
-    var state = locals.state || '';
-    var sev_class = ({
+    const sev = (locals.severity || 'INFO').toUpperCase();
+    const label = locals.label || sev;
+    const state = locals.state || '';
+    let sev_class = ({
         INFO:    'sev-info',
         WARN:    'sev-warn',
         ERROR:   'sev-error',
@@ -26,7 +26,7 @@
     // Icon choice mirrors v2's queue dashboard: cloud-check for terminal
     // success states, cloud-error for failures, triangle for warns,
     // plain cloud for INFO/in-progress.
-    var icon_path;
+    let icon_path;
     if (sev === 'SUCCESS' || (sev === 'INFO' && /COMPLETE|INDEXED/i.test(state))) {
         icon_path = '<polyline points="9 13 11 15 15 11"/><path d="M17 18a4 4 0 0 0 .8-7.9 6 6 0 0 0-11.4-2A5 5 0 0 0 7 18z"/>';
         sev_class = 'sev-success';

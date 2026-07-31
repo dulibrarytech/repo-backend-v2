@@ -9,15 +9,15 @@
     //   events — array, oldest first, payload already JSON-parsed
     function fmt_ts(ts) {
         if (!ts) return '';
-        var d = new Date(ts);
+        const d = new Date(ts);
         if (isNaN(d.getTime())) return String(ts);
-        var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+        const pad = function (n) { return n < 10 ? '0' + n : '' + n; };
         return pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + '/' + d.getFullYear() +
             ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
     }
-    var err_text = row && row.error ? String(row.error).trim() : '';
-    var sev = row && row.severity ? String(row.severity).toUpperCase() : 'INFO';
-    var err_class = (sev === 'WARN') ? 'sev-warn' : 'sev-error';
+    const err_text = row && row.error ? String(row.error).trim() : '';
+    const sev = row && row.severity ? String(row.severity).toUpperCase() : 'INFO';
+    const err_class = (sev === 'WARN') ? 'sev-warn' : 'sev-error';
 %>
 <div class="modal-header">
     <div>
@@ -60,7 +60,7 @@
     <% } else { %>
         <ul class="timeline-list" style="list-style: none; padding: 0; margin: 0;">
             <% events.forEach(function (e) {
-                var payload_str = '';
+                let payload_str = '';
                 if (e.payload === null || e.payload === undefined) {
                     payload_str = '';
                 } else if (typeof e.payload === 'string') {

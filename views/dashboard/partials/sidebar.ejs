@@ -26,17 +26,17 @@
         // History counts as part of the workflow set so the sidebar
         // stays in focus mode (4 workflow icons + History) when staff
         // open the history view.
-        var workflow_actives = ['make-digital-objects', 'aspace-qa', 'packaging-and-ingesting', 'queue', 'history', 'recent-ingests', 'help'];
-        var in_workflow = workflow_actives.indexOf(active) !== -1;
+        const workflow_actives = ['make-digital-objects', 'aspace-qa', 'packaging-and-ingesting', 'queue', 'history', 'recent-ingests', 'help'];
+        const in_workflow = workflow_actives.indexOf(active) !== -1;
         // Every admin page sets `active: 'admin'` (Indexer / Metadata
         // Refresh / Services Health). Single source of truth.
-        var in_admin = active === 'admin';
+        const in_admin = active === 'admin';
         // RBAC nav-gating: res.locals.can is set by require_dashboard_auth.
         // Guard defensively so a view rendered without it never throws —
         // unknown capability defaults to hidden. (Server-side
         // require_permission is the real enforcement; this just keeps the
         // nav honest so staff don't see links they can't use.)
-        var allow = (typeof can === 'function') ? can : function () { return false; };
+        const allow = (typeof can === 'function') ? can : function () { return false; };
         // TEMPORARY (2026-07-24) v1-familiar nav rollout: flip these back
         // to true to restore the hidden icons. Stats is hidden because the
         // stats view IS the home page for now (controller redirects
@@ -44,7 +44,7 @@
         // only — its route stays live for direct URLs.
         // admin_utils restored 2026-07-29 by request (icon is still
         // admin-only via the allow('manage_index') gate below).
-        var nav_show = { stats: false, aips: false, admin_utils: true };
+        const nav_show = { stats: false, aips: false, admin_utils: true };
     %>
 
     <% if (in_workflow) { %>

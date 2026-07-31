@@ -31,7 +31,7 @@
         </div>
     <% } %>
 
-    <% if (s.latest && s.latest.counts) { var c = s.latest.counts; var active = (c.pending + c.in_progress) > 0; %>
+    <% if (s.latest && s.latest.counts) { const c = s.latest.counts; const active = (c.pending + c.in_progress) > 0; %>
         <div class="content-card <%= active ? 'sev-info' : '' %> mb-3">
             <div class="content-card-header">
                 <h3 style="font-size: 16px; margin: 0;">

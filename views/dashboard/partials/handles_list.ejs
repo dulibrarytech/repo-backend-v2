@@ -9,7 +9,7 @@
     // after it was minted. When it is set the delete control is disabled
     // here AND the model refuses with a 409, so the reason is visible
     // rather than arriving as a surprise error.
-    var list_url = dashboard_base + '/admin/handles/list';
+    const list_url = dashboard_base + '/admin/handles/list';
 %>
 
 <div class="content-card-header" style="border-top: 1px solid var(--border, #dee2e6);">
@@ -87,7 +87,7 @@
                     // Deletable only when it exists on the handle server and
                     // nothing references it. A failed or pending row has no
                     // handle to remove; a linked one must not be removed.
-                    var deletable = (row.status === 'minted' || row.status === 'pending')
+                    const deletable = (row.status === 'minted' || row.status === 'pending')
                         && !row.linked_pid;
                 %>
                 <% if (deletable) { %>

@@ -14,10 +14,10 @@
      identifier — it's what staff reference verbally, so surfacing it
      up top saves a click compared to expanding `identifiers`. */%>
 <%
-var _call_number = null;
+let _call_number = null;
 if (display_record && Array.isArray(display_record.identifiers)) {
-    for (var _i = 0; _i < display_record.identifiers.length; _i++) {
-        var _id = display_record.identifiers[_i];
+    for (let _i = 0; _i < display_record.identifiers.length; _i++) {
+        const _id = display_record.identifiers[_i];
         if (_id && _id.type === 'local'
                 && typeof _id.identifier === 'string'
                 && _id.identifier.trim().length > 0) {
@@ -30,7 +30,7 @@ if (display_record && Array.isArray(display_record.identifiers)) {
 // fields are skipped). Fall back to all keys if rendered without them.
 // Kaltura entry ids are rendered per-part (below each file name) by
 // metadata_field.ejs's `parts` branch — not as a separate top row.
-var _fields = (typeof fields !== 'undefined' && fields) ? fields : Object.keys(display_record || {});
+const _fields = (typeof fields !== 'undefined' && fields) ? fields : Object.keys(display_record || {});
 %>
 <div class="modal-header metadata-modal-header">
     <div class="metadata-modal-header-content">

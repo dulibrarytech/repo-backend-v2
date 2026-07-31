@@ -150,6 +150,14 @@ async function handles_mint(req, res) {
         if (failed === 0) {
             trigger_toast(res, 'success',
                 `Minted ${minted} handle${minted === 1 ? '' : 's'}.`);
+            /*
+             * Clear the form only when everything succeeded. Leaving the
+             * values would let a second click mint a duplicate handle for
+             * the same page; clearing them after a PARTIAL failure would
+             * throw away URLs the operator still has to correct. Consumed by
+             * the handle_mint_rows module in public/assets/dashboard.js.
+             */
+            trigger_events(res, { 'handles-reset': true });
         } else if (minted === 0) {
             trigger_toast(res, 'error',
                 `Could not mint ${failed} handle${failed === 1 ? '' : 's'} - see the list for details.`);

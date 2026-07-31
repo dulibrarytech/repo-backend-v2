@@ -7,11 +7,11 @@
     //   folder:   collection folder name
     //   packages: array of { name, uri, ok, errors[] }
     //   error:    optional top-level error string
-    var ok = !!locals.ok;
-    var packages = locals.packages || [];
-    var passed = packages.filter(function (p) { return p && p.ok; }).length;
-    var failed = packages.length - passed;
-    var card_class = ok ? 'sev-success' : (locals.error ? 'sev-error' : 'sev-warn');
+    const ok = !!locals.ok;
+    const packages = locals.packages || [];
+    const passed = packages.filter(function (p) { return p && p.ok; }).length;
+    const failed = packages.length - passed;
+    const card_class = ok ? 'sev-success' : (locals.error ? 'sev-error' : 'sev-warn');
 %>
 <% if (locals.error && (!packages || packages.length === 0)) { %>
     <div class="content-card sev-error"

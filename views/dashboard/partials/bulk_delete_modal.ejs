@@ -20,7 +20,7 @@
          refuses the whole batch if ANY row is published (409); we
          catch it here so staff see what to suppress first instead
          of a generic toast. */%>
-    <% var published = items.filter(function (it) { return it.is_published; }); %>
+    <% const published = items.filter(function (it) { return it.is_published; }); %>
     <% if (published.length > 0) { %>
         <div class="alert alert-warning small mb-3">
             <strong><%= published.length %></strong> of the selected
@@ -42,7 +42,7 @@
     <%/* Cap the rendered list at 25 to keep the modal sane; the
          backend still deletes everything in `pids` regardless of
          what we show here. */%>
-    <% var visible = items.slice(0, 25); %>
+    <% const visible = items.slice(0, 25); %>
     <ul class="list-unstyled mb-3" style="max-height: 240px; overflow-y: auto;">
         <% visible.forEach(function (it) { %>
             <li class="mb-1" style="border-bottom: 1px solid var(--hairline-soft); padding-bottom: 6px;">
