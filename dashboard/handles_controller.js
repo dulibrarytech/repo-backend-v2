@@ -22,6 +22,7 @@
 const app_config = require('../config/app');
 const handles_model = require('../handles/model');
 const handles_client = require('../libs/handles');
+const { ValidationError, ConflictError, NotFoundError } = require('../libs/errors');
 
 function render_page(req, res, view, locals = {}) {
     const cfg = app_config();
@@ -122,34 +123,57 @@ async function handles_list_partial(req, res) {
     render_partial(req, res, 'dashboard/partials/handles_list', data);
 }
 
+/*
+ * Expected, operator-correctable failures (a target host outside the
+ * allowlist, a handle that is in use) are turned into a toast and a 200
+ * carrying the refreshed list — NOT rethrown.
+ *
+ * Letting them bubble produces a 400 with a JSON envelope, and htmx does not
+ * swap on a 4xx: the dashboard's only htmx:responseError handler covers 401
+ * for session expiry. The result is a click that appears to do nothing at
+ * all, which is what happened the first time a target outside du.edu was
+ * submitted. Matches aip_backfill_controller's handling.
+ */
+function is_expected(err) {
+    return err instanceof ValidationError
+        || err instanceof ConflictError
+        || err instanceof NotFoundError;
+}
+
 async function handles_mint(req, res) {
-    const entries = entries_from_body(req.body);
-    const results = await handles_model.mint(entries, { actor: actor_of(req) });
+    try {
+        const entries = entries_from_body(req.body);
+        const results = await handles_model.mint(entries, { actor: actor_of(req) });
 
-    const minted = results.filter((r) => r.ok).length;
-    const failed = results.length - minted;
-    if (failed === 0) {
-        trigger_toast(res, 'success',
-            `Minted ${minted} handle${minted === 1 ? '' : 's'}.`);
-    } else if (minted === 0) {
-        trigger_toast(res, 'error',
-            `Could not mint ${failed} handle${failed === 1 ? '' : 's'} - see the list for details.`);
-    } else {
-        trigger_toast(res, 'warning',
-            `Minted ${minted}, ${failed} failed - see the list for details.`);
+        const minted = results.filter((r) => r.ok).length;
+        const failed = results.length - minted;
+        if (failed === 0) {
+            trigger_toast(res, 'success',
+                `Minted ${minted} handle${minted === 1 ? '' : 's'}.`);
+        } else if (minted === 0) {
+            trigger_toast(res, 'error',
+                `Could not mint ${failed} handle${failed === 1 ? '' : 's'} - see the list for details.`);
+        } else {
+            trigger_toast(res, 'warning',
+                `Minted ${minted}, ${failed} failed - see the list for details.`);
+        }
+    } catch (err) {
+        if (!is_expected(err)) throw err;
+        trigger_toast(res, 'error', err.message);
     }
-
-    const data = await build_list({});
-    render_partial(req, res, 'dashboard/partials/handles_list', data);
+    return handles_list_partial(req, res);
 }
 
 async function handles_delete(req, res) {
-    const id = Number.parseInt(req.params.id, 10);
-    const removed = await handles_model.remove(id, { actor: actor_of(req) });
-    trigger_toast(res, 'success', `Deleted ${removed.handle}.`);
-
-    const data = await build_list({});
-    render_partial(req, res, 'dashboard/partials/handles_list', data);
+    try {
+        const id = Number.parseInt(req.params.id, 10);
+        const removed = await handles_model.remove(id, { actor: actor_of(req) });
+        trigger_toast(res, 'success', `Deleted ${removed.handle}.`);
+    } catch (err) {
+        if (!is_expected(err)) throw err;
+        trigger_toast(res, 'error', err.message);
+    }
+    return handles_list_partial(req, res);
 }
 
 module.exports = {

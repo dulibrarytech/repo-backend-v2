@@ -70,6 +70,30 @@ describe('handles/model', () => {
             expect(() => model.validate_target_url(value)).toThrow(ValidationError);
         });
 
+        /*
+         * Regression, 2026-07-31. The sanitize middleware HTML-entity-encodes
+         * every body string including slashes, so a URL reaches the model as
+         * "https:&#x2F;&#x2F;host&#x2F;path". `new URL()` reads that as scheme
+         * "https", host "&", fragment "x2F;..." — and a real DU address was
+         * rejected with `Target host "&" is not allowed`.
+         */
+        it('accepts a URL the sanitize middleware has entity-encoded', () => {
+            const escaped =
+                'https:&#x2F;&#x2F;exhibits.library.du.edu&#x2F;exhibit&#x2F;abc-123';
+            expect(model.validate_target_url(escaped))
+                .toBe('https://exhibits.library.du.edu/exhibit/abc-123');
+        });
+
+        it('still rejects a disallowed host when entity-encoded', () => {
+            expect(() => model.validate_target_url('https:&#x2F;&#x2F;evil.com&#x2F;x'))
+                .toThrow(/not allowed/);
+        });
+
+        it('normalises exotic path characters rather than storing them raw', () => {
+            expect(model.validate_target_url('https://du.edu/<script>'))
+                .toBe('https://du.edu/%3Cscript%3E');
+        });
+
         it('accepts multiple configured hosts', () => {
             process.env.HANDLE_ALLOWED_TARGET_HOSTS = 'du.edu, coalliance.org';
             app_config._reset();
@@ -108,6 +132,15 @@ describe('handles/model', () => {
 
         it('rejects an over-long note rather than silently truncating', () => {
             expect(() => model.validate_note('x'.repeat(501))).toThrow(ValidationError);
+        });
+
+        /*
+         * Stored decoded so EJS can escape it once at render time. Left
+         * encoded, `<%= %>` would re-escape the ampersand and the operator
+         * would see the literal text "O&#x27;Brien".
+         */
+        it('decodes entities the sanitize middleware introduced', () => {
+            expect(model.validate_note('O&#x27;Brien &amp; Sons')).toBe("O'Brien & Sons");
         });
     });
 

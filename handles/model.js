@@ -23,6 +23,8 @@
 
 const crypto = require('node:crypto');
 
+const validator = require('validator');
+
 const { db } = require('../config/db');
 const tables = require('../config/db_tables');
 const app_config = require('../config/app');
@@ -75,7 +77,20 @@ function allowed_hosts() {
  * "digitalarchives.du.edu" but NOT "du.edu.evil.com" or "notdu.edu".
  */
 function validate_target_url(value) {
-    const raw = typeof value === 'string' ? value.trim() : '';
+    /*
+     * Decode first: the sanitize middleware HTML-entity-encodes every string
+     * in the body, including slashes (`/` -> `&#x2F;`). An untouched URL
+     * arrives as "https:&#x2F;&#x2F;host&#x2F;path", which `new URL()` parses
+     * as scheme "https", host "&", fragment "x2F;..." — so validation
+     * rejected a perfectly good DU address with `host "&" is not allowed`.
+     * Same decode-at-the-boundary treatment as safe_next() and the ASpace
+     * URI field in dashboard/controller.js.
+     *
+     * Decoding is safe here because nothing is trusted afterwards: the value
+     * must still parse as a URL, use https, and match the host allowlist, and
+     * url.toString() percent-encodes anything exotic left in the path.
+     */
+    const raw = typeof value === 'string' ? validator.unescape(value).trim() : '';
     if (!raw) throw new ValidationError('Target URL is required.');
     if (raw.length > MAX_URL) {
         throw new ValidationError(`Target URL is longer than ${MAX_URL} characters.`);
@@ -114,7 +129,14 @@ function validate_target_url(value) {
 }
 
 function validate_note(value) {
-    const note = typeof value === 'string' ? value.trim() : '';
+    /*
+     * Decoded for the same reason as the target URL — otherwise an
+     * apostrophe or ampersand is stored as `&#x27;` / `&amp;` and, once EJS
+     * re-escapes it for output, displayed literally as that entity. Storing
+     * the plain text and letting `<%= %>` escape at render time is the
+     * correct division of labour.
+     */
+    const note = typeof value === 'string' ? validator.unescape(value).trim() : '';
     if (note.length > MAX_NOTE) {
         throw new ValidationError(`Note is longer than ${MAX_NOTE} characters.`);
     }
