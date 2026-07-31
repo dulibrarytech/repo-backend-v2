@@ -145,3 +145,8 @@
         }) %>
     </div>
 </div>
+
+<%/* Copy feedback. Deliberately OUTSIDE #handles-list: that container is
+     replaced wholesale on every mint, delete and filter, which would take
+     the live region — and any pending announcement — with it. */%>
+<p id="handles-copy-status" class="visually-hidden" role="status" aria-live="polite"></p>

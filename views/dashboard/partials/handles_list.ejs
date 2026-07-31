@@ -102,6 +102,21 @@
                     const deletable = (row.status === 'minted' || row.status === 'pending')
                         && !row.linked_pid;
                 %>
+                <%/* Copy the RESOLVER url, not the bare handle: staff paste
+                     this into other sites and citations, where
+                     "10176/<uuid>" on its own is not clickable. Offered only
+                     for minted rows — a pending or failed row's handle does
+                     not resolve, and distributing a dead identifier is worse
+                     than not copying at all. */%>
+                <% if (row.status === 'minted') { %>
+                    <button type="button"
+                            class="btn btn-sm btn-outline-secondary handle-copy"
+                            style="margin-right: 6px;"
+                            data-clipboard-text="<%= row.resolver_url %>"
+                            aria-label="Copy link for <%= row.handle %> to clipboard">
+                        Copy
+                    </button>
+                <% } %>
                 <% if (deletable) { %>
                     <button type="button"
                             class="btn btn-sm btn-outline-danger"

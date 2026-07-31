@@ -978,4 +978,96 @@
 
         renumber();
     })();
+
+    /*
+     * ---- Admin > Handles: copy a handle to the clipboard ----
+     *
+     * Staff paste these into other sites and citations, so the button copies
+     * the RESOLVER url (https://hdl.handle.net/<prefix>/<uuid>) rather than
+     * the bare handle, which is not clickable on its own. The value comes
+     * from data-clipboard-text so this never has to reconstruct it.
+     *
+     * Delegated from document, not bound per button: #handles-list is
+     * replaced by htmx on mint, delete and filter, and delegation means
+     * nothing has to be re-initialised afterwards.
+     *
+     * Feedback is deliberately inline (the label flips to "Copied") plus a
+     * polite live region, rather than a toast — copying several handles in a
+     * row would otherwise stack toasts for an action whose result the
+     * operator can see. A FAILURE does raise a toast, because that one must
+     * not be missed: silently copying nothing is the worst outcome here.
+     */
+    (function handle_copy_buttons() {
+        const RESTORE_MS = 1600;
+
+        function announce(message) {
+            const status = document.getElementById('handles-copy-status');
+            if (status) status.textContent = message;
+        }
+
+        /*
+         * navigator.clipboard needs a secure context. The dashboard is behind
+         * HTTPS in production, but a plain-http dev host would otherwise fail
+         * silently — hence the execCommand fallback.
+         */
+        function write_clipboard(text) {
+            if (navigator.clipboard && window.isSecureContext) {
+                return navigator.clipboard.writeText(text);
+            }
+            return new Promise(function (resolve, reject) {
+                const scratch = document.createElement('textarea');
+                scratch.value = text;
+                scratch.setAttribute('readonly', '');
+                scratch.setAttribute('aria-hidden', 'true');
+                scratch.style.position = 'fixed';
+                scratch.style.opacity = '0';
+                document.body.appendChild(scratch);
+                scratch.select();
+                let ok = false;
+                try {
+                    ok = document.execCommand('copy');
+                } catch {
+                    ok = false;
+                }
+                scratch.remove();
+                if (ok) resolve();
+                else reject(new Error('copy command was rejected'));
+            });
+        }
+
+        document.addEventListener('click', function (evt) {
+            const btn = evt.target.closest && evt.target.closest('.handle-copy');
+            if (!btn) return;
+
+            const text = btn.getAttribute('data-clipboard-text');
+            if (!text) return;
+
+            /*
+             * Remember the original label once. Clicking again while the
+             * button still reads "Copied" must not make that the label it
+             * restores to.
+             */
+            if (!btn.hasAttribute('data-copy-label')) {
+                btn.setAttribute('data-copy-label', btn.textContent.trim());
+            }
+            const original = btn.getAttribute('data-copy-label');
+
+            write_clipboard(text).then(function () {
+                btn.textContent = 'Copied';
+                announce('Copied ' + text + ' to the clipboard.');
+                clearTimeout(btn._copy_timer);
+                btn._copy_timer = setTimeout(function () {
+                    btn.textContent = original;
+                }, RESTORE_MS);
+            }).catch(function (err) {
+                announce('Could not copy the handle.');
+                show_toast({
+                    level: 'error',
+                    message: 'Could not copy to the clipboard - '
+                        + (err && err.message ? err.message : 'permission denied')
+                        + '. Select the handle link and copy it manually.',
+                });
+            });
+        });
+    })();
 })();
