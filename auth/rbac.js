@@ -48,6 +48,14 @@ const PERMISSIONS = Object.freeze({
     MANAGE_METADATA_REFRESH: 'manage_metadata_refresh', // system-wide refresh start/cancel
     MANAGE_CONVERT: 'manage_convert', // TIFF→JPG batch convert queue
     MANAGE_USERS: 'manage_users', // user CRUD + role assignment
+    /*
+     * Mint / delete handles by hand via Admin Utils. Admin-only for the
+     * same reason as MANAGE_AIP_STORE, only more so: minting runs under
+     * the 10176 prefix administrator credential, which is the highest-
+     * privilege action the application can take, and deleting a handle
+     * removes a persistent identifier. Admin holds it via ALL_PERMISSIONS.
+     */
+    MANAGE_HANDLES: 'manage_handles',
 });
 const ALL_PERMISSIONS = Object.freeze(Object.values(PERMISSIONS));
 

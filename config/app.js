@@ -677,6 +677,15 @@ function build() {
             client_lib: optional('HANDLE_CLIENT_LIB', ''),
             helper_classpath: handle_helper_classpath(),
             target: optional('HANDLE_TARGET', ''),
+            /*
+             * Hosts a hand-minted handle is allowed to point at (Admin Utils
+             * handles view). Comma-separated; a value matches if the target
+             * host equals it or is a subdomain of it. Left unset, it falls
+             * back to the host of HANDLE_TARGET — so an unconfigured
+             * deployment fails CLOSED to its own domain rather than letting
+             * a DU persistent identifier point anywhere.
+             */
+            allowed_target_hosts: optional('HANDLE_ALLOWED_TARGET_HOSTS', ''),
             prefix: optional('HANDLE_PREFIX', ''),
             server: optional('HANDLE_SERVER', ''),
             ttl: integer('HANDLE_TTL', 86400),

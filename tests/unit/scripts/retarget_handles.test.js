@@ -163,5 +163,15 @@ describe('scripts/retarget_handles', () => {
         it('rejects unknown arguments rather than ignoring them', () => {
             expect(() => script.parse_args(['node', 'x', '--dry-run'])).toThrow(/unknown arg/);
         });
+
+        it('rejects --tombstone together with --leave-orphans', () => {
+            expect(() => script.parse_args([
+                'node', 'x', '--tombstone', 'https://example.edu/gone', '--leave-orphans',
+            ])).toThrow(/mutually exclusive/);
+        });
+
+        it('includes orphans by default', () => {
+            expect(script.parse_args(['node', 'x']).leave_orphans).toBe(false);
+        });
     });
 });

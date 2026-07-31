@@ -1,0 +1,114 @@
+<%/* Admin: Handles.
+
+     Mint a small number of handles by hand and remove ones minted by
+     mistake. These are NOT necessarily attached to repository records —
+     the target is operator-supplied and validated against an allowlist of
+     DU hosts.
+
+     The mint form renders a fixed five rows rather than an add-row
+     control: "up to 5" is then enforced by the markup itself and needs no
+     client JS beyond HTMX. Blank rows are dropped server-side.
+
+     See repo/REPOV2_HANDLES_ADMIN_PLAN.md. */%>
+<h1 class="page-title">Handles</h1>
+<p class="page-subtitle">
+    Mint persistent identifiers under the <code><%= handle_prefix %></code>
+    prefix for pages that are not repository records &mdash; exhibits,
+    finding aids, guides. Handles minted here are recorded locally; the
+    handle server itself cannot be listed, so this table is the only record
+    of them.
+</p>
+
+<% if (!configured) { %>
+    <div class="alert alert-warning" role="alert" style="margin-bottom: 16px;">
+        <strong>Handle minting is not configured.</strong>
+        The <code>HANDLE_*</code> settings are incomplete, so the form below
+        is inert. See <code>.env-example</code>.
+    </div>
+<% } %>
+
+<div class="content-card">
+    <div class="content-card-header">
+        <h2 style="font-size: 18px; margin: 0;">Mint handles</h2>
+    </div>
+
+    <form hx-post="<%= dashboard_base %>/admin/handles/mint"
+          hx-target="#handles-list"
+          hx-swap="innerHTML"
+          style="padding: 16px;">
+
+        <p style="font-size: 13px; color: var(--text-muted, #6c757d); margin-top: 0;">
+            Up to <%= max_per_submission %> at a time. The identifier itself is
+            generated automatically &mdash; you supply only where it should
+            point. Allowed hosts:
+            <% allowed_hosts.forEach(function (h, i) { %><code><%= h %></code><%= i < allowed_hosts.length - 1 ? ', ' : '' %><% }); %>
+            (and their subdomains), over https.
+        </p>
+
+        <table class="queue-table" style="margin-bottom: 12px;">
+            <thead>
+                <tr>
+                    <th style="width: 60%;">Target URL</th>
+                    <th>Note (optional)</th>
+                </tr>
+            </thead>
+            <tbody>
+            <% for (var i = 0; i < max_per_submission; i++) { %>
+                <tr>
+                    <td>
+                        <label for="target-<%= i %>" class="visually-hidden">
+                            Target URL <%= i + 1 %>
+                        </label>
+                        <input type="url"
+                               id="target-<%= i %>"
+                               name="target_url"
+                               class="form-control form-control-sm"
+                               placeholder="https://…"
+                               autocomplete="off"
+                               <%= configured ? '' : 'disabled' %>>
+                    </td>
+                    <td>
+                        <label for="note-<%= i %>" class="visually-hidden">
+                            Note <%= i + 1 %>
+                        </label>
+                        <input type="text"
+                               id="note-<%= i %>"
+                               name="note"
+                               class="form-control form-control-sm"
+                               placeholder="What is this for?"
+                               maxlength="500"
+                               autocomplete="off"
+                               <%= configured ? '' : 'disabled' %>>
+                    </td>
+                </tr>
+            <% } %>
+            </tbody>
+        </table>
+
+        <button type="submit"
+                class="btn btn-primary btn-sm"
+                <%= configured ? '' : 'disabled' %>>
+            Mint handles
+        </button>
+        <span class="htmx-indicator">
+            <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Minting"></span>
+        </span>
+        <p style="font-size: 12px; color: var(--text-muted, #6c757d); margin: 10px 0 0;">
+            Minting contacts the handle server and takes a few seconds.
+        </p>
+    </form>
+</div>
+
+<div class="content-card" style="margin-top: 16px;">
+    <div id="handles-list"
+         role="region"
+         aria-live="polite"
+         aria-atomic="false">
+        <%- include('../partials/handles_list', {
+            dashboard_base: dashboard_base,
+            rows: rows,
+            status_filter: status_filter,
+            statuses: statuses
+        }) %>
+    </div>
+</div>

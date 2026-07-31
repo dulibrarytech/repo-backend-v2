@@ -1,0 +1,110 @@
+<%
+    // Hand-minted handles. Rendered by
+    // dashboard/handles_controller.handles_list_partial, and returned
+    // directly by the mint and delete POSTs so the table refreshes in
+    // place without a second round trip.
+    //
+    // `linked_pid` is resolved LIVE against tbl_objects by the model, not
+    // read from the stored column — a handle can be attached to a record
+    // after it was minted. When it is set the delete control is disabled
+    // here AND the model refuses with a 409, so the reason is visible
+    // rather than arriving as a surprise error.
+    var list_url = dashboard_base + '/admin/handles/list';
+%>
+
+<div class="content-card-header" style="border-top: 1px solid var(--border, #dee2e6);">
+    <h2 style="font-size: 18px; margin: 0;">Minted handles</h2>
+    <div class="control-group">
+        <label for="handles-status" class="visually-hidden">Filter by status</label>
+        <select id="handles-status"
+                name="status"
+                class="form-select form-select-sm"
+                style="width: auto;"
+                hx-get="<%= list_url %>"
+                hx-target="#handles-list"
+                hx-swap="innerHTML">
+            <option value=""<%= status_filter === '' ? ' selected' : '' %>>All statuses</option>
+            <% statuses.forEach(function (s) { %>
+                <option value="<%= s %>"<%= status_filter === s ? ' selected' : '' %>><%= s %></option>
+            <% }); %>
+        </select>
+        <span class="htmx-indicator">
+            <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+        </span>
+    </div>
+</div>
+
+<% if (rows.length === 0) { %>
+    <p style="padding: 16px; margin: 0; color: var(--text-muted, #6c757d);">
+        <% if (status_filter) { %>
+            No handles with status &ldquo;<%= status_filter %>&rdquo;.
+        <% } else { %>
+            No handles have been minted from this view yet.
+        <% } %>
+    </p>
+<% } else { %>
+<table class="queue-table">
+    <thead>
+        <tr>
+            <th>Handle</th>
+            <th>Target</th>
+            <th>Note</th>
+            <th>Status</th>
+            <th>Minted by</th>
+            <th><span class="visually-hidden">Actions</span></th>
+        </tr>
+    </thead>
+    <tbody>
+    <% rows.forEach(function (row) { %>
+        <tr>
+            <td>
+                <% if (row.status === 'minted') { %>
+                    <a href="<%= row.resolver_url %>" target="_blank" rel="noopener noreferrer">
+                        <%= row.handle %>
+                    </a>
+                <% } else { %>
+                    <code><%= row.handle %></code>
+                <% } %>
+            </td>
+            <td style="word-break: break-all;"><%= row.target_url %></td>
+            <td><%= row.note || '' %></td>
+            <td>
+                <%= row.status %>
+                <% if (row.message) { %>
+                    <div style="font-size: 12px; color: var(--text-muted, #6c757d);">
+                        <%= row.message %>
+                    </div>
+                <% } %>
+                <% if (row.linked_pid) { %>
+                    <div style="font-size: 12px;">
+                        in use by <code><%= row.linked_pid %></code>
+                    </div>
+                <% } %>
+            </td>
+            <td><%= row.created_by || '' %></td>
+            <td>
+                <%
+                    // Deletable only when it exists on the handle server and
+                    // nothing references it. A failed or pending row has no
+                    // handle to remove; a linked one must not be removed.
+                    var deletable = (row.status === 'minted' || row.status === 'pending')
+                        && !row.linked_pid;
+                %>
+                <% if (deletable) { %>
+                    <button type="button"
+                            class="btn btn-sm btn-outline-danger"
+                            hx-post="<%= dashboard_base %>/admin/handles/<%= row.id %>/delete"
+                            hx-target="#handles-list"
+                            hx-swap="innerHTML"
+                            hx-confirm="Delete <%= row.handle %>? This removes the persistent identifier from the handle server. Do this only for a handle minted by mistake and never shared - if it has been published or cited anywhere, deleting it breaks that link permanently.">
+                        Delete
+                    </button>
+                <% } else if (row.linked_pid) { %>
+                    <span style="font-size: 12px; color: var(--text-muted, #6c757d);">in use</span>
+                <% } %>
+            </td>
+        </tr>
+    <% }); %>
+    </tbody>
+</table>
+<% } %>

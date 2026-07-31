@@ -17,7 +17,8 @@
  *   node scripts/retarget_handles.js                        # classify only
  *   node scripts/retarget_handles.js --execute              # retarget the live set
  *   node scripts/retarget_handles.js --from-logs <dir>      # + handles the DB has forgotten
- *   node scripts/retarget_handles.js --tombstone <url>      # also repoint withdrawn ones
+ *   node scripts/retarget_handles.js --tombstone <url>      # send orphans elsewhere
+ *   node scripts/retarget_handles.js --leave-orphans        # skip orphans entirely
  *   node scripts/retarget_handles.js --pids a,b             # restrict
  *   node scripts/retarget_handles.js --out results.ndjson   # record per-handle outcomes
  *
@@ -25,11 +26,22 @@
  * the target classifies as `already_correct` and is skipped, so re-running
  * after an interruption finishes the remainder and a full re-run is a no-op.
  *
- * TWO THINGS THIS DELIBERATELY WILL NOT DO WITHOUT BEING ASKED:
+ * ORPHANS (handles with no repository row) are retargeted along with
+ * everything else, because the destination is already the right one. A
+ * uuid with no object renders digitaldu-frontend's page-not-found view —
+ * HTTP 404, site chrome, and the words "the page or record that was here has
+ * been withdrawn or moved". That is tombstone behaviour without a tombstone
+ * page, and it has a property a generic tombstone URL does not: if the object
+ * is ever restored, the handle starts working again with no handle-server
+ * change. They are still counted separately so the orphan population stays
+ * visible — it means objects left the repository without their handles being
+ * cleaned up. Use --tombstone <url> to send them somewhere else, or
+ * --leave-orphans to skip them.
+ *
+ * TWO THINGS THIS DELIBERATELY WILL NOT DO:
  *
  *  - It never deletes a handle. A persistent identifier already in a citation
- *    should keep resolving — to a tombstone saying the item was withdrawn,
- *    not to nothing. Pass --tombstone <url> to repoint the withdrawn set.
+ *    should keep resolving.
  *  - It never mints. Handles in the DB that no longer exist on the server are
  *    reported as `missing` and left alone; re-minting is a separate decision.
  */
@@ -55,7 +67,7 @@ const RESOLVE_CONCURRENCY = 8;
 function parse_args(argv) {
     const o = {
         execute: false, pids: null, from_logs: null,
-        tombstone: null, out: null, limit: null,
+        tombstone: null, leave_orphans: false, out: null, limit: null,
     };
     for (let i = 2; i < argv.length; i++) {
         const a = argv[i];
@@ -63,12 +75,16 @@ function parse_args(argv) {
         else if (a === '--pids') o.pids = String(argv[++i] || '').split(',').filter(Boolean);
         else if (a === '--from-logs') o.from_logs = String(argv[++i] || '');
         else if (a === '--tombstone') o.tombstone = String(argv[++i] || '');
+        else if (a === '--leave-orphans') o.leave_orphans = true;
         else if (a === '--out') o.out = String(argv[++i] || '');
         else if (a === '--limit') o.limit = Number.parseInt(argv[++i], 10);
         else throw new Error(`unknown arg: ${a}`);
     }
     if (o.tombstone && !/^https?:\/\//i.test(o.tombstone)) {
         throw new Error('--tombstone must be an absolute http(s) URL');
+    }
+    if (o.tombstone && o.leave_orphans) {
+        throw new Error('--tombstone and --leave-orphans are mutually exclusive');
     }
     return o;
 }
@@ -310,17 +326,27 @@ async function main() {
     const operations = to_retarget.map((r) => ({
         op: 'modify', uuid: r.suffix, index: r.index, url: r.desired,
     }));
-    if (args.tombstone) {
-        for (const r of withdrawn) {
-            operations.push({
-                op: 'modify', uuid: r.suffix, index: r.index, url: args.tombstone,
-            });
+
+    if (withdrawn.length) {
+        if (args.leave_orphans) {
+            process.stdout.write(
+                `\n  ${withdrawn.length} orphan(s) left untouched (--leave-orphans).\n`
+            );
+        } else {
+            const destination = args.tombstone || null;
+            for (const r of withdrawn) {
+                operations.push({
+                    op: 'modify',
+                    uuid: r.suffix,
+                    index: r.index,
+                    url: destination || r.desired,
+                });
+            }
+            process.stdout.write(
+                `\n  ${withdrawn.length} orphan(s) included, pointing at `
+                + `${destination || 'the object URL (renders the 404 "withdrawn or moved" page)'}\n`
+            );
         }
-    } else if (withdrawn.length) {
-        process.stdout.write(
-            `\n  ${withdrawn.length} withdrawn handle(s) left untouched.`
-            + ' Pass --tombstone <url> to repoint them.\n'
-        );
     }
 
     if (!args.execute) {

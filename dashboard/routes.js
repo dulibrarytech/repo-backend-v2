@@ -7,6 +7,7 @@ const { login_limiter, write_limiter } = require('../auth/rate_limit');
 const controller = require('./controller');
 const aip_controller = require('./aip_controller');
 const aip_backfill_controller = require('./aip_backfill_controller');
+const handles_controller = require('./handles_controller');
 const archive_controller = require('./archive_controller');
 const thumbnails = require('./thumbnails');
 const errors = require('../libs/errors');
@@ -410,6 +411,46 @@ module.exports = function mount(app) {
         can_manage_aip,
         write_limiter(),
         aip_backfill_controller.backfill_cancel
+    );
+
+    /*
+     * Handles — mint a small number of persistent identifiers by hand and
+     * remove ones minted by mistake. Admin-only via manage_handles: these
+     * writes run under the 10176 prefix administrator credential, the
+     * highest-privilege action the app can take, and a delete removes a
+     * persistent identifier.
+     *
+     * The GETs are gated too, not just the writes: the list is the only
+     * record of hand-minted handles anywhere (the prefix cannot be
+     * enumerated), so it is not a read a non-admin should have either.
+     * See dashboard/handles_controller.js and handles/model.js.
+     */
+    const can_manage_handles = require_permission(PERMISSIONS.MANAGE_HANDLES);
+    app.get(
+        `${base}/admin/handles`,
+        require_dashboard_auth,
+        can_manage_handles,
+        handles_controller.handles_page
+    );
+    app.get(
+        `${base}/admin/handles/list`,
+        require_dashboard_auth,
+        can_manage_handles,
+        handles_controller.handles_list_partial
+    );
+    app.post(
+        `${base}/admin/handles/mint`,
+        require_dashboard_auth,
+        can_manage_handles,
+        write_limiter(),
+        handles_controller.handles_mint
+    );
+    app.post(
+        `${base}/admin/handles/:id/delete`,
+        require_dashboard_auth,
+        can_manage_handles,
+        write_limiter(),
+        handles_controller.handles_delete
     );
 
     /*
