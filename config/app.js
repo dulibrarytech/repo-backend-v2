@@ -609,22 +609,39 @@ function build() {
         },
 
         /*
-         * Handle service — DU's persistent-identifier minting. Every
+         * Handle.net — DU's persistent-identifier minting. Every
          * successfully ingested object gets a handle URL stored in
          * tbl_objects.handle. Update is a refresh (re-points the handle
          * at the current target URL).
-         * 
-         * `service` is the POST/PUT endpoint (e.g. "https://handle.example.com/handles").
-         * `server` + `prefix` together form the public URL the handle
-         * resolves to (e.g. "https://hdl.example.com/" + "20.500.12345"
-         * → "https://hdl.example.com/20.500.12345/<uuid>"). The split
-         * preserves v1's env shape so a legacy .env imports cleanly.
+         *
+         * libs/handles.js talks to the handle server's HTTP JSON API
+         * directly. The standalone Python handles-service on libsftp01
+         * that used to sit in between is retired — see
+         * repo/HANDLES_SERVICE_REMEDIATION_PLAN.md.
+         *
+         * `admin_url` is the handle server's admin-capable HTTP interface
+         * (its HS_SITE record advertises admin=true on port 8000).
+         * `admin_id` is the prefix administrator, index and handle, in the
+         * form "300:0.NA/10176".
+         * `admin_key_path` is a PKCS#8 PEM produced once from admpriv.bin
+         * via `hdl-convert-key`; keep it encrypted and supply the same
+         * passphrase as `admin_passphrase`.
+         * `target` is what handles resolve TO — changing it affects future
+         * mints and updates only, never existing handles retroactively.
+         * `server` + `prefix` form the public handle URL stored in the DB
+         * ("https://hdl.handle.net/" + "10176" + "/<uuid>"); that value is
+         * independent of `target`, so a target-domain migration needs no
+         * database change.
          */
         handles: {
-            service: optional('HANDLE_SERVICE', ''),
+            admin_url: optional('HANDLE_ADMIN_URL', ''),
+            admin_id: optional('HANDLE_ADMIN_ID', ''),
+            admin_key_path: optional('HANDLE_ADMIN_KEY_PATH', ''),
+            admin_passphrase: optional('HANDLE_ADMIN_PASSPHRASE', ''),
+            target: optional('HANDLE_TARGET', ''),
             prefix: optional('HANDLE_PREFIX', ''),
             server: optional('HANDLE_SERVER', ''),
-            api_key: optional('HANDLE_API_KEY', ''),
+            ttl: integer('HANDLE_TTL', 86400),
             timeout_ms: integer('HANDLE_TIMEOUT_MS', 30000),
         },
 
