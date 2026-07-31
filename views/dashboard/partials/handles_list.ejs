@@ -51,7 +51,7 @@
             <th>Note</th>
             <th>Status</th>
             <th>Minted by</th>
-            <th><span class="visually-hidden">Actions</span></th>
+            <th class="actions-cell">Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -94,40 +94,88 @@
                 <% } %>
             </td>
             <td><%= row.created_by || '' %></td>
-            <td>
+            <td class="actions-cell">
                 <%
-                    // Deletable only when it exists on the handle server and
-                    // nothing references it. A failed or pending row has no
-                    // handle to remove; a linked one must not be removed.
+                    /*
+                     * Copy is offered for minted rows only — a pending or
+                     * failed handle does not resolve, and distributing a dead
+                     * identifier is worse than not copying at all. A LINKED
+                     * handle is still copyable; only deleting it is blocked.
+                     *
+                     * Deletable = exists on the handle server and nothing
+                     * references it. The Status column already explains a
+                     * linked row ("in use by <pid>"), so the menu simply
+                     * omits Delete rather than repeating the reason here.
+                     */
+                    const can_copy = row.status === 'minted';
                     const deletable = (row.status === 'minted' || row.status === 'pending')
                         && !row.linked_pid;
                 %>
-                <%/* Copy the RESOLVER url, not the bare handle: staff paste
-                     this into other sites and citations, where
-                     "10176/<uuid>" on its own is not clickable. Offered only
-                     for minted rows — a pending or failed row's handle does
-                     not resolve, and distributing a dead identifier is worse
-                     than not copying at all. */%>
-                <% if (row.status === 'minted') { %>
-                    <button type="button"
-                            class="btn btn-sm btn-outline-secondary handle-copy"
-                            style="margin-right: 6px;"
-                            data-clipboard-text="<%= row.resolver_url %>"
-                            aria-label="Copy link for <%= row.handle %> to clipboard">
-                        Copy
+                <%/* kebab-btn + filled-circle SVG matches collection_row.ejs
+                     and aip_row.ejs so the affordance reads identically
+                     across list pages. Rendered only when there is at least
+                     one action, as in aip_row.ejs. */%>
+                <% if (can_copy || deletable) { %>
+                <div class="dropdown">
+                    <button type="button" class="kebab-btn"
+                            data-bs-toggle="dropdown"
+                            aria-expanded="false"
+                            aria-label="Actions for <%= row.handle %>"
+                            title="Actions">
+                        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                            <circle cx="12" cy="5" r="1.75"/>
+                            <circle cx="12" cy="12" r="1.75"/>
+                            <circle cx="12" cy="19" r="1.75"/>
+                        </svg>
                     </button>
-                <% } %>
-                <% if (deletable) { %>
-                    <button type="button"
-                            class="btn btn-sm btn-outline-danger"
-                            hx-post="<%= dashboard_base %>/admin/handles/<%= row.id %>/delete"
-                            hx-target="#handles-list"
-                            hx-swap="innerHTML"
-                            hx-confirm="Delete <%= row.handle %>? This removes the persistent identifier from the handle server. Do this only for a handle minted by mistake and never shared - if it has been published or cited anywhere, deleting it breaks that link permanently.">
-                        Delete
-                    </button>
-                <% } else if (row.linked_pid) { %>
-                    <span style="font-size: 12px; color: var(--text-muted, #6c757d);">in use</span>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <% if (can_copy) { %>
+                            <li>
+                                <%/* Copies the RESOLVER url, not the bare
+                                     handle: staff paste this into other sites
+                                     and citations, where "10176/<uuid>" on its
+                                     own is not clickable. */%>
+                                <button type="button"
+                                        class="dropdown-item handle-copy"
+                                        data-clipboard-text="<%= row.resolver_url %>">
+                                    <%/* two-sheets icon — copy */%>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                        <rect x="9" y="9" width="13" height="13" rx="2"/>
+                                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                                    </svg>
+                                    Copy link
+                                </button>
+                            </li>
+                        <% } %>
+                        <% if (deletable) { %>
+                            <% if (can_copy) { %><li><hr class="dropdown-divider"></li><% } %>
+                            <li>
+                                <%/* data-confirm, NOT hx-confirm — the latter
+                                     fires the raw window.confirm(). See the
+                                     confirm-modal section of dashboard.js. */%>
+                                <button type="button" class="dropdown-item text-danger"
+                                        hx-post="<%= dashboard_base %>/admin/handles/<%= row.id %>/delete"
+                                        hx-target="#handles-list"
+                                        hx-swap="innerHTML"
+                                        data-confirm="Delete <%= row.handle %>? This removes the persistent identifier from the handle server. Do this only for a handle minted by mistake and never shared &mdash; if it has been published or cited anywhere, deleting it breaks that link permanently."
+                                        data-confirm-title="Delete handle?"
+                                        data-confirm-label="Delete">
+                                    <%/* trash icon — delete */%>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                        <polyline points="3 6 5 6 21 6"/>
+                                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                                        <path d="M10 11v6"/>
+                                        <path d="M14 11v6"/>
+                                        <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>
+                                    </svg>
+                                    Delete
+                                </button>
+                            </li>
+                        <% } %>
+                    </ul>
+                </div>
                 <% } %>
             </td>
         </tr>

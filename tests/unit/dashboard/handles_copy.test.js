@@ -76,12 +76,7 @@ async function mount(rows, { clipboard = 'ok' } = {}) {
 
     dom.window.eval(fs.readFileSync(SCRIPT, 'utf8'));
 
-    /* Capture the restore timer so the 1.6s wait need not be real. */
-    const timers = [];
-    dom.window.setTimeout = function (fn) { timers.push(fn); return timers.length; };
-    dom.window.clearTimeout = function () {};
-
-    return { dom, written, timers };
+    return { dom, written };
 }
 
 const settle = () => new Promise((resolve) => { setTimeout(resolve, 0); });
@@ -90,13 +85,18 @@ const announced = (dom) =>
     dom.window.document.getElementById('handles-copy-status').textContent;
 
 describe('Admin > Handles copy to clipboard', () => {
-    it('offers Copy on a minted handle, naming it for screen readers', async () => {
+    it('offers Copy inside the row kebab menu', async () => {
         const { dom } = await mount([row()]);
-        const btn = copy_btns(dom)[0];
+        const doc = dom.window.document;
 
-        expect(btn.getAttribute('aria-label'))
-            .toBe('Copy link for 10176/6940110d-832c-4c53-a87d-5a14bf0f237e to clipboard');
-        expect(btn.textContent.trim()).toBe('Copy');
+        /* the menu itself is what screen readers announce for the row */
+        expect(doc.querySelector('.kebab-btn').getAttribute('aria-label'))
+            .toBe('Actions for 10176/6940110d-832c-4c53-a87d-5a14bf0f237e');
+        const item = copy_btns(dom)[0];
+        expect(item.classList.contains('dropdown-item')).toBe(true);
+        expect(item.textContent.trim()).toBe('Copy link');
+        /* icon must survive: nothing may replace the item's textContent */
+        expect(item.querySelector('svg')).not.toBeNull();
     });
 
     /*
@@ -115,7 +115,10 @@ describe('Admin > Handles copy to clipboard', () => {
     it('offers Copy on a handle that is in use by an object', async () => {
         const { dom } = await mount([row({ linked_pid: 'pid-9' })]);
         expect(copy_btns(dom)).toHaveLength(1);
-        expect(dom.window.document.querySelectorAll('.btn-outline-danger')).toHaveLength(0);
+        /* the kebab opens, but offers no Delete */
+        expect(dom.window.document.querySelectorAll('.kebab-btn')).toHaveLength(1);
+        expect(dom.window.document.querySelectorAll('.dropdown-item.text-danger'))
+            .toHaveLength(0);
     });
 
     it('copies the resolver URL, not the bare handle', async () => {
@@ -128,35 +131,23 @@ describe('Admin > Handles copy to clipboard', () => {
         ]);
     });
 
-    it('confirms inline and announces the copy', async () => {
-        const { dom, timers } = await mount([row()]);
-        const btn = copy_btns(dom)[0];
-
-        btn.click();
-        await settle();
-
-        expect(btn.textContent).toBe('Copied');
-        expect(announced(dom)).toContain('Copied https://hdl.handle.net/10176/');
-
-        timers.forEach((fn) => fn());
-        expect(btn.textContent).toBe('Copy');
-    });
-
     /*
-     * Clicking again while the label still reads "Copied" must not make
-     * "Copied" the label it restores to.
+     * Bootstrap closes the kebab on click, so an inline label flip would
+     * vanish with the menu. Confirmation has to outlive it.
      */
-    it('restores the original label after repeated clicks', async () => {
-        const { dom, timers } = await mount([row()]);
-        const btn = copy_btns(dom)[0];
+    it('confirms with a toast and announces the copy', async () => {
+        const { dom } = await mount([row()]);
+        const item = copy_btns(dom)[0];
 
-        btn.click();
-        await settle();
-        btn.click();
+        item.click();
         await settle();
 
-        timers.forEach((fn) => fn());
-        expect(btn.textContent).toBe('Copy');
+        expect(announced(dom)).toContain('Copied https://hdl.handle.net/10176/');
+        const toast = dom.window.document.querySelector('#toast-stack');
+        expect(toast && toast.textContent).toMatch(/copied/i);
+        /* the item is untouched — icon and label intact for the next open */
+        expect(item.textContent.trim()).toBe('Copy link');
+        expect(item.querySelector('svg')).not.toBeNull();
     });
 
     /*
@@ -170,7 +161,7 @@ describe('Admin > Handles copy to clipboard', () => {
         btn.click();
         await settle();
 
-        expect(btn.textContent.trim()).toBe('Copy');
+        expect(btn.textContent.trim()).toBe('Copy link');
         expect(announced(dom)).toBe('Could not copy the handle.');
         const toast = dom.window.document.querySelector('#toast-stack');
         expect(toast && toast.textContent).toMatch(/Could not copy/);

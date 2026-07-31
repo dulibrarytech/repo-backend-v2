@@ -991,15 +991,13 @@
      * replaced by htmx on mint, delete and filter, and delegation means
      * nothing has to be re-initialised afterwards.
      *
-     * Feedback is deliberately inline (the label flips to "Copied") plus a
-     * polite live region, rather than a toast — copying several handles in a
-     * row would otherwise stack toasts for an action whose result the
-     * operator can see. A FAILURE does raise a toast, because that one must
-     * not be missed: silently copying nothing is the worst outcome here.
+     * Feedback is a toast plus a polite live region. An inline "Copied"
+     * label was the first attempt, but the item lives in a kebab menu that
+     * Bootstrap closes on click — the confirmation would flash out of
+     * existence with the menu. (It would also have had to avoid
+     * `textContent`, which would wipe the item's icon.)
      */
     (function handle_copy_buttons() {
-        const RESTORE_MS = 1600;
-
         function announce(message) {
             const status = document.getElementById('handles-copy-status');
             if (status) status.textContent = message;
@@ -1042,23 +1040,9 @@
             const text = btn.getAttribute('data-clipboard-text');
             if (!text) return;
 
-            /*
-             * Remember the original label once. Clicking again while the
-             * button still reads "Copied" must not make that the label it
-             * restores to.
-             */
-            if (!btn.hasAttribute('data-copy-label')) {
-                btn.setAttribute('data-copy-label', btn.textContent.trim());
-            }
-            const original = btn.getAttribute('data-copy-label');
-
             write_clipboard(text).then(function () {
-                btn.textContent = 'Copied';
                 announce('Copied ' + text + ' to the clipboard.');
-                clearTimeout(btn._copy_timer);
-                btn._copy_timer = setTimeout(function () {
-                    btn.textContent = original;
-                }, RESTORE_MS);
+                show_toast({ level: 'success', message: 'Handle link copied.' });
             }).catch(function (err) {
                 announce('Could not copy the handle.');
                 show_toast({
