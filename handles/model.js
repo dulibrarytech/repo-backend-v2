@@ -31,6 +31,7 @@ const app_config = require('../config/app');
 const log = require('../libs/log');
 const handles_client = require('../libs/handles');
 const handle_writer_default = require('../libs/handle_writer');
+const users_model = require('../users/model');
 const { ValidationError, ConflictError, NotFoundError } = require('../libs/errors');
 
 const MAX_PER_SUBMISSION = 5;
@@ -172,18 +173,30 @@ async function linked_pids(rows) {
 
 /*
  * Rows for the admin list, newest first, each decorated with whether a
- * repository record currently uses it.
+ * repository record currently uses it and who minted it.
  */
 async function list({ status = null, limit = 200 } = {}) {
     let q = db()(tables.handles).select('*').orderBy('id', 'desc').limit(limit);
     if (status) q = q.where({ status });
     const rows = await q;
 
-    const linked = await linked_pids(rows);
+    /*
+     * created_by holds the du_id, which is what the JWT carries — it is the
+     * unambiguous key and stays in the column. Resolve it to a name for
+     * display in ONE query rather than per row, and fall back to the du_id
+     * for anyone with no user record (a du_id that predates tbl_users, or a
+     * name that was never filled in).
+     */
+    const [linked, names] = await Promise.all([
+        linked_pids(rows),
+        users_model.names_by_du_id(rows.map((r) => r.created_by)),
+    ]);
+
     return rows.map((row) => ({
         ...row,
         linked_pid: linked.get(row.suffix) || row.linked_pid || null,
         resolver_url: handles_client.build_handle_url(row.suffix),
+        created_by_label: names.get(String(row.created_by)) || row.created_by || '',
     }));
 }
 

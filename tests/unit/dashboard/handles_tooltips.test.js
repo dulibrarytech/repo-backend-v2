@@ -32,6 +32,7 @@ function row(overrides) {
         created_by: '871095226',
         linked_pid: null,
         resolver_url: 'https://hdl.handle.net/10176/6940110d-832c-4c53-a87d-5a14bf0f237e',
+        created_by_label: 'Fernando Reyes',
         ...overrides,
     };
 }
@@ -165,6 +166,34 @@ describe('Admin > Handles link tooltips', () => {
 
         doc.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape' }));
         expect(calls.hidden).toContain(link);
+    });
+
+    /*
+     * "Minted by" shows the staff member's name; created_by (the du_id) is
+     * the stored key and stays available as the native tooltip.
+     */
+    it('shows the minter\'s name with the du_id as its tooltip', async () => {
+        const { dom } = await mount([row()]);
+        const cells = Array.from(dom.window.document.querySelectorAll('td'));
+        const cell = cells.find((td) => td.textContent.trim() === 'Fernando Reyes');
+
+        expect(cell).toBeDefined();
+        expect(cell.getAttribute('title')).toBe('871095226');
+    });
+
+    /*
+     * No user record resolved: show the du_id itself, without a redundant
+     * tooltip repeating it. 
+     */
+    it('falls back to the du_id when no name resolves', async () => {
+        const { dom } = await mount([
+            row({ created_by: '999999999', created_by_label: '999999999' }),
+        ]);
+        const cells = Array.from(dom.window.document.querySelectorAll('td'));
+        const cell = cells.find((td) => td.textContent.trim() === '999999999');
+
+        expect(cell).toBeDefined();
+        expect(cell.getAttribute('title')).toBeNull();
     });
 
     /* Progressive enhancement: the native title still works without JS. */

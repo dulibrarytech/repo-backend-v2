@@ -93,7 +93,11 @@
                     </div>
                 <% } %>
             </td>
-            <td><%= row.created_by || '' %></td>
+            <%/* Shows the staff member's name; the du_id stays behind as the
+                 native tooltip, since it is the unambiguous key and the
+                 stored value. Falls back to the du_id when no user record
+                 resolves. */%>
+            <td<% if (row.created_by_label !== row.created_by) { %> title="<%= row.created_by %>"<% } %>><%= row.created_by_label || row.created_by || '' %></td>
             <td class="actions-cell">
                 <%
                     /*

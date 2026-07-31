@@ -31,6 +31,7 @@ function row(overrides) {
         created_by: '871095226',
         linked_pid: null,
         resolver_url: 'https://hdl.handle.net/10176/6940110d-832c-4c53-a87d-5a14bf0f237e',
+        created_by_label: 'Fernando Reyes',
         ...overrides,
     };
 }
