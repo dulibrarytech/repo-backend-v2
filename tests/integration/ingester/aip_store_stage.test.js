@@ -103,6 +103,115 @@ describe('ingester/stages/aip_store — Stage 6', () => {
         expect(after.is_complete).toBe(1);
     });
 
+    it('byte-progress side-poll: resets stale columns, persists polled bytes, stops on settle', async () => {
+        /*
+         * The copy call blocks for several poll intervals while the
+         * fake copy_progress endpoint reports live bytes. Verifies:
+         *   - Stage 6 entry zeroes bytes_uploaded/total_bytes and
+         *     micro_service (stale Stage 2/4 values must not render
+         *     as Stage 6 progress),
+         *   - the poller writes the polled bytes + a heartbeat,
+         *   - the interval stops once the copy settles.
+         */
+        process.env.AIP_STORE_PROGRESS_POLL_MS = '25';
+        require('../../../config/app')._reset();
+        const { queue_id } = await seed_pipeline_at_stage_6();
+        await db_queue()(QUEUE).where({ id: queue_id }).update({
+            bytes_uploaded: 999_999,
+            total_bytes: 1_000_000,
+            micro_service: 'Store AIP',
+        });
+        const row = await db_queue()(QUEUE).where({ id: queue_id }).first();
+
+        let progress_calls = 0;
+        const client = make_fake_client({
+            copy_to_wasabi: async () => {
+                await new Promise((r) => setTimeout(r, 150));
+                return {
+                    status: 200,
+                    data: {
+                        ok: true,
+                        bucket: 'library-repository',
+                        key: 'aip-store/pkg-abc.7z',
+                        bytes: 4096,
+                        elapsed_ms: 150,
+                    },
+                };
+            },
+        });
+        client.copy_progress = async () => {
+            progress_calls += 1;
+            return {
+                status: 200,
+                data: { ok: true, bytes_sent: 1234, total_bytes: 9999 },
+            };
+        };
+
+        const result = await aip_store_stage.run(row, { client });
+        expect(result.ok).toBe(true);
+        expect(progress_calls).toBeGreaterThan(0);
+
+        const after = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        // Poller overwrote the zeroed columns with live copy bytes.
+        expect(after.bytes_uploaded).toBe(1234);
+        expect(after.total_bytes).toBe(9999);
+        expect(Number(after.last_poll_at)).toBeGreaterThan(0);
+        // Stage entry cleared the stale AM microservice.
+        expect(after.micro_service).toBe('PENDING');
+
+        // The interval is dead: no further polls after settle.
+        const settled_calls = progress_calls;
+        await new Promise((r) => setTimeout(r, 100));
+        expect(progress_calls).toBe(settled_calls);
+    });
+
+    it('byte-progress side-poll tolerates a client without copy_progress and 404 responses', async () => {
+        process.env.AIP_STORE_PROGRESS_POLL_MS = '25';
+        require('../../../config/app')._reset();
+        const { queue_id } = await seed_pipeline_at_stage_6();
+        const row = await db_queue()(QUEUE).where({ id: queue_id }).first();
+
+        /*
+         * make_fake_client has NO copy_progress (mirrors an older
+         * deploy / minimal double) — the poller must disable itself
+         * and the copy must succeed exactly as before.
+         */
+        const no_progress_client = make_fake_client({
+            copy_to_wasabi: async () => {
+                await new Promise((r) => setTimeout(r, 80));
+                return {
+                    status: 200,
+                    data: { ok: true, bucket: 'b', key: 'k', bytes: 1, elapsed_ms: 80 },
+                };
+            },
+        });
+        const result = await aip_store_stage.run(row, { client: no_progress_client });
+        expect(result.ok).toBe(true);
+
+        // 404 from an older curation build → heartbeat only, no bytes.
+        await db_helper.reset_data();
+        const seeded = await seed_pipeline_at_stage_6();
+        const row2 = await db_queue()(QUEUE).where({ id: seeded.queue_id }).first();
+        const stale_client = make_fake_client({
+            copy_to_wasabi: async () => {
+                await new Promise((r) => setTimeout(r, 80));
+                return {
+                    status: 200,
+                    data: { ok: true, bucket: 'b', key: 'k', bytes: 1, elapsed_ms: 80 },
+                };
+            },
+        });
+        stale_client.copy_progress = async () => ({
+            status: 404,
+            data: { ok: false, error: 'no active copy' },
+        });
+        const result2 = await aip_store_stage.run(row2, { client: stale_client });
+        expect(result2.ok).toBe(true);
+        const after2 = await db_queue()(QUEUE).where({ id: seeded.queue_id }).first();
+        expect(after2.bytes_uploaded).toBe(0);
+        expect(Number(after2.last_poll_at)).toBeGreaterThan(0);
+    });
+
     it('skipped when AIP_STORE_ENABLED=false', async () => {
         process.env.AIP_STORE_ENABLED = '0';
         require('../../../config/app')._reset();

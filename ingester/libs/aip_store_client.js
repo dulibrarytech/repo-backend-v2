@@ -118,6 +118,33 @@ function create_client(http = http_default) {
         },
 
         /*
+         * Read live byte progress for an in-flight copy. The curation
+         * side persists {bytes_sent, total_bytes, updated_at} to a
+         * per-AIP progress file while its upload streams; this GET is
+         * a cheap file read. 404 means "no active copy" (not started,
+         * already finished, or an older curation build without the
+         * endpoint) — callers treat any non-200 as "no data" and move
+         * on. Short timeout: this runs on a side-poll cadence next to
+         * the multi-hour copy call and must never pile up behind it.
+         */
+        async copy_progress(aip_uuid) {
+            const cfg = app_config().curation_api;
+            const url = build_url(`copy-progress/${encodeURIComponent(aip_uuid)}`);
+            try {
+                const res = await http.get(url, {
+                    timeout: Math.min(cfg.timeout_ms || 15_000, 15_000),
+                    headers: default_headers(),
+                    validateStatus: () => true,
+                });
+                return { status: res.status, data: res.data };
+            } catch (err) {
+                throw new UpstreamError(
+                    `curation /aip/copy-progress failed: ${err.message}`
+                );
+            }
+        },
+
+        /*
          * Mint a presigned URL for a Wasabi key. The curation service
          * signs against the same boto3 client that uploaded the
          * file, so the URL is valid for cfg.ttl_seconds and grants

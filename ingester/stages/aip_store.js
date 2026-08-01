@@ -276,7 +276,19 @@ async function run(row, deps = {}) {
     if (row.pipeline_state !== 'AIP_STORE_IN_PROGRESS') {
         await model.update_queue(
             { id: row.id },
-            { status: 'AIP_STORE_IN_PROGRESS' },
+            {
+                status: 'AIP_STORE_IN_PROGRESS',
+                /*
+                 * Zero the byte-progress columns and the AM step name:
+                 * they still hold Stage 2's upload bytes and Stage 4's
+                 * last microservice, and the dashboard would render
+                 * that stale data as Stage 6 progress. The side-poll
+                 * below refills bytes with real copy progress.
+                 */
+                bytes_uploaded: 0,
+                total_bytes: 0,
+                micro_service: 'PENDING',
+            },
             {
                 actor: 'worker',
                 payload: {
@@ -290,6 +302,25 @@ async function run(row, deps = {}) {
     }
 
     // ---- Make the call -------------------------------------------------
+
+    /*
+     * Byte-progress side-poll. copy_to_wasabi is ONE synchronous HTTP
+     * call that can run for hours on a large AIP, during which the row
+     * would otherwise sit at AIP_STORE_IN_PROGRESS with no visible
+     * activity (the exact "is it stalled?" window staff kept asking
+     * about). While the call is in flight, poll the curation side's
+     * cheap copy-progress endpoint and persist bytes + a heartbeat to
+     * the queue row — status-free updates, so the audit log stays
+     * clean across a multi-hour copy. Wholly best-effort: any poll
+     * error is swallowed and the copy outcome is untouched.
+     */
+    const progress_poller = _start_progress_poller({
+        client,
+        model,
+        cfg,
+        queue_id: row.id,
+        aip_uuid: row.sip_uuid,
+    });
 
     let res;
     try {
@@ -307,6 +338,13 @@ async function run(row, deps = {}) {
             error_text: err instanceof UpstreamError ? err.message : String(err),
             wire_status: null,
         });
+    } finally {
+        /*
+         * Every exit path — success, ok=false, transport throw —
+         * must stop the side-poll or its interval would keep writing
+         * to the row after the stage settled.
+         */
+        progress_poller.stop();
     }
     if (signal && signal.aborted) {
         /*
@@ -402,6 +440,68 @@ async function run(row, deps = {}) {
  * repository/model here to keep Stage 6 dependency-injectable; tests
  * pass a `find_repo_pid_by_sip` stub via deps.
  */
+/*
+ * Start the byte-progress side-poll for an in-flight copy. Returns
+ * { stop() }. Every `cfg.progress_poll_ms` (0 disables), GET the
+ * curation copy-progress endpoint and persist what came back to the
+ * queue row:
+ *
+ *   200 + {bytes_sent, total_bytes}  → bytes_uploaded/total_bytes +
+ *                                      last_poll_at (live bar + heartbeat)
+ *   anything else (404, old build)   → last_poll_at only (heartbeat
+ *                                      still proves the worker is alive)
+ *
+ * Updates carry NO status → enrich_update writes no events, so a
+ * multi-hour copy doesn't flood the timeline. All failures are
+ * swallowed (log-only): progress display must never affect the copy's
+ * outcome. The interval is unref'd so a hung poll can't hold the
+ * process open on shutdown. Clients without copy_progress (older
+ * builds, test doubles) disable the poller entirely.
+ */
+function _start_progress_poller({ client, model, cfg, queue_id, aip_uuid }) {
+    const poll_ms = cfg.progress_poll_ms;
+    if (!poll_ms || poll_ms <= 0 || typeof client.copy_progress !== 'function') {
+        return { stop() {} };
+    }
+    let stopped = false;
+    let in_flight = false;
+    const timer = setInterval(async () => {
+        if (stopped || in_flight) return;
+        in_flight = true;
+        try {
+            const res = await client.copy_progress(aip_uuid);
+            if (stopped) return;
+            const progress = { last_poll_at: Date.now() };
+            const data = res.status === 200 && res.data && typeof res.data === 'object'
+                ? res.data
+                : null;
+            if (data && Number.isFinite(Number(data.bytes_sent))) {
+                progress.bytes_uploaded = Number(data.bytes_sent);
+                if (Number.isFinite(Number(data.total_bytes)) && Number(data.total_bytes) > 0) {
+                    progress.total_bytes = Number(data.total_bytes);
+                }
+            }
+            await model.update_queue({ id: queue_id }, progress);
+        } catch (err) {
+            log.debug({
+                event: 'aip_store_progress_poll_failed',
+                queue_id,
+                aip_uuid,
+                err: err.message,
+            });
+        } finally {
+            in_flight = false;
+        }
+    }, poll_ms);
+    if (timer.unref) timer.unref();
+    return {
+        stop() {
+            stopped = true;
+            clearInterval(timer);
+        },
+    };
+}
+
 async function _resolve_repo_pid(deps, row) {
     if (deps.find_repo_pid_by_sip) {
         return deps.find_repo_pid_by_sip(row.sip_uuid);

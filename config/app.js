@@ -890,6 +890,15 @@ function build() {
              */
             copy_timeout_ms: integer('AIP_STORE_COPY_TIMEOUT_MS', 60 * 60 * 1000),
             /*
+             * Cadence for the byte-progress side-poll that runs WHILE
+             * the synchronous /copy-to-wasabi call is in flight. Each
+             * poll GETs /aip/copy-progress/<uuid> (cheap file read on
+             * the curation side) and persists bytes to the queue row
+             * so the dashboard can render a live % for multi-hour
+             * copies. 0 disables the poller entirely.
+             */
+            progress_poll_ms: integer('AIP_STORE_PROGRESS_POLL_MS', 60_000),
+            /*
              * Presigned-URL TTL for dashboard downloads. Short by
              * default so a leaked URL has a small blast radius. 15
              * minutes is comfortable for a staff member kicking off
