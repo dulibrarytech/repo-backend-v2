@@ -1,33 +1,5 @@
 /*
- * DuHandleTool — minimal Handle.net write helper for repo-backend-v2.
- *
- * WHY THIS EXISTS
- *
- * repov2 talks to the handle server over its HTTP JSON API for everything
- * it can: resolution is public and works fine from Node. Writes cannot go
- * that way. The DU handle server at 130.253.239.32 exposes a reachable
- * write handler on port 8000 but serves no authentication mechanism —
- * /api/sessions returns a bare 403, HS_SECKEY Basic auth is not enabled,
- * and no WWW-Authenticate challenge is offered, so an unauthenticated PUT
- * comes back RC_AUTHENTICATION_NEEDED (402) with no way to satisfy it.
- * Admin operations are only available over the native binary protocol on
- * port 2641, which is how the retired Python service's hdl-genericbatch
- * calls have always worked.
- *
- * Rather than reimplement that binary protocol in Node — disproportionate,
- * and a poor place for subtle encoding bugs given these identifiers are
- * permanent — this delegates to the official client library for the write
- * path only.
- *
- * WHY NOT hdl-genericbatch
- *
- * genericbatch requires assembling batch-file TEXT containing the
- * credentials, which is precisely the injection surface the rewrite
- * removed (an unvalidated uuid carrying a newline could append arbitrary
- * directives under full prefix authority). This calls typed library
- * methods instead: there is no command text to inject into, and the
- * passphrase arrives on stdin so it is never in argv — visible to `ps` —
- * and never written to disk.
+ * DuHandleTool — minimal Handle.net write helper
  *
  * PROTOCOL — SINGLE OPERATION
  *
@@ -40,19 +12,6 @@
  *   out {"ok":true,"responseCode":1,"message":"SUCCESS"}
  *
  * ops: create | modify | delete
- *
- * "check" is a PRE-FLIGHT ONLY — key loads, prefix resolves, server reachable.
- * It does NOT prove the credential is accepted; see the comment on the case
- * below for why no non-mutating probe can. Credential acceptance is verified
- * by the create/delete round trip in scripts/verify_handle_auth.js --write.
- *
- * PROTOCOL — BATCH (NDJSON)
- *
- * A run costs ~8s when it is one operation per process: JVM start-up plus a
- * cold HandleResolver, which re-resolves 0.NA/<prefix> against the global
- * registry to locate the site before it can talk to the handle server. Doing
- * that 2,000 times for a bulk retarget would take hours, nearly all of it
- * repeated site discovery.
  *
  * Batch mode pays both costs once: one JVM, one resolver with a warm site
  * cache, one decrypted key. Input is newline-delimited JSON — a header line
@@ -68,11 +27,6 @@
  *   out  {"suffix":"<uuid>","op":"modify","ok":true,"responseCode":1,…}
  *        …one line per operation, flushed as it completes…
  *        {"summary":true,"total":3,"succeeded":2,"failed":1}
- *
- * Results stream as each operation finishes, so a long run is watchable and
- * a caller can checkpoint progress and resume. A failing operation is
- * reported and the batch CONTINUES — one bad handle must not abandon the
- * other 2,000.
  *
  * Exit status is 0 when everything succeeded, 1 otherwise; callers should
  * read responseCode rather than relying on exit status alone.
