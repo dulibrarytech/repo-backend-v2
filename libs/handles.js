@@ -84,30 +84,40 @@ function is_configured() {
 }
 
 /*
- * Should an ingest of this batch skip minting entirely?
+ * Is this batch (collection folder) marked as a test run?
  *
- * Test ingests run against production would otherwise mint a real,
- * permanent identifier under 10176. Cleaning one up afterwards is
- * deliberately hard: the prefix cannot be enumerated, and object state
- * cannot prove a handle was never public (soft_delete refuses published
- * objects, so every deleted row reads is_published=0 whether or not it was
- * live for years first). Not minting is the only cheap fix.
+ * Test ingests run against production would otherwise mint a real, permanent
+ * identifier under 10176. Cleaning one up afterwards is deliberately hard: the
+ * prefix cannot be enumerated, and object state cannot prove a handle was
+ * never public (soft_delete refuses published objects, so every deleted row
+ * reads is_published=0 whether or not it was live for years first). Not
+ * minting is the only cheap fix.
  *
- * Matching is on a batch-name prefix, case-insensitive, configured by
- * HANDLE_SKIP_BATCH_PREFIXES (default "test-"). An unnamed or PENDING batch
- * is NOT skipped — the absence of a name is not evidence of a test, and
- * silently withholding a handle from a real ingest is the worse error.
+ * Matching is on whole delimiter-separated TOKENS, case-insensitive, from
+ * HANDLE_SKIP_BATCH_TOKENS (default "test"). DU's convention puts the marker
+ * mid-name — "U358_LDT_TEST_Collection-resources_1204" — so a prefix rule
+ * misses it entirely, and a substring rule would wrongly catch
+ * "testament-papers" or "Latest-Acquisitions" and silently withhold their
+ * handles.
+ *
+ * The BATCH only. Package folder names become ArchivesSpace component ids
+ * during Make Digital Objects (they generate uri.txt), so they cannot carry a
+ * marker. An unnamed or PENDING batch is NOT skipped — the absence of a name
+ * is not evidence of a test, and silently withholding a handle from a real
+ * ingest is the worse error.
  */
 function is_skipped_batch(batch) {
     if (typeof batch !== 'string' || batch.trim() === '') return false;
     const cfg = app_config().handles;
-    const prefixes = (cfg.skip_batch_prefixes || '')
+    const tokens = (cfg.skip_batch_tokens || '')
         .split(',')
-        .map((p) => p.trim().toLowerCase())
+        .map((t) => t.trim().toLowerCase())
         .filter(Boolean);
-    if (prefixes.length === 0) return false;
-    const name = batch.trim().toLowerCase();
-    return prefixes.some((p) => name.startsWith(p));
+    if (tokens.length === 0) return false;
+
+    /* Split on anything that is not alphanumeric: _ - . space all delimit. */
+    const parts = batch.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    return parts.some((part) => tokens.includes(part));
 }
 
 function build_handle_url(uuid) {

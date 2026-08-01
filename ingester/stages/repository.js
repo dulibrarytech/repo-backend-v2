@@ -169,11 +169,16 @@ async function run(row, deps = {}) {
      * run against production would otherwise mint a real, permanent
      * identifier under the live prefix, and removing one afterwards is hard
      * on purpose: the prefix cannot be enumerated, and object state cannot
-     * prove a handle was never public. Batch-name prefixes come from
-     * HANDLE_SKIP_BATCH_PREFIXES (default "test-").
+     * prove a handle was never public.
+     *
+     * Matched on the BATCH (collection folder) only, as whole tokens — see
+     * libs/handles.is_skipped_batch. Package names cannot carry the marker:
+     * they become ArchivesSpace component ids during Make Digital Objects.
      */
     let handle_url = null;
-    const skip_mint = handles.is_skipped_batch && handles.is_skipped_batch(row.batch);
+    const skip_mint = Boolean(
+        handles.is_skipped_batch && handles.is_skipped_batch(row.batch)
+    );
     if (skip_mint) {
         log.info({
             event: 'handle_mint_skipped_test_batch',

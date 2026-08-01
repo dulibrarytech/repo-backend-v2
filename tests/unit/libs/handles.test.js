@@ -129,20 +129,41 @@ describe('libs/handles', () => {
      */
     describe('is_skipped_batch', () => {
         beforeEach(() => {
-            process.env.HANDLE_SKIP_BATCH_PREFIXES = 'test-,tmp-';
+            process.env.HANDLE_SKIP_BATCH_TOKENS = 'test,tmp';
             app_config._reset();
         });
 
-        it.each(['test-2026-07-31', 'TEST-Foo', 'tmp-scratch', '  test-padded  '])
-            ('skips %s', (batch) => {
-                expect(handles_module.is_skipped_batch(batch)).toBe(true);
-            });
+        /*
+         * DU's convention puts the marker mid-name, so this must match on
+         * whole tokens rather than a prefix. The first case is the real
+         * production test folder.
+         */
+        it.each([
+            'U358_LDT_TEST_Collection-resources_1204',
+            'U358_LDT_test_Collection-resources_1204',
+            'test-2026-07-31',
+            'Denver-Collection-TEST',
+            'a.test.folder',
+            'some tmp batch',
+            '  U358_TEST_padded  ',
+        ])('skips %s', (batch) => {
+            expect(handles_module.is_skipped_batch(batch)).toBe(true);
+        });
 
-        /* Prefix, not substring: a real collection must not be caught. */
-        it.each(['testament-papers', 'Denver-Test-1', 'attestation', 'real-batch'])
-            ('does not skip %s', (batch) => {
-                expect(handles_module.is_skipped_batch(batch)).toBe(false);
-            });
+        /*
+         * The substring trap. A naive `includes('test')` would silently
+         * withhold handles from every one of these real collection names.
+         */
+        it.each([
+            'testament-papers',
+            'Latest-Acquisitions',
+            'attestation_records',
+            'greatest_hits',
+            'U358_LDT_Collection-resources_1204',
+            'contest-entries',
+        ])('does not skip %s', (batch) => {
+            expect(handles_module.is_skipped_batch(batch)).toBe(false);
+        });
 
         /*
          * Absence of a name is not evidence of a test. Silently withholding a
@@ -155,29 +176,42 @@ describe('libs/handles', () => {
             });
 
         /*
+         * The marker is on the collection folder only. Package folder names
+         * become ArchivesSpace component ids during Make Digital Objects, so
+         * they cannot carry one — nothing here should ever read them.
+         */
+        it('is not applied to package names by the caller', () => {
+            /* documents intent: the stage passes row.batch, never row.package */
+            expect(handles_module.is_skipped_batch('test_B005.06.0185.0014.00001'))
+                .toBe(true);
+        });
+
+        /*
          * config's optional() treats '' as unset, so blanking the variable
          * restores the default rather than disabling the skip. That is the
          * safe direction — the failure mode of accidentally disabling it is a
          * permanent identifier — but it is surprising, so pin it.
          */
         it('falls back to the default when blanked, rather than disabling', () => {
-            process.env.HANDLE_SKIP_BATCH_PREFIXES = '';
+            process.env.HANDLE_SKIP_BATCH_TOKENS = '';
             app_config._reset();
-            expect(handles_module.is_skipped_batch('test-x')).toBe(true);
+            expect(handles_module.is_skipped_batch('U358_LDT_TEST_x')).toBe(true);
         });
 
-        /* To genuinely disable it, set a prefix nothing will match. */
-        it('can be disabled with a non-matching prefix', () => {
-            process.env.HANDLE_SKIP_BATCH_PREFIXES = '__never__';
+        /* To genuinely disable it, set a token nothing will match. */
+        it('can be disabled with a non-matching token', () => {
+            process.env.HANDLE_SKIP_BATCH_TOKENS = '__never__';
             app_config._reset();
-            expect(handles_module.is_skipped_batch('test-x')).toBe(false);
+            expect(handles_module.is_skipped_batch('U358_LDT_TEST_x')).toBe(false);
         });
 
-        it('defaults to test- when unset', () => {
-            delete process.env.HANDLE_SKIP_BATCH_PREFIXES;
+        it('defaults to "test" when unset', () => {
+            delete process.env.HANDLE_SKIP_BATCH_TOKENS;
             app_config._reset();
-            expect(handles_module.is_skipped_batch('test-x')).toBe(true);
-            expect(handles_module.is_skipped_batch('prod-x')).toBe(false);
+            expect(handles_module.is_skipped_batch('U358_LDT_TEST_Collection-resources_1204'))
+                .toBe(true);
+            expect(handles_module.is_skipped_batch('U358_LDT_Collection-resources_1204'))
+                .toBe(false);
         });
     });
 

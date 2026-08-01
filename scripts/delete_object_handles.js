@@ -4,7 +4,7 @@
 /*
  * Delete handles minted by ingest for objects that should never have had one
  * — in practice, test ingests run against production before
- * HANDLE_SKIP_BATCH_PREFIXES existed.
+ * HANDLE_SKIP_BATCH_TOKENS existed.
  *
  * WHY THIS IS DELIBERATELY AWKWARD TO USE
  *
