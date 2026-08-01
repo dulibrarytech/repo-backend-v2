@@ -479,8 +479,10 @@ describe('ingester/worker', () => {
         });
 
         it('a resting mid-pipeline row blocks any NEW package from starting', async () => {
-            // Previous package is between stages (e.g. metadata done,
-            // upload not yet claimed) — the next package must wait.
+            /*
+             * Previous package is between stages (e.g. metadata done,
+             * upload not yet claimed) — the next package must wait.
+             */
             await seed('QA_COMPLETE');
             await seed('PENDING');
             const seen = [];
@@ -542,8 +544,10 @@ describe('ingester/worker', () => {
             expect(seen).toHaveLength(2);
             expect(seen[0]).not.toBe(seen[1]);
 
-            // Halted packages step aside the same way: seed one halted
-            // mid-pipeline row — it must NOT block a new PENDING.
+            /*
+             * Halted packages step aside the same way: seed one halted
+             * mid-pipeline row — it must NOT block a new PENDING.
+             */
             await db_helper.reset_data();
             await seed('INGEST_HALTED');
             const halted_seen = [];
@@ -553,6 +557,96 @@ describe('ingester/worker', () => {
             await seed('PENDING');
             await w2.tick();
             expect(halted_seen).toHaveLength(1);
+        });
+    });
+
+    describe('stage 6 gate (AIP_STORE_SERIAL, the default)', () => {
+        /*
+         * 2026-07-31: one AIP copy at a time. Two concurrent large-AIP
+         * copies wedged AM Storage's download path (2×66GB-scale), so
+         * Stage 6 gets the same two-tier gate shape as the AM gate:
+         * in-memory dispatch cap + DB-side AIP_STORE_IN_PROGRESS count
+         * for the restart-invariant entry check.
+         */
+        function noop_stage(seen, name) {
+            return {
+                async run(row) {
+                    seen.push({ name, id: row.id, state: row.pipeline_state });
+                },
+            };
+        }
+
+        it('admits exactly one AIP_STORE_PENDING row per tick', async () => {
+            await seed('AIP_STORE_PENDING');
+            await seed('AIP_STORE_PENDING');
+            const seen = [];
+            const worker = create_worker({
+                stages: { AIP_STORE_PENDING: noop_stage(seen, 'aip_store') },
+            });
+            await worker.tick();
+            expect(seen).toHaveLength(1);
+        });
+
+        it('a resting AIP_STORE_IN_PROGRESS row blocks a NEW copy; the resume wins', async () => {
+            /*
+             * Post-restart shape: one copy was underway when the
+             * worker died (row rests at IN_PROGRESS in the DB), and
+             * another package has since reached Stage 6. The resume
+             * must be the one dispatched; the new copy waits.
+             */
+            await seed('AIP_STORE_PENDING');
+            await seed('AIP_STORE_IN_PROGRESS');
+            const seen = [];
+            const worker = create_worker({
+                stages: {
+                    AIP_STORE_PENDING: noop_stage(seen, 'aip_store_new'),
+                    AIP_STORE_IN_PROGRESS: noop_stage(seen, 'aip_store_resume'),
+                },
+            });
+            await worker.tick();
+            expect(seen).toHaveLength(1);
+            expect(seen[0].name).toBe('aip_store_resume');
+        });
+
+        it('the next copy starts once the in-progress one completes', async () => {
+            await seed('AIP_STORE_PENDING');
+            await seed('AIP_STORE_PENDING');
+            const seen = [];
+            const completing_stage = {
+                async run(row) {
+                    seen.push(row.id);
+                    await model.update_queue(
+                        { id: row.id },
+                        { status: 'AIP_STORE_COMPLETE', is_complete: 1 }
+                    );
+                },
+            };
+            const worker = create_worker({
+                stages: { AIP_STORE_PENDING: completing_stage },
+            });
+            await worker.tick();
+            expect(seen).toHaveLength(1);
+            await worker.tick();
+            expect(seen).toHaveLength(2);
+            expect(seen[0]).not.toBe(seen[1]);
+        });
+
+        it('AIP_STORE_SERIAL=false restores parallel Stage 6 (escape hatch)', async () => {
+            process.env.AIP_STORE_SERIAL = 'false';
+            app_config._reset();
+            try {
+                await seed('AIP_STORE_PENDING');
+                await seed('AIP_STORE_PENDING');
+                const seen = [];
+                const worker = create_worker({
+                    stages: { AIP_STORE_PENDING: noop_stage(seen, 'aip_store') },
+                });
+                await worker.tick();
+                expect(seen).toHaveLength(2);
+            } finally {
+                delete process.env.AIP_STORE_SERIAL;
+                app_config._reset();
+            }
         });
     });
 });

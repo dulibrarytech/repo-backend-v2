@@ -883,6 +883,17 @@ function build() {
              */
             enabled: boolean('AIP_STORE_ENABLED', false),
             /*
+             * One AIP copy at a time (default ON). Stage 6 sits
+             * outside the serial-pipeline gate, so with worker
+             * concurrency 2 two rows could fire /copy-to-wasabi
+             * simultaneously — two concurrent large-AIP downloads
+             * strained AM Storage badly enough to wedge its download
+             * path entirely (2026-07-31, 2×66GB-scale). Same gate
+             * shape as the AM-transfer gate. AIP_STORE_SERIAL=0
+             * restores parallel Stage 6.
+             */
+            serial: boolean('AIP_STORE_SERIAL', true),
+            /*
              * Wall-clock budget for the curation /copy-to-wasabi call.
              * Multi-GB AIPs take many minutes; default 60 min is
              * generous. Stage 6 records AIP_STORE_FAILED on timeout

@@ -104,10 +104,12 @@ const STAGE6_STATES = new Set(['AIP_STORE_PENDING', 'AIP_STORE_IN_PROGRESS']);
 const PIPELINE_STATES = new Set(
     Object.keys(STAGE_BY_STATE).filter((s) => !STAGE6_STATES.has(s))
 );
-/* Mid-pipeline = a package already in flight (everything but the
+/*
+ * Mid-pipeline = a package already in flight (everything but the
  * PENDING entry state). A halted/cancelled/terminal row is in NONE of
  * these — so a failed package steps aside and the batch keeps
- * flowing (user decision, 2026-07-30). */
+ * flowing (user decision, 2026-07-30). 
+ */
 const PIPELINE_MID_STATES = new Set(
     [...PIPELINE_STATES].filter((s) => s !== 'PENDING')
 );
@@ -204,6 +206,14 @@ function create_worker(deps = {}) {
      * the gate can't rely on the DB alone).
      */
     const pipeline_dispatched = new Set();
+    /*
+     * IDs of rows currently dispatched in a Stage 6 state — the
+     * in-memory half of the one-AIP-copy-at-a-time gate (see tick()).
+     * Same two-tier shape as the AM gate: this set caps concurrent
+     * dispatches in THIS worker; the DB-side AIP_STORE_IN_PROGRESS
+     * count closes the entry gate across restarts.
+     */
+    const stage6_dispatched = new Set();
 
     async function dispatch_one(row) {
         const stage = stages[row.pipeline_state];
@@ -221,6 +231,8 @@ function create_worker(deps = {}) {
         if (is_am) am_dispatched.add(row.id);
         const is_pipeline = PIPELINE_STATES.has(row.pipeline_state);
         if (is_pipeline) pipeline_dispatched.add(row.id);
+        const is_stage6 = STAGE6_STATES.has(row.pipeline_state);
+        if (is_stage6) stage6_dispatched.add(row.id);
         try {
             await stage.run(row, { signal: controller.signal });
         } catch (err) {
@@ -265,6 +277,7 @@ function create_worker(deps = {}) {
             abort_controllers.delete(row.id);
             if (is_am) am_dispatched.delete(row.id);
             if (is_pipeline) pipeline_dispatched.delete(row.id);
+            if (is_stage6) stage6_dispatched.delete(row.id);
         }
     }
 
@@ -326,6 +339,25 @@ function create_worker(deps = {}) {
                 : await model.count_rows_in_states([...AM_INSIDE_STATES]);
             const am_in_flight = am_dispatched.size;
             let am_admitted_this_tick = 0;
+            /*
+             * STAGE 6 GATE (2026-07-31, default ON): one AIP copy at a
+             * time. Stage 6 deliberately bypasses the serial-pipeline
+             * gate (it overlaps the next package), but two concurrent
+             * large-AIP copies proved able to wedge AM Storage's
+             * download path (2×66GB-scale). Two-tier, mirroring the AM
+             * gate: PENDING (a NEW copy) additionally requires zero
+             * rows resting at AIP_STORE_IN_PROGRESS in the DB — the
+             * restart-invariant "a copy is underway" signal — while
+             * IN_PROGRESS (resume) claims are capped only by this
+             * worker's in-flight set. AIP_STORE_SERIAL=0 restores
+             * parallel Stage 6.
+             */
+            const stage6_serial = app_config().aip_store.serial !== false;
+            const stage6_inside_db = stage6_serial
+                ? await model.count_rows_in_states(['AIP_STORE_IN_PROGRESS'])
+                : 0;
+            const stage6_in_flight = stage6_dispatched.size;
+            let stage6_admitted_this_tick = 0;
 
             /*
              * Claim up to `concurrency` rows whose state is in the
@@ -337,6 +369,12 @@ function create_worker(deps = {}) {
             const claim_order = serial ? SERIAL_CLAIM_ORDER : ready_states();
             for (const state of claim_order) {
                 if (claimed.length >= cfg.concurrency) break;
+                if (stage6_serial && STAGE6_STATES.has(state)) {
+                    /* One Stage 6 dispatch at a time in this worker. */
+                    if (stage6_in_flight + stage6_admitted_this_tick > 0) continue;
+                    /* A NEW copy waits for any in-DB copy to finish. */
+                    if (state === 'AIP_STORE_PENDING' && stage6_inside_db > 0) continue;
+                }
                 if (serial && PIPELINE_STATES.has(state)) {
                     /* One stage-1–5 dispatch at a time, period. */
                     if (pipeline_in_flight + pipeline_admitted_this_tick > 0) continue;
@@ -383,6 +421,11 @@ function create_worker(deps = {}) {
                     if (abort_controllers.has(row.id)) continue;
                     claimed.push(row);
                     if (AM_ACTIVE_STATES.has(state)) am_admitted_this_tick++;
+                    if (stage6_serial && STAGE6_STATES.has(state)) {
+                        /* One Stage 6 admit per tick, full stop. */
+                        stage6_admitted_this_tick++;
+                        break;
+                    }
                     if (serial && PIPELINE_STATES.has(state)) {
                         /* One stage-1–5 admit per tick, full stop. */
                         pipeline_admitted_this_tick++;
