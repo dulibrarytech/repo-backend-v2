@@ -39,7 +39,7 @@ const JOB_TYPES = new Set([
      * 003-ingested retirement (phase 1): with the local archive copy
      * retired, a silent Wasabi failure would leave the batch source
      * unarchived, so the failure must be staff-visible, not buried
-     * in the COMPLETE event payload. See repo/INGESTED_RETIREMENT_PLAN.md.
+     * in the COMPLETE event payload. See repo/notes/INGESTED_RETIREMENT_PLAN.md.
      */
     'archive_to_wasabi',
 ]);

@@ -2,36 +2,25 @@
 
 /*
  * In-process ingest worker.
- * 
- * Mirrors the shape of metadata/worker.js and indexer/worker.js so
- * operators only have to learn one pattern:
- * 
+ *
  *   - one instance per process (single boot/stop lifecycle)
- *   - polls the queue every `poll_ms`, claims up to `concurrency`
- *     PENDING rows per tick
+ *   - polls the queue every `poll_ms`, claims up to `concurrency` rows
+ *     per tick by listing the active states
  *   - fans out the stage work in parallel up to `concurrency`
  *   - graceful stop drains in-flight work for `timeout_ms`
- * 
- * Differences vs. the metadata worker:
- *   - dispatches by `pipeline_state`, not status='PENDING' alone. The
- *     ingest queue has many entry/resume states (PENDING, QA_COMPLETE,
- *     UPLOAD_COMPLETE, etc.); each maps to a stage.
- *   - each row gets its own AbortSignal so graceful stop can cancel
- *     long polls (stage 2's upload-status, stage 3's transfer-status)
- *     mid-flight.
- *   - tick claims work via a single status-aware SELECT (claim_for_run
- *     in the model — to be added later) rather than the metadata
- *     worker's "claim N PENDING + mark IN_PROGRESS" pattern. For now
- *     (Phase 3a) we claim by listing the active states.
- * 
+ *
+ * Dispatches by `pipeline_state` rather than status='PENDING' alone:
+ * the ingest queue has many entry/resume states, each mapping to a
+ * stage. Each row gets its own AbortSignal so graceful stop can cancel
+ * a stage's long poll mid-flight.
+ *
  * Resume on boot:
- *   The model's reset_orphaned() is for transitively-running states
+ *   The model's reset_orphaned() covers transitively-running states
  *   (STARTING, REPLICATING_PACKAGE, etc. — see ingester/model.js).
  *   Polling states (UPLOADING, TRANSFER_IN_PROGRESS, etc.) are NOT
- *   reset; the worker simply picks them back up at the same stage
- *   and re-runs the poll. Idempotent by construction — the QA /
- *   AM upstream returns the same status whether polled once or
- *   a thousand times.
+ *   reset; the worker picks them back up at the same stage and re-runs
+ *   the poll, which is idempotent — the QA/AM upstream returns the same
+ *   status however many times it is polled.
  */
 
 const app_config = require('../config/app');
@@ -57,12 +46,10 @@ const aip_store_stage = require('./stages/aip_store');
  *   - UPLOAD_COMPLETE / TRANSFER_STARTED / TRANSFER_IN_PROGRESS → stage 3
  *   - TRANSFER_COMPLETE / INGEST_IN_PROGRESS / INGEST_COMPLETE /
  *     WAITING_FOR_DURACLOUD → stage 4
- *   - MASTER_OBJECT_DATA_SAVED / METADATA_PROCESSED /
- *     CREATING_REPOSITORY_RECORD → stage 5
- *   - AIP_STORE_PENDING / AIP_STORE_IN_PROGRESS → stage 6 (preservation
- *     copy to Wasabi). Only fires when AIP_STORE_ENABLED is on;
- *     otherwise Stage 5 jumps straight to COMPLETE+is_complete=1 and
- *     Stage 6 never enters the picture.
+ *   - METADATA_PROCESSED / CREATING_REPOSITORY_RECORD → stage 5
+ *   - AIP_STORE_PENDING / AIP_STORE_IN_PROGRESS → stage 6, only when
+ *     AIP_STORE_ENABLED is on; otherwise stage 5 goes straight to
+ *     COMPLETE + is_complete=1.
  */
 const STAGE_BY_STATE = {
     PENDING: process_metadata_stage,
@@ -92,13 +79,10 @@ function ready_states() {
 }
 
 /*
- * Serial-pipeline sets (2026-07-30). Stages 1–5 form THE pipeline for
- * serialization purposes: a package must clear metadata → upload →
- * AM transfer → AM ingest → repository record before the next package
- * starts. Stage 6 (AIP copy to Wasabi) is deliberately OUTSIDE the
- * serial window — it can take hours for large packages and touches
- * only Wasabi, so it runs in the background while the next package
- * proceeds (user decision, 2026-07-30).
+ * Serial-pipeline sets. Stages 1–5 are the serialized pipeline: a
+ * package must clear metadata → upload → AM transfer → AM ingest →
+ * repository record before the next package starts. Stage 6 sits
+ * outside the serial window and runs in the background.
  */
 const STAGE6_STATES = new Set(['AIP_STORE_PENDING', 'AIP_STORE_IN_PROGRESS']);
 const PIPELINE_STATES = new Set(

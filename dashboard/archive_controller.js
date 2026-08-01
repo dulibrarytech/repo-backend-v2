@@ -3,7 +3,7 @@
 /*
  * Admin: Batch Backups (Wasabi) browser — read-only browse + per-file
  * download over the Wasabi batch archive (the retired 003-ingested
- * folders' replacement; design in repo/WASABI_ARCHIVE_BROWSER_PLAN.md).
+ * folders' replacement; design in repo/notes/WASABI_ARCHIVE_BROWSER_PLAN.md).
  *
  * Routes mounted at /dashboard/admin/archive/* (see dashboard/routes.js;
  * all gated on manage_ingest):

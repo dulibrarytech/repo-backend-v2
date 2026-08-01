@@ -2,12 +2,8 @@
 
 /*
  * Dashboard controllers. All async. Each handler either:
- *   - renders a full page (returns layout.ejs wrapping a body view), or
+ *   - renders a full page (layout.ejs wrapping a body view), or
  *   - renders a partial (just the inner HTML — HTMX swaps it in).
- * 
- * The two-render pattern keeps the code tight: render the inner view
- * to string with `app.render`, then render layout.ejs passing that
- * string as `body`.
  */
 
 const validator = require('validator');
@@ -30,10 +26,10 @@ const fs = require('node:fs');
 const { UnauthorizedError, ValidationError } = require('../libs/errors');
 
 /*
- * Decode a `next=` value that the sanitize middleware has already
- * HTML-entity-encoded (slashes → `&#x2F;` etc.), then verify it's a safe
- * same-origin path — must start with `/` but NOT `//` (which would be a
- * protocol-relative redirect to another host).
+ * Decode a `next=` value that the sanitize middleware has HTML-entity-encoded
+ * (slashes → `&#x2F;` etc.) and return it only if it is a safe same-origin
+ * path: starts with `/`, not `//` (protocol-relative), no CR/LF. Otherwise
+ * returns `fallback`.
  */
 function safe_next(raw, fallback) {
     if (typeof raw !== 'string' || raw.length === 0) return fallback;
@@ -83,13 +79,9 @@ function trigger_toast(res, level, message) {
 }
 
 /*
- * Coerce a query-string value to a string. Express's qs parser
- * produces a string for a single occurrence, an array of strings
- * for repeated keys (?q=a&q=b → ['a','b']), and undefined when
- * absent. We pick the last value on array (matches the common
- * "last wins" convention) and fall back to '' on undefined/null.
- * Mirrors dashboard/aip_controller.js:_str — kept identical so a
- * future refactor can lift the pair to libs/.
+ * Coerce a query-string value to a string: last value of an array
+ * (?q=a&q=b → 'b'), '' for undefined/null, String(v) otherwise.
+ * Mirrors dashboard/aip_controller.js:_str.
  */
 function _last_string(v) {
     if (v === undefined || v === null) return '';
@@ -104,10 +96,7 @@ function _last_string(v) {
  */
 async function login_page(req, res) {
     const cfg = app_config();
-    /*
-     * Login uses its own standalone shell — no sidebar/header from
-     * layout.ejs. Render directly.
-     */
+    // Standalone shell — no sidebar/header from layout.ejs.
     res.render('dashboard/login_shell', {
         title: 'Sign in — Repo Dashboard',
         app_path: cfg.path,
@@ -168,11 +157,7 @@ async function logout(req, res) {
         }
     }
     jwt.clear_cookie(res);
-    /*
-     * When SSO_LOGOUT_URL is configured, redirect to the IdP's central
-     * signout so the user is logged out everywhere, not just here.
-     * Otherwise fall back to our local login page.
-     */
+    // SSO_LOGOUT_URL when configured (central IdP signout), else the local login page.
     const target = cfg.sso.logout_url || `${cfg.path}/dashboard/login`;
     return res.redirect(303, target);
 }
@@ -183,12 +168,9 @@ async function logout(req, res) {
  * ----------------------------------------------------------------------------
  */
 /*
- * TEMPORARY (2026-07-24) v1-familiar nav rollout: the home page renders
- * the STATS view (v1 staff landed on a stats dashboard, so this reads
- * familiar). The original home view (dashboard/home + its two HTMX
- * partials below) is untouched and still routed — restore by swapping
- * this handler back to render 'dashboard/home' (see git history) and
- * re-enabling nav_show.stats in partials/sidebar.ejs.
+ * Renders the STATS view, not dashboard/home. TEMPORARY — see
+ * repo/notes/REPOV2_CODE_NOTES.md for the restore steps. Throws
+ * UnauthorizedError and clears the cookie if the token's user is deactivated.
  */
 async function home_page(req, res) {
     const user = await auth_model.find_by_id(req.user.sub);
@@ -210,11 +192,7 @@ async function home_page(req, res) {
         per_year,
         fmt_count: format_count,
         fmt_bytes: format_bytes,
-        /*
-         * Carry the degraded-services banner over from the old home
-         * view — it's staff's only passive signal that a backing
-         * service (ASpace / DuraCloud / …) is down.
-         */
+        // Degraded-services banner: staff's passive signal that a backing service is down.
         show_services_banner: true,
     });
 }
@@ -231,24 +209,15 @@ async function home_recent_ingests_partial(req, res) {
 
 /*
  * ----------------------------------------------------------------------------
- * STATS — dedicated /dashboard/stats page (v1 dashboard parity).
- * 
- * 12-card grid + ingests-per-year bar chart. The DB-derived cards
- * and the chart render server-side at page load. The 3 DuraCloud
- * usage cards lazy-load via HTMX after paint, because each one is
- * a 1-3s round-trip to AM's storage API — gating the whole page
- * on that would be bad UX.
+ * STATS
  * ----------------------------------------------------------------------------
  */
 const stats_duracloud = require('../stats/duracloud');
 const { format_bytes, format_count } = require('../libs/format');
 
 /*
- * TEMPORARY (2026-07-24): while the stats view is the home page the
- * dedicated /dashboard/stats URL bounces to /dashboard/ so bookmarks
- * keep working without a second URL for the same content (and without
- * a sidebar state where nothing highlights — the Stats icon is hidden).
- * Restore the original render (git history) when the old home returns.
+ * Redirects /dashboard/stats to /dashboard/, which renders the stats view.
+ * TEMPORARY — see repo/notes/REPOV2_CODE_NOTES.md.
  */
 async function stats_page(req, res) {
     const cfg = app_config();
@@ -275,12 +244,7 @@ async function collections_page(req, res) {
         title: 'Manage Collections — Digital Archives Manager @ DU',
         filters: {
             q: req.query.q || '',
-            /*
-             * Default the staff collections view to title A–Z (the initial
-             * /collections/list load below carries no sort param, so the
-             * partial defaults to 'title' too). The API/model default stays
-             * 'count'; this is a dashboard-only default.
-             */
+            // Dashboard default is title A–Z; the model/API default stays 'count'.
             sort: req.query.sort || 'title',
         },
     });
@@ -304,10 +268,7 @@ async function collections_list_partial(req, res) {
 
 async function collection_detail_page(req, res) {
     const collection = await collections_model.get_collection(req.params.pid);
-    /*
-     * Nested sub-collections (if any) render in their own section, separate
-     * from the member-object list.
-     */
+    // Rendered in their own section, separate from the member-object list.
     const sub_collections = await collections_model.sub_collections(req.params.pid);
     render_page(req, res, 'dashboard/collection_detail', {
         page: 'collection_detail',
@@ -323,9 +284,9 @@ async function collection_detail_page(req, res) {
 }
 
 /*
- * "Add objects" page for a collection — shell only. Live HTMX search +
- * pagination (mirroring the Objects table) load into #add-objects-results via
- * collection_add_objects_list; selected pids POST to /collections/:pid/members.
+ * "Add objects" page for a collection — shell only. Search results and
+ * pagination load into #add-objects-results via collection_add_objects_list;
+ * selected pids POST to /collections/:pid/members.
  */
 async function collection_add_objects_page(req, res) {
     const collection = await collections_model.get_collection(req.params.pid);
@@ -340,10 +301,9 @@ async function collection_add_objects_page(req, res) {
 }
 
 /*
- * Results partial for the Add-objects picker. Live search + pagination, same as
- * the objects table. Excludes collections AND objects already in this
- * collection at the SQL layer, so the total + page math are accurate (the
- * earlier post-fetch filter could under-count a page and capped results at 25).
+ * Results partial for the Add-objects picker. Excludes collections and objects
+ * already in this collection at the SQL layer, so the total and page math stay
+ * accurate. 25 per page.
  */
 async function collection_add_objects_list(req, res) {
     const collection = await collections_model.get_collection(req.params.pid);
@@ -358,8 +318,8 @@ async function collection_add_objects_list(req, res) {
     });
     const candidates = projection.enrich_all(result.items);
     /*
-     * Resolve each candidate's CURRENT collection (is_member_of_collection holds
-     * a PID, not a name) so the picker can show it by title. One batch query.
+     * is_member_of_collection holds a PID, not a name — resolve the candidates'
+     * current collections to titles in one batch query for display.
      */
     const current_titles = await collections_model.titles_by_pids(
         candidates.map((o) => o.is_member_of_collection)
@@ -412,16 +372,15 @@ async function collection_delete(req, res) {
 
 /*
  * Modal to move/re-parent a collection. Lists the collections it may be moved
- * under (excludes itself + its descendants → no cycles) plus a "top level"
- * option. Loaded into #modal-content via HTMX.
+ * under (excludes itself and its descendants) plus a "top level" option.
+ * Loaded into #modal-content via HTMX.
  */
 async function collection_move_form(req, res) {
     const collection = await collections_model.get_collection(req.params.pid);
     const parents = await collections_model.eligible_parents(req.params.pid);
     /*
-     * Normalize the current parent: a real parent is a UUID pid; legacy
-     * top-level markers ('codu:root', '', null) collapse to '' so the modal
-     * pre-selects the "Top level" option.
+     * A real parent is a UUID pid; legacy top-level markers ('codu:root', '',
+     * null) collapse to '' so the modal pre-selects "Top level".
      */
     const raw_parent = collection.is_member_of_collection || '';
     const current_parent = validator.isUUID(raw_parent) ? raw_parent : '';
@@ -474,18 +433,14 @@ async function collection_new_page(req, res) {
 }
 
 /*
- * Create a collection (top-level or sub) bound to an ArchivesSpace RESOURCE
- * URI, via the same provisioning the ingest gate uses. On success → redirect
- * to the new collection's detail; on error / already-exists → re-render the
- * form with the message.
+ * Create a collection (top-level or sub) bound to an ArchivesSpace URI, via the
+ * same provisioning the ingest gate uses. On success redirects to the new
+ * collection's detail; on error or already-exists re-renders the form with the
+ * message.
  */
 async function collection_create(req, res) {
     const dashboard_base = `${app_config().path}/dashboard`;
-    /*
-     * The global body sanitizer (libs/sanitize.js) HTML-escapes '/', so a
-     * pasted URI arrives as "&#x2F;repositories&#x2F;…". Unescape before we
-     * match. We accept either form below (bare ID or full URI).
-     */
+    // The body sanitizer HTML-escapes '/', so a pasted URI needs unescaping first.
     const raw = validator.unescape((_last_string(req.body.uri) || '').trim());
     const parent_pid = _last_string(req.body.parent_collection_pid) || '';
     const parent = parent_pid
@@ -509,12 +464,10 @@ async function collection_create(req, res) {
         return reject('The parent collection could not be found.');
     }
     /*
-     * Require a FULL ArchivesSpace URI. Staff bind collections to either a
-     * resource OR an archival_object (both are used as ASpace "collections"),
-     * so a bare numeric ID is ambiguous and no longer accepted — the URI's
-     * type segment is what disambiguates the two. provision_collection fetches
-     * the URI generically (get_record doesn't care which kind it is), and the
-     * ingest path already provisions collections from archival_object URIs.
+     * Accepts a full ArchivesSpace URI only, of either form:
+     *   /repositories/<n>/resources/<n>
+     *   /repositories/<n>/archival_objects/<n>
+     * A bare numeric ID is rejected.
      */
     let uri;
     if (
@@ -537,7 +490,7 @@ async function collection_create(req, res) {
         return reject(result.error);
     }
     if (!result.created) {
-        // One live collection per resource URI (unique index). It already exists.
+        // One live collection per URI (unique index).
         return reject(
             `A collection bound to ${uri} already exists — open it from the Collections list.`
         );
@@ -564,16 +517,7 @@ async function objects_page(req, res) {
 }
 
 async function objects_table_partial(req, res) {
-    /*
-     * Defensive coercion: Express parses repeated query keys as an
-     * array (e.g. ?q=&q=foo → ['', 'foo']). The objects-table view
-     * tries hard not to send duplicates (pagination URL strips
-     * filters and lets hx-include carry them — see partials/objects_
-     * table.ejs pagination comment), but a hand-crafted URL or a
-     * misbehaving extension could still send one. Last-wins matches
-     * what callers usually mean by a duplicated key. Same pattern
-     * already in place in dashboard/aip_controller.js.
-     */
+    // Repeated query keys arrive as arrays; _last_string collapses them last-wins.
     const q_raw = _last_string(req.query.q);
     const is_published_raw = _last_string(req.query.is_published);
     const collection_raw = _last_string(req.query.collection);
@@ -582,18 +526,9 @@ async function objects_table_partial(req, res) {
 
     const q = q_raw.trim();
     /*
-     * Default behavior: hide soft-deleted rows. Staff who need to
-     * audit deleted objects can opt in explicitly via the URL param
-     * (`?is_active=0`) — there's no UI filter for it since the
-     * common workflow doesn't need one. This replaces an earlier
-     * narrower fix that only hid soft-deleted rows under the
-     * "Unpublished" filter; the universal default is the cleaner
-     * behavior because conflating "not yet published" with
-     * "removed" rarely makes sense in any view.
-     * 
      * is_active_raw='1' → show only active   (explicit)
-     * is_active_raw='0' → show only deleted  (explicit opt-in for audit)
-     * is_active_raw=''  → default to active  (was: undefined → show all)
+     * is_active_raw='0' → show only deleted  (audit opt-in, URL param only)
+     * is_active_raw=''  → show only active   (default)
      */
     const is_active_filter =
         is_active_raw === '1'
@@ -612,22 +547,14 @@ async function objects_table_partial(req, res) {
                 : is_published_raw === '0'
                   ? false
                   : undefined,
-        /*
-         * is_active follows the is_published pattern. The collection
-         * detail page passes ?is_active=1 to hide soft-deleted members.
-         * The flat Objects page leaves it undefined ("show everything")
-         * EXCEPT when the user picks "Unpublished" — see above.
-         */
+        // Always a boolean — never undefined. See is_active_filter above.
         is_active: is_active_filter,
     };
 
     /*
-     * Recent-ingests window: objects created in the last N days. Threaded
-     * from the Recent Ingests view (?recent_days=30) so it can reuse this
-     * table (object_row actions, RBAC, pagination) instead of a parallel
-     * implementation. Cutoff is the 'YYYY-MM-DD HH:MM:SS' UTC format the
-     * `created` TIMESTAMP stores (see repository/model.list); capped at a
-     * year. Only the list path honors it (the Recent view has no q box).
+     * ?recent_days=N limits to objects created in the last N days, capped at
+     * 365. The cutoff is formatted as the 'YYYY-MM-DD HH:MM:SS' UTC string the
+     * `created` TIMESTAMP stores (see repository/model.list).
      */
     const recent_days = Number.parseInt(_last_string(req.query.recent_days), 10);
     if (Number.isFinite(recent_days) && recent_days > 0) {
@@ -636,26 +563,15 @@ async function objects_table_partial(req, res) {
             .slice(0, 19)
             .replace('T', ' ');
     }
-    /*
-     * Collection-detail member list passes this so nested sub-collections
-     * don't appear among the parent's member objects.
-     */
+    // Collection-detail member list sets this to keep sub-collections out of the rows.
     if (_last_string(req.query.exclude_collections) === '1') {
         common.exclude_collections = true;
     }
 
-    /*
-     * When `q` is set, route through the search model (LIKE across
-     * indexed columns). Otherwise the plain repository.list — cheap
-     * index scan, no text match.
-     */
+    // With `q`: search model (LIKE across indexed columns). Without: plain index scan.
     const result = q ? await search_model.search({ ...common, q }) : await repo_model.list(common);
 
-    /*
-     * Enrich each row with title (parsed from display_record) and drop
-     * the raw display_record blob from the projection. Keeps the table
-     * rich without shipping ~3KB JSON per row to the browser.
-     */
+    // Adds title (parsed from display_record) and drops the raw display_record blob.
     const items = projection.enrich_all(result.items);
 
     render_partial(req, res, 'dashboard/partials/objects_table', {
@@ -690,26 +606,19 @@ async function objects_suppress(req, res) {
 }
 
 async function objects_delete(req, res) {
-    /*
-     * delete_reason flows through from the confirmation modal's
-     * textarea. Required — model throws ValidationError if missing.
-     */
+    // From the confirmation modal's textarea. Required — model throws if missing.
     const delete_reason = req.body && req.body.delete_reason;
-    /*
-     * Audit actor: "First Last (du_id)" so the AM admin can identify who
-     * initiated the delete by name, with the du_id as the unambiguous key.
-     */
+    // Audit actor, "First Last (du_id)".
     const actor = await user_model.actor_label(req.user);
     const result = await repo_model.soft_delete(req.params.pid, {
         delete_reason,
         actor,
     });
     /*
-     * Combine three HTMX signals into one header:
-     *   modal:close  — dashboard.js dismisses the confirmation modal
-     *   toast        — surfaces success or AM-failure warning
+     * Three HTMX signals in one header:
+     *   modal:close     — dashboard.js dismisses the confirmation modal
+     *   toast           — success, or a warning when the AM call failed
      *   objects:refresh — table re-fetches so the deleted row drops
-     *                     even if the modal swapped the wrong target
      */
     const am_failed = result.am && !result.am.ok;
     const toast = am_failed
@@ -728,18 +637,14 @@ async function objects_delete(req, res) {
             'objects:refresh': { affected: 1, kind: 'delete' },
         })
     );
-    /*
-     * Return empty HTML so hx-target=#object-<pid> + hx-swap=outerHTML
-     * removes the row visually if the page is listening to that target.
-     */
+    // Empty body so hx-target=#object-<pid> + hx-swap=outerHTML removes the row.
     res.set('Content-Type', 'text/html').send('');
 }
 
 /*
- * Confirmation modal for a single object delete. Renders the modal
- * body with the object's title + a required reason textarea. The
- * modal's form POSTs back to /objects/:pid (DELETE method via
- * hx-delete) with the reason in the body.
+ * Confirmation modal for a single object delete: the object's title plus a
+ * required reason textarea. The form hx-deletes back to /objects/:pid with the
+ * reason in the body. Falls back to a placeholder title if the row is gone.
  */
 async function objects_delete_confirm(req, res) {
     const pid = req.params.pid;
@@ -755,16 +660,14 @@ async function objects_delete_confirm(req, res) {
 /*
  * ----------------------------------------------------------------------------
  * BULK ACTIONS
- * 
- * All three multi-select endpoints share the same input contract:
- *   - body.pids may be a comma-separated string (HTMX form submit) OR
- *     a JSON array. Both forms get normalized to an array of strings
- *     before the model call.
- *   - body.target_url (optional) — when set, after the bulk action
- *     completes we re-fetch THAT URL via HX-Trigger so the table refreshes
- *     in place. We don't render a list partial here because the caller
- *     could be on the Objects page OR the collection detail page, and the
- *     query params (filters, page, page_size) live on the client.
+ *
+ * All three multi-select endpoints share one input contract:
+ *   - body.pids: a comma-separated string (HTMX form submit) or a JSON array.
+ *     Both are normalized to an array of strings before the model call.
+ *   - body.target_url (optional): re-fetched via HX-Trigger once the action
+ *     completes, so the caller's table refreshes in place. No list partial is
+ *     rendered here — the caller may be on the Objects page or a collection
+ *     detail page, and its filters/page/page_size live on the client.
  * ----------------------------------------------------------------------------
  */
 function parse_pid_list(raw) {
@@ -783,10 +686,7 @@ async function objects_bulk_action(req, res, kind) {
     if (pids.length === 0) {
         throw new ValidationError('Select at least one object');
     }
-    /*
-     * Audit actor: "First Last (du_id)" — same label the single-delete and
-     * API paths stamp, so the AM admin sees a consistent "Deleted by ...".
-     */
+    // Audit actor, "First Last (du_id)" — same label the single-delete path stamps.
     const actor = await user_model.actor_label(req.user);
 
     let result;
@@ -798,10 +698,7 @@ async function objects_bulk_action(req, res, kind) {
         result = await repo_model.bulk_suppress(pids);
         verb = 'suppressed';
     } else if (kind === 'delete') {
-        /*
-         * delete_reason required — model throws ValidationError if
-         * missing. Same reason text applies to every pid in the batch.
-         */
+        // Required; the same reason text applies to every pid in the batch.
         const delete_reason = req.body && req.body.delete_reason;
         result = await repo_model.bulk_soft_delete(pids, { delete_reason, actor });
         verb = 'deleted';
@@ -809,11 +706,7 @@ async function objects_bulk_action(req, res, kind) {
         throw new ValidationError(`Unknown bulk action: ${kind}`);
     }
 
-    /*
-     * Compose the toast. If any per-row AM call failed during a
-     * bulk delete, downgrade success → warning so staff knows to
-     * chase AM in the Storage Service UI.
-     */
+    // A bulk delete with any failed per-row AM call downgrades success → warning.
     let level = 'success';
     let message = `${result.affected} object${result.affected === 1 ? '' : 's'} ${verb}.`;
     if (kind === 'delete' && result.am_failed > 0) {
@@ -826,16 +719,9 @@ async function objects_bulk_action(req, res, kind) {
     }
 
     /*
-     * HX-Trigger combines: toast + a custom event the listing region
-     * listens for (`objects:refresh`) to re-fetch the current view +
-     * a `modal:close` so the confirmation modal dismisses after a
-     * bulk submit. The Objects page wires
-     * `hx-trigger="load, objects:refresh from:body"` on #objects-table;
-     * the collection detail page does the same.
-     * 
-     * modal:close is harmless when no modal is open (publish/suppress
-     * come from row buttons, not a modal) — the dashboard.js handler
-     * no-ops when it can't find an open modal instance.
+     * modal:close + toast + objects:refresh. Both the Objects page and the
+     * collection detail page wire `hx-trigger="load, objects:refresh from:body"`
+     * on their table. modal:close is a no-op when no modal is open.
      */
     res.set(
         'HX-Trigger',
@@ -845,7 +731,7 @@ async function objects_bulk_action(req, res, kind) {
             'objects:refresh': { affected: result.affected, kind },
         })
     );
-    // Return 204 — the toast + refresh trigger does the visible work.
+    // 204 — the toast + refresh trigger does the visible work.
     res.status(204).end();
 }
 
@@ -860,9 +746,8 @@ async function objects_bulk_delete(req, res) {
 }
 
 /*
- * Delete confirmation modal — server renders the modal body listing
- * the selected objects' titles so the user sees what they're about to
- * nuke. The modal's submit button POSTs back to objects_bulk_delete.
+ * Bulk-delete confirmation modal — lists the selected objects' titles. Its
+ * submit button POSTs back to objects_bulk_delete.
  */
 async function objects_bulk_delete_confirm(req, res) {
     const pids = parse_pid_list(req.body && req.body.pids);
@@ -870,9 +755,8 @@ async function objects_bulk_delete_confirm(req, res) {
         throw new ValidationError('Select at least one object');
     }
     /*
-     * Fetch titles for the modal. Cheap — bounded at MAX_BULK_PIDS.
-     * We deliberately tolerate misses (pid not found / soft-deleted
-     * already) so the modal still renders if the list goes stale.
+     * Bounded at MAX_BULK_PIDS. Misses (pid not found, already soft-deleted)
+     * become a placeholder row so the modal still renders on a stale list.
      */
     const items = [];
     for (const pid of pids.slice(0, repo_model.MAX_BULK_PIDS)) {
@@ -890,9 +774,8 @@ async function objects_bulk_delete_confirm(req, res) {
 }
 
 /*
- * Scope-based collection actions: publish or suppress every active
- * non-collection member of a collection in one UPDATE. Triggered by
- * header buttons on the collection-detail page.
+ * Publish or suppress every active non-collection member of a collection in one
+ * UPDATE. Triggered by header buttons on the collection-detail page.
  */
 async function collection_bulk_publish(req, res) {
     const result = await collections_model.publish_members(req.params.pid);
@@ -926,19 +809,15 @@ async function collection_bulk_suppress(req, res) {
 
 /*
  * Metadata modal — renders the inner ASpace record from display_record.
- * 
- * The `display_record` longtext column actually nests two layers: an
- * outer envelope with denormalized lookup fields (pid, handle,
- * thumbnail, is_member_of_collection, abstract, etc.) plus a key called
- * `display_record` whose value is the real ASpace archival_object /
- * resource record (title, uri, identifiers, dates, extents, subjects,
- * notes, names, parts, etc.).
- * 
- * Staff only care about the ASpace record. The wrapper fields are
- * already visible elsewhere on the row, so we drill into the nested
- * `display_record` and render its contents at the modal's top level.
- * If the row doesn't have a nested record (legacy/incomplete data), we
- * fall back to the outer envelope so the modal isn't empty.
+ *
+ * The `display_record` longtext column nests two layers: an outer envelope of
+ * denormalized lookup fields (pid, handle, thumbnail, is_member_of_collection,
+ * abstract, …) containing a `display_record` key whose value is the ASpace
+ * archival_object / resource record (title, uri, identifiers, dates, extents,
+ * subjects, notes, names, parts, …).
+ *
+ * Renders the nested record at the modal's top level, falling back to the outer
+ * envelope when the row has no nested record (legacy/incomplete data).
  */
 async function object_metadata_modal(req, res) {
     const row = await repo_model.get(req.params.pid);
@@ -947,10 +826,9 @@ async function object_metadata_modal(req, res) {
     const nested = outer && typeof outer.display_record === 'object' ? outer.display_record : null;
     const data = nested && Object.keys(nested).length > 0 ? nested : outer;
     /*
-     * Skip empty fields: only render display_record keys with a non-empty
-     * value (blank strings, empty/all-empty arrays + objects are dropped).
-     * Kaltura entry ids are rendered per-part by metadata_field.ejs (read
-     * straight off parts[].kaltura_id), so no extra computation here.
+     * Only keys with a non-empty value; blank strings and empty/all-empty
+     * arrays and objects are dropped. Kaltura entry ids are rendered per-part
+     * by metadata_field.ejs straight off parts[].kaltura_id.
      */
     const fields = Object.keys(data || {}).filter((k) => !projection.is_empty_value(data[k]));
     render_partial(req, res, 'dashboard/partials/object_metadata_modal', {
@@ -963,18 +841,14 @@ async function object_metadata_modal(req, res) {
 /*
  * ----------------------------------------------------------------------------
  * THUMBNAIL UPLOAD
- * 
- * Two endpoints work together:
- * 
- *   GET  /objects/:pid/thumbnail/form  → renders the upload modal
- *        (lazy-loaded by the kebab menu so we don't ship the form HTML
- *         on every row of the list)
+ *
+ * Two endpoints:
+ *   GET  /objects/:pid/thumbnail/form  → the upload modal, lazy-loaded by the
+ *                                        kebab menu
  *   POST /objects/:pid/thumbnail       → multer-backed upload + DB sync
- * 
- * The POST handler is special-cased in routes.js because it needs
- * multer middleware BEFORE the global sanitizer touches req.body (the
- * sanitizer's a no-op on multipart since multer sets a fresh req.body
- * of text fields only, but we want to avoid the dependency anyway).
+ *
+ * The POST is special-cased in routes.js so multer middleware runs before the
+ * global sanitizer reaches req.body.
  * ----------------------------------------------------------------------------
  */
 async function object_thumbnail_form(req, res) {
@@ -986,23 +860,13 @@ async function object_thumbnail_form(req, res) {
 }
 
 /*
- * Invalidate the TN service's disk-cached thumbnail for a single
- * object. The next request that flows through object_thumbnail_raw
- * (either from the listing or an admin re-render) misses the cache
- * and re-fetches from the TN service.
- * 
- * We don't touch the browser's HTTP cache here — that's governed by
- * the Cache-Control: private, max-age=3600 we set on proxy responses.
- * Staff who need the new thumbnail immediately can hard-refresh.
- * Within an hour, normal browser cache expiration will pick it up.
+ * Invalidate the TN service's disk-cached thumbnail for one object; the next
+ * request through object_thumbnail_raw re-fetches from the TN service. Does not
+ * affect the browser's HTTP cache.
  */
 async function object_thumbnail_invalidate(req, res) {
     const pid = req.params.pid;
-    /*
-     * Ensure the row exists before we touch the filesystem — gives
-     * a clean 404 for typos, and avoids logging cache events for
-     * non-objects.
-     */
+    // 404 on an unknown pid before touching the filesystem.
     await repo_model.get(pid);
     const result = await tn_service.invalidate_cache(pid);
     trigger_toast(
@@ -1023,23 +887,16 @@ async function object_thumbnail_upload(req, res) {
     const enriched = projection.enrich(updated);
 
     /*
-     * Pick the right partial to re-render based on object_type. The
-     * collection_row expects member_count + published_count which we
-     * lose going through repo_model — for the immediate post-upload
-     * swap that's fine (the next reload of the collections page will
-     * re-compute them); the row's `(0 pub)` fallback covers the gap.
+     * Partial is chosen by object_type. collection_row's member_count and
+     * published_count don't survive repo_model, so the row falls back to
+     * `(0 pub)` until the collections page is reloaded.
      */
     const is_collection = enriched.object_type === 'collection';
     const partial = is_collection
         ? 'dashboard/partials/collection_row'
         : 'dashboard/partials/object_row';
 
-    /*
-     * Two HX-Trigger events in one header: a toast for feedback AND a
-     * close-modal event so dashboard.js can dismiss the upload form
-     * once the row has swapped. Keeping them in a single header avoids
-     * ordering surprises — both fire on the same htmx event tick.
-     */
+    // toast + modal:close in one header, so both fire on the same htmx event tick.
     res.set(
         'HX-Trigger',
         JSON.stringify({
@@ -1047,41 +904,13 @@ async function object_thumbnail_upload(req, res) {
             'modal:close': {},
         })
     );
-    /*
-     * The upload form posts with hx-target=#<row-id>, so htmx already
-     * replaces the row outerHTML on its own. No HX-Retarget needed.
-     */
+    // The form posts with hx-target=#<row-id>, so htmx swaps the row itself.
     render_partial(req, res, partial, { item: enriched });
 }
 
 /*
  * ----------------------------------------------------------------------------
- * THUMBNAIL PROXY (DuraCloud-backed rows)
- * 
- * Most pre-existing rows store their thumbnail as a dip-store-relative
- * path under DuraCloud (the ingest service writes
- * `<dip_path>/thumbnails/<uuid>.jpg`), NOT a fetchable URL. Browsers
- * can't load those directly. This handler:
- * 
- * Resolution order, top to bottom:
- * 
- *   1. Uploaded thumbnail (absolute http(s) URL in tbl_objects.thumbnail
- *      — written by the upload modal or a future CDN). 302-redirect to
- *      it; the static file server handles caching from there.
- *   2. TN service. If TN_SERVICE + TN_SERVICE_API_KEY are configured,
- *      fetch by the row's PID. Disk-cached on success so repeated
- *      requests don't re-hit the TN service. This is the preferred
- *      path: TN service generates fresh thumbnails from source files,
- *      giving more consistent quality than DuraCloud's archived ones.
- *   3. DuraCloud fallback. If TN fails (or wasn't configured) and the
- *      stored thumbnail value looks like a dip-store path, stream
- *      through libs/duracloud. Kept around so legacy rows with DC
- *      paths still work during migration.
- *   4. Local SVG placeholder. Returned as 200 (not 404) so the row's
- *      <img> tag never falls into the browser's broken-image state.
- * 
- * Cache-Control: private, max-age=3600 — browser caches per session
- * only. Don't make this `public`: backing content includes restricted items.
+ * THUMBNAIL PROXY
  * ----------------------------------------------------------------------------
  */
 const THUMBNAIL_PLACEHOLDER = path.join(
@@ -1092,57 +921,54 @@ const THUMBNAIL_PLACEHOLDER = path.join(
     'thumbnail-missing.svg'
 );
 
+// 200, not 404 — a 404 would put the row's <img> into the broken-image state.
 function send_thumbnail_placeholder(res) {
-    /*
-     * 200 + the placeholder so the <img> renders something; if we sent
-     * 404 the browser would show its own broken-image icon, defeating
-     * the whole point.
-     */
     res.status(200);
     res.set('Content-Type', 'image/svg+xml');
     res.set('Cache-Control', 'private, max-age=60');
     fs.createReadStream(THUMBNAIL_PLACEHOLDER).pipe(res);
 }
 
+/*
+ * Serve an object's thumbnail. Resolution order, first match wins:
+ *
+ *   1. Absolute http(s) URL in tbl_objects.thumbnail (uploaded or CDN) →
+ *      302 redirect.
+ *   2. TN service, by PID, when TN_SERVICE + TN_SERVICE_API_KEY are set.
+ *      Disk-cached on success.
+ *   3. DuraCloud, when the stored value is a dip-store path.
+ *   4. Local SVG placeholder, as 200.
+ *
+ * Responses carry `Cache-Control: private, max-age=3600` — private because the
+ * backing content includes restricted items.
+ */
 async function object_thumbnail_raw(req, res) {
     const pid = req.params.pid;
     let row;
     try {
         row = await repo_model.get(pid);
     } catch {
-        /*
-         * Unknown pid → placeholder, not 404. The row may have been
-         * soft-deleted while a list was on screen; we'd rather show
-         * a blank tile than break the layout.
-         */
+        // Unknown pid (e.g. soft-deleted while a list was on screen) → placeholder.
         return send_thumbnail_placeholder(res);
     }
 
     const enriched = projection.enrich(row);
     /*
-     * IMPORTANT: read thumbnail_raw, NOT thumbnail. The `thumbnail`
-     * field is the synthesized proxy URL (`/repo/dashboard/objects/
-     * <pid>/thumbnail/raw`) for non-http stored values — useful for
-     * EJS rendering, useless here (we ARE that proxy). The raw value
-     * is what we need to decide between uploaded / TN / DC.
+     * thumbnail_raw, not thumbnail: `thumbnail` is the synthesized proxy URL
+     * pointing back at this handler. The raw value is what selects the case
+     * below.
      */
     const stored = enriched.thumbnail_raw;
 
-    /*
-     * Case 1: stored value is already an absolute URL (uploaded
-     * thumbnail or CDN). Redirect rather than proxy.
-     */
+    // Case 1: absolute URL — redirect rather than proxy.
     if (stored && /^https?:\/\//i.test(stored)) {
         res.set('Cache-Control', 'private, max-age=3600');
         return res.redirect(302, stored);
     }
 
     /*
-     * Case 2: TN service. Always tried by PID (the stored value
-     * doesn't matter — TN looks up by the object's identifier). If
-     * it's not configured we fall through; if it IS configured but
-     * this row's thumbnail isn't available there, the fetch throws
-     * and we fall through to DC.
+     * Case 2: TN service, looked up by PID regardless of the stored value.
+     * Unconfigured, or a throwing fetch, falls through to case 3.
      */
     if (tn_service.is_configured()) {
         try {
@@ -1152,21 +978,11 @@ async function object_thumbnail_raw(req, res) {
             res.set('Cache-Control', 'private, max-age=3600');
             return res.end(buffer);
         } catch {
-            /*
-             * TN service had nothing (404), errored, or timed out.
-             * Continue to the DC fallback. Logging happens inside
-             * libs/tn_service so we don't double up here.
-             */
+            // 404, error, or timeout — fall through. libs/tn_service does the logging.
         }
     }
 
-    /*
-     * Case 3: DuraCloud fallback. Only meaningful if the stored
-     * value looks like a dip-store path (not empty, not an http URL).
-     * The TN-first path above already absorbed the most common case
-     * of "row has no usable thumbnail anywhere"; this branch is now
-     * strictly for legacy DC-backed rows.
-     */
+    // Case 3: DuraCloud, for legacy rows whose stored value is a dip-store path.
     if (stored && duracloud.is_configured()) {
         let upstream;
         try {
@@ -1226,11 +1042,7 @@ async function users_create_modal(req, res) {
 async function users_create(req, res) {
     try {
         const created = await user_model.create(req.body || {});
-        /*
-         * Empty response body — the modal dismisses via the
-         * modal:close trigger and the table re-fetches via
-         * users:created. Same pattern as users_update.
-         */
+        // Empty body: modal:close dismisses the modal, users:created refetches the table.
         res.set(
             'HX-Trigger',
             JSON.stringify({
@@ -1257,11 +1069,9 @@ async function users_delete(req, res) {
     await user_model.soft_delete(req.params.id);
     trigger_toast(res, 'success', 'User deactivated.');
     /*
-     * Trigger a table refresh so the deactivated row updates its
-     * status badge + kebab actions (or disappears if the toggle is
-     * off). Simpler than swapping a single row partial back from
-     * here, and uses the same `users:created` event the create flow
-     * already wires up.
+     * Append users:created to whatever trigger_toast already set, so the table
+     * refetches and the deactivated row updates its badge and kebab actions (or
+     * disappears when the include-inactive toggle is off).
      */
     const prev = res.get('HX-Trigger');
     res.set(
@@ -1274,9 +1084,8 @@ async function users_delete(req, res) {
 }
 
 /*
- * Edit modal — renders the dashboard/partials/user_edit_modal partial
- * targeting #modal-content. dashboard.js auto-opens the modal mount
- * when content lands there.
+ * Edit modal — renders into #modal-content. dashboard.js auto-opens the modal
+ * mount when content lands there.
  */
 async function users_edit_modal(req, res) {
     const user = await user_model.get(req.params.id);
@@ -1289,10 +1098,8 @@ async function users_edit_modal(req, res) {
 }
 
 /*
- * Update name + email. We deliberately do NOT let the dashboard
- * route touch du_id (that's the user's stable identifier — changing
- * it would orphan job-history rows, audit logs, etc.). The REST API
- * at PUT /repo/users/:id still allows it for admin tooling.
+ * Update name, email, and role. du_id is not updatable here; PUT
+ * /repo/users/:id still allows it for admin tooling.
  */
 async function users_update(req, res) {
     const body = req.body || {};
@@ -1300,11 +1107,7 @@ async function users_update(req, res) {
         first_name: body.first_name,
         last_name: body.last_name,
         email: body.email,
-        /*
-         * RBAC role (validated against ROLE_NAMES in the model). Omitted
-         * values fall through normalize() so an absent select keeps the
-         * current role rather than nulling it.
-         */
+        // Validated against ROLE_NAMES; undefined keeps the current role.
         role: body.role,
     };
     try {
@@ -1313,12 +1116,7 @@ async function users_update(req, res) {
             'HX-Trigger',
             JSON.stringify({
                 toast: { level: 'success', message: `User ${updated.du_id} updated.` },
-                /*
-                 * Same event the create + delete flows fire so the
-                 * table refreshes itself.
-                 */
                 'users:created': { id: updated.id },
-                // Close the open modal — dashboard.js section 5.
                 'modal:close': {},
             })
         );

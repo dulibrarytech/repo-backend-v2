@@ -29,14 +29,11 @@
  *       resume re-fetches METS + retries the insert. Idempotent so
  *       long as the insert doesn't partially succeed (it's wrapped in
  *       a single knex insert — atomic at the DB layer).
- *     - After tbl_objects.insert but before queue update: rare, but
- *       a re-run would create a duplicate row. We DON'T defensively
- *       check for an existing pid here — the unlikely-but-possible
- *       duplicate is preferable to silently no-op'ing a real second
- *       ingest attempt. Phase 4 will add a queue-side dedup.
- * 
- * No external polling. No bounded budget — the whole stage is a
- * handful of HTTP calls + a DB insert.
+ *     - After tbl_objects.insert but before queue update: a re-run
+ *       creates a duplicate row. Not defended against here.
+ *
+ * No external polling and no bounded budget — the whole stage is a
+ * handful of HTTP calls plus a DB insert.
  */
 
 const duracloud_default = require('../../libs/duracloud');
@@ -147,33 +144,20 @@ async function run(row, deps = {}) {
 
     const parts_raw = builder.enrich_parts(files, { dip_path: row.dip_path });
     /*
-     * Enrich parts with kaltura entry IDs by looking up
-     * tbl_kaltura_ids by (package, file). Read-only side effect — a
-     * failed lookup leaves the part's kaltura_id absent rather than
-     * halting ingest. The kaltura subsystem (kaltura/*) populates this
-     * table from staff batches; reading it here makes the entry IDs
-     * available to the dashboard even when the legacy MDO process
-     * didn't stamp them on the AS record.
+     * Attach kaltura entry IDs from tbl_kaltura_ids, keyed by
+     * (package, file). Read-only: a failed lookup leaves the part's
+     * kaltura_id absent rather than halting ingest.
      */
     const parts = await builder.attach_kaltura_ids(parts_raw, row.package, kaltura_model);
     const master = builder.pick_master(parts);
 
     /*
      * --- Step 3: mint a Handle (optional) ----------------------------
-     * 
-     * In dev environments without HANDLE_* set we skip this and
-     * tbl_objects.handle ends up empty — the row is still useful and
-     * staff can mint a handle manually later via an admin tool.
      *
-     * TEST BATCHES skip it for the same reason, deliberately. A test ingest
-     * run against production would otherwise mint a real, permanent
-     * identifier under the live prefix, and removing one afterwards is hard
-     * on purpose: the prefix cannot be enumerated, and object state cannot
-     * prove a handle was never public.
-     *
-     * Matched on the BATCH (collection folder) only, as whole tokens — see
-     * libs/handles.is_skipped_batch. Package names cannot carry the marker:
-     * they become ArchivesSpace component ids during Make Digital Objects.
+     * Skipped when HANDLE_* is unconfigured, and for test batches
+     * (matched on the BATCH folder only, as whole tokens — see
+     * libs/handles.is_skipped_batch). Either way tbl_objects.handle
+     * ends up empty and the row still ingests.
      */
     let handle_url = null;
     const skip_mint = Boolean(
@@ -192,11 +176,7 @@ async function run(row, deps = {}) {
             if (h.status === 201 && h.handle) {
                 handle_url = h.handle;
             } else {
-                /*
-                 * Non-201 — log + carry on without a handle. The row
-                 * still ingests; staff can retry the mint via the
-                 * dashboard. Halting here would be too brittle.
-                 */
+                /* Non-201 — log and carry on without a handle. */
                 log.warn({
                     event: 'handle_create_non_201',
                     queue_id: row.id,
@@ -213,15 +193,11 @@ async function run(row, deps = {}) {
     }
 
     /*
-     * Resolve the local collection PID. Post-task-#119 the queue
-     * row's `collection_uuid` IS the PID (the pre-flight gate
-     * stamps the resolved value there at submit time). For legacy
-     * rows or rows queued via the REST API without going through
-     * the gate, the value might still be a folder-name string — we
-     * detect that via UUID-shape and fall back to a URI-parse +
-     * find-by-uri lookup. Either way the eventual is_member_of_
-     * collection ends up as a real PID when one exists, '' when it
-     * doesn't.
+     * Resolve the local collection PID. `collection_uuid` is normally
+     * already the PID; legacy rows and rows queued via the REST API may
+     * hold a folder-name string instead, detected by UUID shape and
+     * resolved via URI-parse + find-by-uri. Yields a real PID when one
+     * exists, '' when it doesn't.
      */
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     let collection_pid = '';
@@ -290,79 +266,44 @@ async function run(row, deps = {}) {
 
     /*
      * --- Step 5: finalize queue row ----------------------------------
-     * 
-     * Two-phase finalize so staff sees the success state before the
-     * row vanishes from the default "Open only" view:
-     * 
-     *   Phase A — flip to COMPLETE with is_complete=0. The
-     *     suggested_action ("Ingest Complete", from state_metadata)
-     *     renders on the row. The dashboard auto-refreshes every 5s,
-     *     so staff catch the success state at least once.
-     * 
-     *   Phase B — after `complete_hold_ms`, flip is_complete=1 so
-     *     the row drops out of the default view. We pass only
-     *     is_complete here (no status), so the model writes no
-     *     duplicate state-change event and the suggested_action
-     *     stays intact for anyone viewing closed rows later.
-     * 
-     * If the worker is aborted (graceful shutdown) during the hold,
-     * we leave the row in COMPLETE+is_complete=0. The boot-time
-     * sweep in worker.js (finalize_pending_completes) catches it on
-     * the next start.
-     * 
-     * The indexer worker will pick up tbl_objects.is_updated=1 on
-     * its next tick and push the row into ES — that side effect runs
-     * off the tbl_objects write above, not the queue finalize.
-     * SFTP cleanup. AM now has the AIP and DuraCloud has the DIP, so
-     * the SFTP staging copy is dead weight — without this it would
-     * accumulate one `<uuid>/<package>/` directory per successful
-     * ingest forever. Best-effort: run BEFORE the COMPLETE flip so
-     * the outcome is captured in the COMPLETE event's payload (visible
-     * in the timeline), but a failure here MUST NOT unwind the
-     * completed ingest. Mirrors the rollback path, which gets
-     * equivalent cleanup via the curation-API's
-     * move_from_ingest_to_ready (see qa_service.cleanup_sftp comment).
+     *
+     * Two-phase finalize:
+     *   Phase A — flip to COMPLETE with is_complete=0, so the
+     *     "Ingest Complete" suggested_action renders on the row.
+     *   Phase B — after `complete_hold_ms`, flip is_complete=1 so the
+     *     row drops out of the default "Open only" view. Passes only
+     *     is_complete (no status), so no duplicate state-change event
+     *     is written and the suggested_action is preserved.
+     *
+     * Abort during the hold leaves the row at COMPLETE+is_complete=0;
+     * worker.js finalize_pending_completes sweeps it at next boot.
+     */
+
+    /*
+     * Remove the SFTP staging copy. Best-effort, and run BEFORE the
+     * COMPLETE flip so the outcome lands in the COMPLETE event payload;
+     * a failure here must not unwind the completed ingest.
      */
     const sftp_cleanup = await _cleanup_sftp_safely(qa, row);
 
     /*
-     * Archive 002-ingest/<uuid>/ to Wasabi S3 — the curation-API's
-     * move_to_ingested uploads the staging copy (head_object-verified
-     * per file) and removes it only on verified success (see
-     * digitaldu-backend-curation-service: move_to_ingested →
-     * move_to_s3). The local 003-ingested archive copy was retired
-     * 2026-07-26 (repo/INGESTED_RETIREMENT_PLAN.md); the route name
-     * is historical. Without this call, staff folders pile up in
-     * 002-ingest forever and nothing reaches Wasabi.
-     *
-     * v1 fired this at UPLOAD_COMPLETE; v2 fires it at Stage 5 COMPLETE
-     * — the folder stays in the staff view until the row is actually
-     * a finished repository record, not just "bytes safely on AM".
+     * Archive 002-ingest/<uuid>/ to Wasabi S3 via the curation-API's
+     * move_to_ingested, which uploads the staging copy
+     * (head_object-verified per file) and removes it only on verified
+     * success. The route name is historical — the local 003-ingested
+     * copy is retired.
      *
      * Best-effort: a non-2xx, a Wasabi failure in data.errors, or a
-     * transport throw MUST NOT unwind the completed ingest. The
-     * outcome lands in the COMPLETE event payload so staff can see
-     * in the timeline whether the S3 copy actually succeeded
-     * (the curation route always returns 200, even when move_to_s3
-     * fails, so we have to inspect data.errors) — and any failure is
-     * additionally recorded as a FAILED archive_to_wasabi job below.
+     * transport throw must not unwind the completed ingest. The outcome
+     * lands in the COMPLETE event payload, and any failure is also
+     * recorded as a FAILED archive_to_wasabi job below.
      */
     const archive_to_ingested = await _move_to_ingested_safely(qa, row);
 
     /*
-     * LOUD failure surfacing (003-ingested retirement, phase 1).
-     * The archive copy is best-effort for the INGEST (a Wasabi outage
-     * must not unwind a completed repository record), but with the
-     * local 003-ingested copy retired, the Wasabi copy is the batch
-     * snapshot's only custodian — so a failure can no longer live
-     * only inside the COMPLETE event payload. Record a FAILED
-     * archive_to_wasabi row in tbl_ingest_jobs: it renders in the
-     * staff Job History view with a FAILED badge and is filterable
-     * by type. Success records nothing (history stays quiet unless
-     * something needs attention). The batch source remains in
-     * 002-ingest/<uuid> whenever the S3 upload fails (move_to_ingested
-     * only deletes it after a verified upload), so the staff remedy
-     * is: fix connectivity/creds, then re-run the archive.
+     * Record a FAILED archive_to_wasabi row in tbl_ingest_jobs when the
+     * archive did not fully succeed, so it surfaces in the staff Job
+     * History view. Success records nothing.
      */
     await _record_archive_failure_safely(jobs, row, archive_to_ingested);
 
@@ -404,14 +345,10 @@ async function run(row, deps = {}) {
     }
 
     /*
-     * Hand-off to Stage 6 OR finalize. When AIP_STORE_ENABLED is on
-     * the row transitions to AIP_STORE_PENDING (still visible in the
-     * queue, is_complete=0) so the next worker tick picks it up and
-     * runs the Wasabi copy. With the flag off, behavior matches
-     * pre-Stage-6 (flip is_complete=1, row drops out of the default
-     * view). The branch is here at the very end of Stage 5 — past
-     * every side effect that defines "ingest succeeded" — so a
-     * Wasabi outage CANNOT roll back ingest success.
+     * Hand off to Stage 6, or finalize. With AIP_STORE_ENABLED on, the
+     * row transitions to AIP_STORE_PENDING (is_complete=0) for the next
+     * worker tick to pick up; with it off, is_complete=1 and the row
+     * drops out of the default view.
      */
     const aip_store_cfg = app_config().aip_store;
     if (aip_store_cfg && aip_store_cfg.enabled) {
@@ -449,8 +386,7 @@ async function run(row, deps = {}) {
  *   { ok: false, error: message }   — transport-level failure
  *   { ok: false, skipped: 'reason'} — qa_service not configured or
  *                                     missing qa_uuid on the row
- * Never throws. The Stage 5 caller records this in the audit log
- * but does not branch the success path on it.
+ * Never throws.
  */
 async function _cleanup_sftp_safely(qa, row) {
     if (!qa || (qa.is_configured && !qa.is_configured())) {
@@ -479,25 +415,17 @@ async function _cleanup_sftp_safely(qa, row) {
 }
 
 /*
- * Best-effort wrapper for the 002-ingest → 003-ingested move + Wasabi
- * S3 copy. The curation-API's move_to_ingested does both in one call
- * (see qa_service.move_to_ingested comment for protocol details).
- * 
- * The curation route always returns HTTP 200 even when the Wasabi
- * upload fails (errors land in data.errors[]), so 2xx alone isn't
- * proof of success. We surface both signals in the result:
- *   { ok: true,  status, result }                — clean success
- *   { ok: false, status, errors: [...] }         — curation reported
- *                                                   per-step failures
- *                                                   (e.g. Wasabi missing
- *                                                   creds, S3 timeout)
- *   { ok: false, status }                        — non-2xx HTTP
- *   { ok: false, error: message }                — transport-level fail
- *   { ok: false, skipped: 'reason' }             — qa not configured or
- *                                                   row missing batch/uuid
- * Never throws. Stage 5 records the result in the COMPLETE audit
- * payload but does not branch on it — the ingest is still considered
- * successful; staff get visibility via the timeline.
+ * Best-effort wrapper for the 002-ingest → Wasabi S3 archive. The
+ * curation route returns HTTP 200 even when the upload fails (errors
+ * land in data.errors[]), so both signals are surfaced:
+ *   { ok: true,  status, result }        — clean success
+ *   { ok: false, status, errors: [...] } — curation reported per-step
+ *                                          failures
+ *   { ok: false, status }                — non-2xx HTTP
+ *   { ok: false, error: message }        — transport-level failure
+ *   { ok: false, skipped: 'reason' }     — qa not configured, or row
+ *                                          missing batch/uuid
+ * Never throws.
  */
 async function _move_to_ingested_safely(qa, row) {
     if (!qa || (qa.is_configured && !qa.is_configured())) {
@@ -521,9 +449,7 @@ async function _move_to_ingested_safely(qa, row) {
             return { ok: false, status: r.status };
         }
         /*
-         * Curation returns 200 even on partial failure — inspect
-         * data.errors[] to see whether the Wasabi copy or the local
-         * move actually succeeded. data shape:
+         * Inspect data.errors[] for partial failure. Shape:
          *   { result: 'packages_moved_to_ingested_folder', errors: [] }
          *   { result: 'packages_not_moved_to_ingested_folder',
          *     errors: ['ERROR: Unable to move packages to wasabi s3'] }
@@ -552,24 +478,17 @@ async function _move_to_ingested_safely(qa, row) {
 }
 
 /*
- * Record a FAILED archive_to_wasabi job when the end-of-ingest
- * archive copy did not fully succeed (003-ingested retirement,
- * phase 1 — see the call site in run() for the rationale).
+ * Record a FAILED archive_to_wasabi job when the end-of-ingest archive
+ * copy did not fully succeed.
  *
  * Recording rules:
- *   ok:true                       → nothing recorded (quiet on success)
- *   skipped:'missing_folder'      → nothing recorded (synthetic rows
- *                                   without a batch; there is no
- *                                   collection_folder to record against)
- *   skipped:'qa_not_configured'   → recorded — an unconfigured
- *                                   curation service means the batch
- *                                   was NOT archived, which staff must
- *                                   see once the local copy is retired
- *   any other failure             → recorded with the error detail
+ *   ok:true                     → nothing recorded
+ *   skipped:'missing_folder'    → nothing recorded (synthetic rows have
+ *                                 no collection_folder to record against)
+ *   skipped:'qa_not_configured' → recorded
+ *   any other failure           → recorded with the error detail
  *
- * Best-effort like everything else at this point in Stage 5: a
- * job-table insert failure is logged and swallowed — it must never
- * unwind a completed ingest.
+ * Best-effort: a job-table insert failure is logged and swallowed.
  */
 async function _record_archive_failure_safely(jobs, row, archive_result) {
     if (!archive_result || archive_result.ok === true) return;
@@ -614,13 +533,10 @@ async function _record_archive_failure_safely(jobs, row, archive_result) {
 }
 
 /*
- * Parse the resource URI out of the queue row's collection_uuid
- * (which carries the staff-facing folder name, NOT a UUID despite
- * the column name — historical schema artifact). Matches the same
- * `-resources_N` / `-archival_objects_N` convention enforced by
- * workspace._parse_resource_uri. Returns null on unparseable input
- * so the caller can leave is_member_of_collection='' rather than
- * halting Stage 5 on an unrecoverable parse error.
+ * Parse the resource URI out of a staff-facing folder name, matching
+ * the `-resources_N` / `-archival_objects_N` convention that
+ * workspace._parse_resource_uri enforces. Returns null on unparseable
+ * input, leaving the caller to set is_member_of_collection=''.
  */
 function _parse_collection_uri(folder_name) {
     if (!folder_name || typeof folder_name !== 'string') return null;

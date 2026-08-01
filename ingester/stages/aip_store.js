@@ -2,50 +2,32 @@
 
 /*
  * Stage 6 — preservation copy to Wasabi S3.
- * 
+ *
  *   entry:  AIP_STORE_PENDING       (success path, from Stage 5)
  *         | AIP_STORE_IN_PROGRESS   (resume mid-copy)
- *   exit:   AIP_STORE_COMPLETE      (success + is_complete=1)
- *         | AIP_STORE_FAILED        (retries exhausted; operator-only
- *                                    via the dashboard "Retry" button)
- * 
- * What it does:
- *   1. Look up the Archivematica AIP UUID for the row's sip_uuid.
- *      In v2 the queue's sip_uuid IS AM's package UUID — the AM
- *      Storage Service /v2/file/<sip_uuid>/ endpoint already returns
- *      metadata for the AIP package. We pass sip_uuid through as the
- *      aip_uuid to the curation API.
- *   2. Idempotency check: if tbl_aip_store already has a row for
- *      this PID with is_migrated in the success set, skip the copy
- *      and transition straight to AIP_STORE_COMPLETE. This catches
- *      the "stage 6 ran, crashed before flipping state, resume"
- *      case without re-uploading multi-GB AIPs.
- *   3. Call curation /api/v2/aip/copy-to-wasabi. Synchronous; can
- *      take many minutes for a large AIP. We pass the configured
- *      timeout (cfg.aip_store.copy_timeout_ms, default 60 min).
- *   4. On success: upsert tbl_aip_store with the canonical key +
- *      bucket + bytes + copied_at, flip queue to AIP_STORE_COMPLETE
- *      + is_complete=1.
- *   5. On failure: increment attempts, compute backoff, write
- *      next_attempt_at on the store row. If attempts < max_attempts
- *      flip queue back to AIP_STORE_PENDING so the next worker tick
- *      re-runs after the backoff. If attempts === max_attempts,
- *      flip to AIP_STORE_FAILED + is_complete=0 (still visible in
- *      the default queue view); operator clicks "Retry" in the
- *      dashboard to reset.
- * 
- * Resume behavior:
- *   The curation /copy-to-wasabi endpoint is idempotent on the
- *   Wasabi side (head_object check before re-upload), so a resume
- *   after a crash mid-call re-runs the same request and the curation
- *   service short-circuits. Stage 6 doesn't need to track its own
- *   sub-state.
- * 
- * Failure does NOT roll back Stage 5: the row was already marked
- * COMPLETE in Stage 5's first phase. We're flipping is_complete back
- * to 0 only so the row stays visible in the queue view while Stage
- * 6 retries. Once Stage 6 succeeds (or operator gives up), is_
- * complete goes to 1 and the row drops from the default view.
+ *   exit:   AIP_STORE_COMPLETE      (success, is_complete=1)
+ *         | AIP_STORE_FAILED        (retries exhausted; reopened only by the
+ *                                    dashboard "Retry" button)
+ *
+ * Steps:
+ *   1. Resolve the repository PID for the row (tbl_objects.sip_uuid). The
+ *      queue's sip_uuid is passed through to curation as the aip_uuid.
+ *   2. Idempotency check: a tbl_aip_store row for this PID already in the
+ *      success set transitions straight to AIP_STORE_COMPLETE.
+ *   3. Call curation /api/v2/aip/copy-to-wasabi. Synchronous, and can run for
+ *      hours on a large AIP; bounded by cfg.aip_store.copy_timeout_ms.
+ *   4. On success: upsert tbl_aip_store with key, bucket, bytes and copied_at,
+ *      then AIP_STORE_COMPLETE + is_complete=1.
+ *   5. On failure: increment attempts, compute the backoff, write
+ *      next_attempt_at. Below max_attempts the row returns to
+ *      AIP_STORE_PENDING for the next tick; at max_attempts it becomes
+ *      AIP_STORE_FAILED with is_complete=0, so it stays in the queue view.
+ *
+ * A terminal orphan (see _is_am_not_found_error) is the one failure that exits
+ * with is_complete=1.
+ *
+ * Stage 6 keeps no sub-state: the curation endpoint is idempotent, so a resume
+ * simply re-runs the same request.
  */
 
 const aip_store_client_default = require('../libs/aip_store_client');
@@ -63,11 +45,8 @@ async function run(row, deps = {}) {
     const cfg = app_config().aip_store;
 
     /*
-     * Feature flag — if the operator disables aip_store mid-run, any
-     * queue rows already at AIP_STORE_PENDING get drained into a
-     * terminal state without contacting Wasabi. We treat them as
-     * "complete enough" (Stage 5 already succeeded) and flip
-     * is_complete=1 so they exit the queue view.
+     * Disabled mid-run: drain rows already at AIP_STORE_PENDING to COMPLETE
+     * without contacting Wasabi, so they exit the queue view.
      */
     if (!cfg.enabled) {
         log.info({
@@ -85,11 +64,7 @@ async function run(row, deps = {}) {
         return { ok: true, skipped: 'aip_store_disabled' };
     }
 
-    /*
-     * Client misconfigured — same handling as the disabled case.
-     * Loud log so the operator knows why a row that should have
-     * been copied just drained to COMPLETE.
-     */
+    // Misconfigured client drains the same way. Logged loudly.
     if (!client.is_configured()) {
         log.warn({
             event: 'aip_store_skipped_client_not_configured',
@@ -110,11 +85,7 @@ async function run(row, deps = {}) {
     }
 
     if (!row.sip_uuid || row.sip_uuid === 'PENDING') {
-        /*
-         * No AM UUID = nothing to copy. Treat as a non-fatal skip;
-         * the row's already at Stage 5 success. The operator can
-         * investigate via the dashboard timeline if this is unexpected.
-         */
+        // No AM UUID, nothing to copy. Non-fatal — Stage 5 already succeeded.
         log.warn({ event: 'aip_store_no_sip_uuid', queue_id: row.id });
         await model.update_queue(
             { id: row.id },
@@ -128,24 +99,12 @@ async function run(row, deps = {}) {
     }
 
     /*
-     * The repository PID this AIP belongs to. Stage 5 wrote it as
-     * an audit event payload (`pid` field on the COMPLETE event),
-     * but the queue row's `package` column ISN'T the repo PID —
-     * it's the staging folder name. The pid we want lives in
-     * tbl_objects (find_by_sip_uuid) or in the row's metadata.
-     * 
-     * Simplest stable read: tbl_objects.pid where the row was
-     * created by Stage 5 (the queue row's sip_uuid matches the
-     * tbl_objects.sip_uuid we just wrote). We look it up here rather
-     * than threading it through every queue column change.
+     * The repository PID this AIP belongs to, read from tbl_objects. The queue
+     * row's `package` column is the staging folder name, NOT the repo PID.
      */
     const pid = await _resolve_repo_pid(deps, row);
     if (!pid) {
-        /*
-         * Shouldn't happen — Stage 5 succeeded so tbl_objects has a
-         * row. But be defensive: if we can't find it, skip Stage 6
-         * rather than write a tbl_aip_store row with a bogus uuid.
-         */
+        // Defensive: skip rather than write a tbl_aip_store row with a bogus uuid.
         log.warn({
             event: 'aip_store_no_repo_pid',
             queue_id: row.id,
@@ -167,11 +126,8 @@ async function run(row, deps = {}) {
     }
 
     /*
-     * Idempotency check — if we've already copied this PID's AIP
-     * (legacy migration OR a prior successful Stage 6), short-circuit.
-     * Doesn't re-call Wasabi; the dashboard's "Retry" affordance is
-     * for the failure path, and a manual recopy from a working state
-     * would be a separate flow.
+     * Already copied — by the legacy migration or a prior successful Stage 6.
+     * Short-circuits without re-calling Wasabi.
      */
     const existing = await aip_store_model.get_by_uuid(pid);
     if (existing && aip_store_model.is_terminal_success(existing)) {
@@ -198,10 +154,8 @@ async function run(row, deps = {}) {
     }
 
     /*
-     * Orphan short-circuit — if AM 404'd on a prior attempt and we
-     * marked this row as an orphan, dead-letter the queue row
-     * immediately. Don't call curation, don't burn an attempt. The
-     * operator must investigate; retry can't fix it.
+     * Already tagged an orphan: dead-letter immediately, without calling
+     * curation or burning an attempt. Retry cannot fix it.
      */
     if (existing && aip_store_model.is_orphan(existing)) {
         log.info({
@@ -231,24 +185,11 @@ async function run(row, deps = {}) {
     }
 
     /*
-     * Backoff guard — if a prior attempt set next_attempt_at in the
-     * future, exit early WITHOUT burning an attempt or contacting
-     * curation. We don't write the queue row: it's already at
-     * AIP_STORE_PENDING (the worker only claims by status, doesn't
-     * flip to IN_PROGRESS until Stage 6 chooses to do so further
-     * below), so leaving it untouched keeps the worker's next-tick
-     * claim eligibility correct. The next tick (~5s later) re-runs
-     * Stage 6 entry; once next_attempt_at elapses, we fall through
-     * to the IN_PROGRESS transition and the real attempt.
-     * 
-     * Without this, the worker's 5s claim cadence raced through 5
-     * attempts in ~20s regardless of the backoff schedule — the
-     * attempts counter is per-aip-store-row but the worker doesn't
-     * consult it before claiming, so each tick re-fired Stage 6.
-     * 
-     * The chatter cost is ~1 SELECT on tbl_aip_store every 5s per
-     * backed-off row, which is negligible at the row counts we're
-     * talking about (tens to low thousands).
+     * Backoff guard — a next_attempt_at in the future exits early without
+     * burning an attempt or contacting curation, and WITHOUT writing the queue
+     * row: it is already at AIP_STORE_PENDING, so leaving it untouched keeps
+     * the worker's next-tick claim eligibility correct. Each tick re-runs this
+     * entry until next_attempt_at elapses.
      */
     if (
         existing &&
@@ -269,21 +210,16 @@ async function run(row, deps = {}) {
         };
     }
 
-    /*
-     * Move into the in-progress state so the dashboard shows a
-     * distinct phase and a resume after a crash lands here.
-     */
+    // Distinct phase for the dashboard, and where a post-crash resume lands.
     if (row.pipeline_state !== 'AIP_STORE_IN_PROGRESS') {
         await model.update_queue(
             { id: row.id },
             {
                 status: 'AIP_STORE_IN_PROGRESS',
                 /*
-                 * Zero the byte-progress columns and the AM step name:
-                 * they still hold Stage 2's upload bytes and Stage 4's
-                 * last microservice, and the dashboard would render
-                 * that stale data as Stage 6 progress. The side-poll
-                 * below refills bytes with real copy progress.
+                 * Zeroed: these still hold Stage 2's upload bytes and Stage 4's
+                 * last microservice, which the dashboard would render as Stage 6
+                 * progress. The side-poll below refills them.
                  */
                 bytes_uploaded: 0,
                 total_bytes: 0,
@@ -304,15 +240,9 @@ async function run(row, deps = {}) {
     // ---- Make the call -------------------------------------------------
 
     /*
-     * Byte-progress side-poll. copy_to_wasabi is ONE synchronous HTTP
-     * call that can run for hours on a large AIP, during which the row
-     * would otherwise sit at AIP_STORE_IN_PROGRESS with no visible
-     * activity (the exact "is it stalled?" window staff kept asking
-     * about). While the call is in flight, poll the curation side's
-     * cheap copy-progress endpoint and persist bytes + a heartbeat to
-     * the queue row — status-free updates, so the audit log stays
-     * clean across a multi-hour copy. Wholly best-effort: any poll
-     * error is swallowed and the copy outcome is untouched.
+     * copy_to_wasabi is ONE synchronous call that can run for hours, so poll
+     * the curation copy-progress endpoint alongside it and persist bytes plus a
+     * heartbeat to the queue row. Best-effort; see _start_progress_poller.
      */
     const progress_poller = _start_progress_poller({
         client,
@@ -326,22 +256,15 @@ async function run(row, deps = {}) {
     try {
         res = await client.copy_to_wasabi(row.sip_uuid, pid, {
             timeout_ms: cfg.copy_timeout_ms,
-            /*
-             * Row AbortSignal rides into the HTTP request itself, so a
-             * staff Stop or worker shutdown tears the multi-hour call
-             * down immediately instead of after it settles.
-             */
+            // Rides into the HTTP request, so a Stop tears the call down at once.
             signal,
         });
     } catch (err) {
         if (signal && signal.aborted) {
             /*
-             * Aborted, not failed — a staff Stop (which writes its own
-             * terminal state) or a worker shutdown (resume re-runs;
-             * curation is idempotent). Recording a failure here would
-             * burn an attempt AND race the Stop handler's row write —
-             * _record_failure could flip the row back to
-             * AIP_STORE_PENDING after staff explicitly parked it.
+             * Aborted, not failed. Recording a failure would burn an attempt
+             * AND race the Stop handler's row write, potentially flipping the
+             * row back to AIP_STORE_PENDING after staff parked it.
              */
             return { ok: false, aborted: true };
         }
@@ -356,29 +279,18 @@ async function run(row, deps = {}) {
             wire_status: null,
         });
     } finally {
-        /*
-         * Every exit path — success, ok=false, transport throw —
-         * must stop the side-poll or its interval would keep writing
-         * to the row after the stage settled.
-         */
+        // Must run on every exit path, or the interval keeps writing to the row.
         progress_poller.stop();
     }
     if (signal && signal.aborted) {
-        /*
-         * Graceful shutdown. Leave the row in its current state —
-         * the next worker boot will resume and re-call the curation
-         * endpoint (idempotent on the curation side).
-         */
+        // Graceful shutdown: leave the row as-is; the next boot resumes.
         return { ok: false, aborted: true };
     }
 
     /*
-     * Inspect the response. Two failure modes:
-     *   - res.status non-2xx: HTTP-level failure.
-     *   - res.status 2xx with data.ok === false: the curation service
-     *     itself reported the copy failed (e.g., AM file missing,
-     *     Wasabi auth refused). The body shape is documented in
-     *     ingester/libs/aip_store_client.js.
+     * Two failure modes: a non-2xx status, or a 2xx whose body reports
+     * data.ok === false (AM file missing, Wasabi auth refused, …). The body
+     * shape is documented in ingester/libs/aip_store_client.js.
      */
     const data = res.data && typeof res.data === 'object' ? res.data : {};
     if (res.status < 200 || res.status >= 300 || data.ok !== true) {
@@ -403,12 +315,7 @@ async function run(row, deps = {}) {
     const copied_at = new Date();
     const upsert = await aip_store_model.upsert_by_uuid(pid, {
         aip_uuid: row.sip_uuid,
-        /*
-         * Legacy `aip` column gets the basename for backwards-compat
-         * with anything that still reads it (and for the dashboard's
-         * "show me a short id" column). The full key lives in
-         * wasabi_key.
-         */
+        // Legacy column: the basename only. The full key lives in wasabi_key.
         aip: key ? key.split('/').pop() : '',
         wasabi_bucket: bucket,
         wasabi_key: key,
@@ -451,29 +358,20 @@ async function run(row, deps = {}) {
 }
 
 /*
- * Locate the repository PID created by Stage 5 for this queue row.
- * We use the AM SIP UUID as the join key — tbl_objects.sip_uuid is
- * the natural identifier Stage 5's _insert sets. We don't import
- * repository/model here to keep Stage 6 dependency-injectable; tests
- * pass a `find_repo_pid_by_sip` stub via deps.
- */
-/*
- * Start the byte-progress side-poll for an in-flight copy. Returns
- * { stop() }. Every `cfg.progress_poll_ms` (0 disables), GET the
- * curation copy-progress endpoint and persist what came back to the
- * queue row:
+ * Start the byte-progress side-poll for an in-flight copy. Returns { stop() }.
+ * Every `cfg.progress_poll_ms` (0 disables), GET the curation copy-progress
+ * endpoint and persist what came back to the queue row:
  *
  *   200 + {bytes_sent, total_bytes}  → bytes_uploaded/total_bytes +
  *                                      last_poll_at (live bar + heartbeat)
- *   anything else (404, old build)   → last_poll_at only (heartbeat
- *                                      still proves the worker is alive)
+ *   anything else (404, old build)   → last_poll_at only (the heartbeat still
+ *                                      proves the worker is alive)
  *
- * Updates carry NO status → enrich_update writes no events, so a
- * multi-hour copy doesn't flood the timeline. All failures are
- * swallowed (log-only): progress display must never affect the copy's
- * outcome. The interval is unref'd so a hung poll can't hold the
- * process open on shutdown. Clients without copy_progress (older
- * builds, test doubles) disable the poller entirely.
+ * Updates carry NO status, so enrich_update writes no events and a multi-hour
+ * copy cannot flood the timeline. Every failure is swallowed (log-only):
+ * progress display must never affect the copy's outcome. The interval is
+ * unref'd so a hung poll cannot hold the process open on shutdown. Clients
+ * without copy_progress (older builds, test doubles) disable the poller.
  */
 function _start_progress_poller({ client, model, cfg, queue_id, aip_uuid }) {
     const poll_ms = cfg.progress_poll_ms;
@@ -519,14 +417,16 @@ function _start_progress_poller({ client, model, cfg, queue_id, aip_uuid }) {
     };
 }
 
+/*
+ * The repository PID Stage 5 created for this queue row, or null. Joined on
+ * tbl_objects.sip_uuid, the identifier Stage 5's _insert sets. Tests inject a
+ * `find_repo_pid_by_sip` stub through deps.
+ */
 async function _resolve_repo_pid(deps, row) {
     if (deps.find_repo_pid_by_sip) {
         return deps.find_repo_pid_by_sip(row.sip_uuid);
     }
-    /*
-     * Default — direct DB read. Avoids a circular import with
-     * repository/model.
-     */
+    // Direct DB read, to avoid a circular import with repository/model.
     const { db } = require('../../config/db');
     const tables = require('../../config/db_tables');
     const obj = await db()(tables.objects)
@@ -537,27 +437,21 @@ async function _resolve_repo_pid(deps, row) {
 }
 
 /*
- * Detect the "AM Storage Service returned 404" failure mode. We
- * pattern-match on the curation /copy-to-wasabi error text because
- * the wire contract documents that exact phrasing (see
- * digitaldu-backend-curation-service_latest/lib/aip_ops.py:
- * `f'AIP {aip_uuid} not found in AM Storage Service'`). A future
- * curation update could add a structured `error_kind: 'am_not_found'`
- * field; until then, the string check is the load-bearing signal.
- * 
- * When this fires the row is an orphan (no AM record exists for the
- * UUID — see the dashboard for the diagnosis flow). Retry can't fix
- * it, so we dead-letter immediately + tag with AM_NOT_FOUND so the
- * backfill eligibility filter excludes it from future runs.
+ * Detect the "AM Storage Service returned 404" failure mode by matching the
+ * curation /copy-to-wasabi error text, whose exact phrasing is the documented
+ * wire contract (digitaldu-backend-curation-service_latest/lib/aip_ops.py:
+ * `f'AIP {aip_uuid} not found in AM Storage Service'`).
+ *
+ * A match is NOT immediately terminal — see the not-found attempt budget in
+ * _record_failure.
  */
 function _is_am_not_found_error(error_text) {
     return /not found in AM Storage Service/i.test(error_text || '');
 }
 
 /*
- * Common failure path — writes a tbl_aip_store row + decides whether
- * to retry or terminate. Mirrors metadata/model.js mark_failed in
- * spirit: increment attempts, compute backoff, decide outcome.
+ * Common failure path: write a tbl_aip_store row, then decide whether to retry
+ * or terminate. Increments attempts, computes the backoff, sets the outcome.
  */
 async function _record_failure({
     aip_store_model,
@@ -568,17 +462,10 @@ async function _record_failure({
     error_text,
     wire_status,
 }) {
-    /*
-     * Truncate to 1000 chars — matches the column width and prevents
-     * a giant HTML error page from bloating the row.
-     */
+    // 1000 chars matches the column width and caps a giant HTML error page.
     const truncated = String(error_text || 'unknown error').slice(0, 1000);
 
-    /*
-     * Inspect any existing row to get the current attempts counter.
-     * We don't fail if the read errors — we'll still try to record
-     * a fresh failure.
-     */
+    // For the attempts counter. A read failure still records a fresh failure.
     let existing = null;
     try {
         existing = await aip_store_model.get_by_uuid(pid);
@@ -593,16 +480,10 @@ async function _record_failure({
     const prior_attempts = existing && Number.isFinite(existing.attempts) ? existing.attempts : 0;
     const next_attempts = prior_attempts + 1;
     /*
-     * "AIP not found in AM Storage Service" is AMBIGUOUS: a genuine orphan,
-     * OR a large/slow AIP that AM hasn't finished registering in the Storage
-     * Service yet when Stage 6 first queries. So it gets its own, more
-     * generous attempt budget and is RETRIED (spaced by the backoff below,
-     * now that the entry backoff-guard properly throttles re-claims) — and
-     * only declared a terminal orphan once it is STILL not found at the end
-     * of that budget. Previously the first 404 dead-lettered the row
-     * instantly, permanently stranding legitimate large AIPs (which the
-     * dashboard Retry then couldn't recover, because orphan rows
-     * short-circuit on entry).
+     * A not-found gets its own, more generous attempt budget
+     * (not_found_max_attempts, default 8) because the message is ambiguous
+     * between a genuine orphan and a large AIP that AM has not finished
+     * registering yet. Everything else uses max_attempts (default 5).
      */
     const is_not_found = _is_am_not_found_error(truncated);
     const max_attempts = is_not_found
@@ -614,11 +495,9 @@ async function _record_failure({
           : 5;
 
     /*
-     * Terminal orphan — ONLY once a not-found has persisted through its full
-     * retry budget. Tag is_migrated=8 (AM_NOT_FOUND) so the backfill
-     * eligibility filter excludes it; dead-letter the queue row. A genuine
-     * orphan ends up here too, just later — the (bounded) cost of giving a
-     * real large AIP time to land.
+     * Terminal orphan — only once a not-found has persisted through its full
+     * budget. Tags AM_NOT_FOUND (is_migrated=8), which the backfill
+     * eligibility filter excludes, and dead-letters the queue row.
      */
     if (is_not_found && next_attempts >= max_attempts) {
         try {
@@ -673,9 +552,8 @@ async function _record_failure({
     let final_state;
     if (next_attempts < max_attempts) {
         /*
-         * Exponential backoff: base * 2 ** (n-1), capped at max. n=1
-         * → base; n=2 → 2×base; etc. The cap stops a high
-         * max_attempts from scheduling a retry hours into the future.
+         * base * 2 ** (n-1), capped at retry_max_backoff_ms so a high
+         * max_attempts cannot schedule a retry hours out.
          */
         const base_ms =
             cfg.retry_base_backoff_ms > 0 ? cfg.retry_base_backoff_ms : 60_000;
@@ -689,9 +567,8 @@ async function _record_failure({
     }
 
     /*
-     * Distinguish "not-found, still within its grace budget" from a generic
-     * transient failure in the audit trail + stored message. Both use the
-     * retry-eligible INGEST_COPY_FAILED status (NOT orphan), so the entry
+     * Names the two cases apart in the audit trail. Both store the
+     * retry-eligible INGEST_COPY_FAILED status, never orphan, so the entry
      * short-circuit lets the next attempt through.
      */
     const failure_message = is_not_found ? 'AM_NOT_FOUND_RETRY' : 'COPY_FAILED';
@@ -714,22 +591,14 @@ async function _record_failure({
             pid,
             err: err.message,
         });
-        /*
-         * Even if the audit write failed, we still want to advance
-         * the queue state so the worker doesn't spin on this row
-         * forever. Carry on.
-         */
+        // Advance the queue state anyway, so the worker doesn't spin on this row.
     }
 
     await model.update_queue(
         { id: row.id },
         {
             status: final_state,
-            /*
-             * is_complete=0 keeps the row in the default queue view
-             * even on AIP_STORE_FAILED — the operator needs to see
-             * and act on it.
-             */
+            // Keeps the row in the default queue view even on AIP_STORE_FAILED.
             is_complete: 0,
             error: truncated,
         },

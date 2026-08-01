@@ -2,29 +2,21 @@
 
 /*
  * Workspace orchestration for the v2 ingest dashboard.
- * 
- * Three pre-ingest dashboard pages share this module:
- * 
+ *
+ * Three pre-ingest pages share this module:
+ *
  *   - Make Digital Objects (scope='unprocessed')   — folders lacking uri.txt
  *   - ASpace Description QA (scope='processed')    — folders with uri.txt
  *   - Packaging and Ingesting (scope='processed')  — same data, different action
- * 
- * Each page calls `list_workspace({ scope, q, exclude_qa_passed })`
- * which queries the curation-service AStools endpoint and shapes the
- * folders list for the workspace-table partial.
- * 
- * Action helpers (run_make_digital_objects, run_qa_check,
- * submit_to_ingest, revert_to_mdo) encapsulate the per-action
- * workflow so the dashboard controller stays thin.
- * 
- * QA-passed state lives in tbl_ingest_jobs (the job-history table
- * the dashboard already records per workflow action against). We
- * query it on every list_workspace call rather than caching, so:
- *   - the marker survives process restarts (formerly an in-memory
- *     Set that wiped on reboot),
- *   - re-running MDO on a previously-QA'd folder auto-unhides it
- *     (its newest job is now MDO, not QA — see
- *     jobs.get_qa_passed_folders for the semantics).
+ *
+ * Each calls list_workspace({ scope, q, exclude_qa_passed }), which queries the
+ * curation-service AStools endpoint and shapes the folder list for the
+ * workspace-table partial. The action helpers (run_make_digital_objects,
+ * run_qa_check, submit_to_ingest, revert_to_mdo) hold the per-action workflow
+ * so the dashboard controller stays thin.
+ *
+ * QA-passed state lives in tbl_ingest_jobs and is read through
+ * jobs.get_qa_passed_folders on every list_workspace call, never cached.
  */
 
 const astools_default = require('../ingester/libs/astools');
@@ -39,31 +31,21 @@ const collection_provision = require('../repository/collection_provision');
 
 /*
  * --- Collection-resource gate (pre-flight for submit_to_ingest) -----
- * 
- * A folder name like `new_U358_LDT_TEST_Collection-resources_1204`
- * carries the ArchivesSpace resource ID in its last `-` segment:
- * `resources_1204` → `/repositories/<repo_id>/resources/1204`.
- * 
- * The gate runs once at submit time and answers two questions:
- *   1. Is the AS resource real? (Halt + alert if not.)
- *   2. Does the local repository have a corresponding collection?
- *      (Auto-create from the AS record if missing.)
- * 
- * This mirrors the v1 ingest-service's start_ingest() pre-flight.
- * It runs BEFORE queue_packages so a failed gate means zero queue
- * rows are inserted — recovering from a partial submit is harder
- * than refusing to start one.
+ *
+ * A folder name like `new_U358_LDT_TEST_Collection-resources_1204` carries the
+ * ArchivesSpace resource ID in its last `-` segment. The gate runs once at
+ * submit time, BEFORE queue_packages, and answers two questions:
+ *   1. Is the AS resource real? Halt and alert if not.
+ *   2. Does a local collection mirror exist? Auto-create it if not.
  */
 
 /*
- * Parse the AS resource URI from the folder name's last `-` segment.
- * Accepted shapes (matches the v1 convention):
+ * The AS resource URI parsed from the folder name's last `-` segment:
  *   `<anything>-resources_<digits>`        → /repositories/<n>/resources/<digits>
  *   `<anything>-archival_objects_<digits>` → /repositories/<n>/archival_objects/<digits>
- * 
- * Throws ValidationError on unparseable input — the controller
- * surfaces it as a sev-error action card so staff sees the cause
- * immediately ("Could not parse resource ID from folder name").
+ *
+ * Throws on unparseable input; the controller renders that as a sev-error
+ * action card.
  */
 function _parse_resource_uri(folder) {
     if (!folder || typeof folder !== 'string') {
@@ -84,14 +66,13 @@ function _parse_resource_uri(folder) {
 }
 
 /*
- * Resolve the local collection for a folder. Outcomes:
- *   { ok: true,  collection_pid, created }  — existed (created:false) OR just created
- *   { ok: false, error }                    — folder unparseable OR AS fetch failed
- * 
- * Parses the folder's last "-" segment into the resource URI, then defers
- * the find-or-create (local lookup → AS fetch → handle mint → insert) to the
- * shared repository/collection_provision helper, which the dashboard "create
- * collection" flow also uses. Ingest collections are top-level (no parent).
+ * Resolve the local collection for a folder:
+ *   { ok: true,  collection_pid, created }  — existed (created:false) or created
+ *   { ok: false, error }                    — unparseable folder or AS fetch failed
+ *
+ * The find-or-create (local lookup → AS fetch → handle mint → insert) is
+ * delegated to repository/collection_provision, shared with the dashboard's
+ * "create collection" flow. Ingest collections are top-level.
  */
 async function _ensure_collection_exists(folder, deps = {}) {
     let uri;
@@ -102,7 +83,7 @@ async function _ensure_collection_exists(folder, deps = {}) {
     }
     const result = await collection_provision.provision_collection({ uri }, deps);
     if (result.ok && result.created) {
-        // Preserve the ingest-specific audit event (carries the folder).
+        // Ingest-specific audit event — carries the folder name.
         log.info({
             event: 'collection_auto_created',
             folder,
@@ -116,18 +97,15 @@ async function _ensure_collection_exists(folder, deps = {}) {
 
 /*
  * --- list_workspace --------------------------------------------------
- * 
+ *
  * `scope`:
  *   'unprocessed' — folders where ZERO packages have uri.txt
  *   'processed'   — folders where AT LEAST ONE package has uri.txt
- * 
- * Returns `{ folders: [{ name, packages: [...], packages_error?: string }, ...],
- *   total_folders, total_packages, q }`
- * 
- * The curation-service may return either a flat folder array or a
- * `{ folders: [...] }` envelope depending on the build — we tolerate
- * both. Packages per folder come from a follow-up call per folder so
- * we can flag which ones have uri.txt vs not.
+ *
+ * Returns { folders: [{ name, packages, packages_error?, structure_errors,
+ * structure_notices, blocked, total_bytes }, ...], total_folders,
+ * total_packages, q }, or the same shape with an `error` string and empty
+ * folders when the curation-service is unconfigured or answers non-200.
  */
 async function list_workspace(opts = {}) {
     const astools = opts.astools || astools_default;
@@ -137,11 +115,9 @@ async function list_workspace(opts = {}) {
     const exclude_qa_passed = opts.exclude_qa_passed === true;
 
     /*
-     * Resolve the qa-passed set from tbl_ingest_jobs once per
-     * request. Cheap (one indexed SELECT, capped at the lifetime
-     * history of the job table — thousands of rows max in steady
-     * state). The ASpace QA view is the only caller that opts in
-     * via `exclude_qa_passed: true`; other views skip the query.
+     * One indexed SELECT per request, only for callers passing
+     * exclude_qa_passed (the ASpace QA view). Falls back to an empty Set on
+     * error, which hides nothing.
      */
     let qa_passed_set = null;
     if (exclude_qa_passed) {
@@ -164,12 +140,10 @@ async function list_workspace(opts = {}) {
     }
 
     /*
-     * The curation-service has TWO endpoints — /workspace returns
-     * folders without uri.txt; /processed returns folders with uri.txt.
-     * Pick the right one based on scope so the server does the
-     * classification (it's the source of truth — package names alone
-     * don't tell us about uri.txt presence). No client-side filtering
-     * needed beyond search + qa-passed marker.
+     * Two curation-service endpoints: /workspace returns folders without
+     * uri.txt, /processed those with it. The server classifies — package names
+     * alone say nothing about uri.txt presence — so the only client-side
+     * filtering left is the search term and the qa-passed marker.
      */
     let entries = [];
     const endpoint_name = scope === 'processed' ? 'list_processed' : 'list_workspace';
@@ -197,13 +171,9 @@ async function list_workspace(opts = {}) {
     }
 
     /*
-     * Resolve each folder's package list. The structure-QA build of the
-     * curation-service embeds packages + structure_errors directly in
-     * the /workspace entries, so no follow-up call is needed — that
-     * removes the old N+1 round-trip pattern for the MDO view. Entries
-     * without embedded packages (the /processed feed, or an older
-     * curation-service) fall back to the per-folder fetch, kept serial
-     * to avoid hammering the service — staff page sizes are small.
+     * Entries that embed packages + structure_errors (the structure-QA build's
+     * /workspace feed) need no follow-up call. The rest — /processed, or an
+     * older curation-service — fall back to a per-folder fetch, kept serial.
      */
     const folders = [];
     let total_packages = 0;
@@ -216,11 +186,8 @@ async function list_workspace(opts = {}) {
         let packages_error;
         let flags = Array.isArray(entry.structure_errors) ? entry.structure_errors : [];
         /*
-         * Size source depends on the path: the MDO view's /workspace
-         * entries carry total_bytes inline; the QA / Packaging views
-         * start from bare folder names and get it from the per-batch
-         * folder-state fetch below (2026-07-30 — the Size column was
-         * blank on those views until then).
+         * Inline on the /workspace feed; otherwise it comes from the
+         * folder-state fetch below.
          */
         let total_bytes = Number.isFinite(entry.total_bytes) ? entry.total_bytes : null;
         if (Array.isArray(entry.packages)) {
@@ -245,20 +212,16 @@ async function list_workspace(opts = {}) {
             packages_error,
             structure_errors: flags,
             /*
-             * Pre-rendered for the view: plain-English notices (wording
-             * owned by libs/structure_flags) and the blocked bit that
-             * disables the Make Digital Objects action. Both are also
-             * enforced server-side in run_make_digital_objects /
-             * submit_to_ingest — the view state is affordance, not the
-             * gate.
+             * Pre-rendered for the view: plain-English notices (wording owned
+             * by libs/structure_flags) and the bit that disables Make Digital
+             * Objects. Affordance only — _structure_gate is the enforcement.
              */
             structure_notices: structure_flags.format_structure_errors(flags, name),
             blocked: structure_flags.has_blocking_errors(flags),
             /*
-             * Batch size from the curation scan (null when the scan
-             * couldn't read the folder, or on legacy responses that
-             * pre-date the field). The view renders a Size column and
-             * a "Large batch" advisory above the threshold.
+             * Batch size from the curation scan; null when the scan could not
+             * read the folder or the response pre-dates the field. Drives the
+             * Size column and the "Large batch" advisory.
              */
             total_bytes,
         });
@@ -274,18 +237,19 @@ async function list_workspace(opts = {}) {
 }
 
 /*
- * The curation-service wraps every successful list response as
- * `{ result: [...], errors: [] }` (note the singular `result`). Some
- * older mocks / staging builds returned a bare array or a `folders`
- * envelope, so we accept all three shapes to keep tests + dev mocks
- * working without forcing a server rev.
+ * Normalize a list response to `[{ name, packages?, structure_errors?,
+ * total_bytes? }]`.
  *
- * Entry shapes accepted:
- *   'name'                                        — legacy flat string
- *   { name }                                      — object without QA data
- *   { name, packages, processed, structure_errors } — structure-QA build;
- *     packages/structure_errors are carried through so list_workspace can
- *     skip the per-folder fetch and render QA flags.
+ * Envelopes accepted: a bare array, `{ result: [...] }` (canonical, note the
+ * singular), `{ folders: [...] }`, `{ results: [...] }`.
+ *
+ * Entries accepted:
+ *   'name'                                          — legacy flat string
+ *   { name }                                        — object without QA data
+ *   { name, packages, processed, structure_errors } — structure-QA build
+ *
+ * This WHITELISTS fields: a new response field stays invisible to
+ * list_workspace until it is added here.
  */
 function _normalize_workspace_entries(data) {
     let raw = null;
@@ -305,14 +269,7 @@ function _normalize_workspace_entries(data) {
                 if (Array.isArray(entry.structure_errors)) {
                     normalized.structure_errors = entry.structure_errors;
                 }
-                /*
-                 * Batch size from the structure-QA scan. Carried
-                 * through explicitly — this normalizer WHITELISTS
-                 * fields, so a new response field is invisible to
-                 * list_workspace until it's added here (total_bytes
-                 * was silently dropped at first; the Size column
-                 * rendered dashes against a healthy API).
-                 */
+                // Batch size from the structure-QA scan.
                 if (Number.isFinite(entry.total_bytes)) {
                     normalized.total_bytes = entry.total_bytes;
                 }
@@ -324,11 +281,12 @@ function _normalize_workspace_entries(data) {
 }
 
 /*
- * Resolve a folder's package list. The curation-service response is
- * `{ result: ['pkg-A', 'pkg-B', ...], errors: [] }`. We also accept
- * a few legacy shapes (`{packages: ...}`, bare array, object-with-name
- * entries) so test mocks + older mock servers don't have to track the
- * canonical shape.
+ * A folder's package list, as { name, packages: [{ name, has_uri_txt }],
+ * packages_error?, structure_errors?, total_bytes }. Never throws — transport
+ * failures come back as packages_error.
+ *
+ * The canonical response is `{ result: ['pkg-A', ...], errors: [] }`; a few
+ * legacy shapes are also accepted so older mocks keep working.
  */
 async function _fetch_folder_state(astools, name) {
     try {
@@ -340,11 +298,7 @@ async function _fetch_folder_state(astools, name) {
         if (arr === null) {
             return { name, packages: [], packages_error: 'unexpected response shape' };
         }
-        /*
-         * The structure-QA build piggybacks `processed` (package names
-         * with uri.txt) and `structure_errors` on this response. Both
-         * are optional — older curation-services simply don't send them.
-         */
+        // `processed` lists package names with uri.txt. Optional.
         const processed = new Set(
             Array.isArray(res.data && res.data.processed) ? res.data.processed : []
         );
@@ -363,10 +317,7 @@ async function _fetch_folder_state(astools, name) {
                 res.data && Array.isArray(res.data.structure_errors)
                     ? res.data.structure_errors
                     : undefined,
-            /*
-             * Batch size piggybacked on the same scan (2026-07-30).
-             * Optional — older curation-services don't send it.
-             */
+            // Piggybacked on the same scan. Optional.
             total_bytes: Number.isFinite(res.data && res.data.total_bytes)
                 ? res.data.total_bytes
                 : null,
@@ -377,15 +328,12 @@ async function _fetch_folder_state(astools, name) {
 }
 
 /*
- * Server-side structure gate shared by run_make_digital_objects and
- * submit_to_ingest. Fetches the folder's structure flags and refuses
- * when any error-severity flag is present — the disabled buttons in
- * the view are affordance only; this is the enforcement.
+ * Server-side structure gate, shared by run_make_digital_objects and
+ * submit_to_ingest. Returns null when clear to proceed, or
+ * { error, structure_errors } when any error-severity flag is present.
  *
- * Fails OPEN on transport errors or older curation-services that don't
- * report flags: the actions were possible before this gate existed, and
- * the curation-service still validates paths itself. Returns null when
- * clear to proceed, or { error, structure_errors } when blocked.
+ * Fails OPEN on transport errors and against curation-services that do not
+ * report flags.
  */
 async function _structure_gate(astools, folder) {
     let flags = [];
@@ -453,14 +401,9 @@ async function revert_to_mdo(folder, deps = {}) {
     try {
         const res = await astools.revert_to_mdo(folder);
         /*
-         * No explicit qa-passed clearing needed any more: revert
-         * removes uri.txt from every package, which drops the folder
-         * off the curation-service /processed feed (source of the
-         * QA view), so it disappears regardless of marker state.
-         * If the folder later re-enters /processed via a fresh MDO
-         * run, that MDO job becomes the most-recent for the folder
-         * and naturally invalidates the prior SUCCESSFUL QA marker
-         * (see jobs.get_qa_passed_folders).
+         * No qa-passed clearing needed: revert removes uri.txt from every
+         * package, dropping the folder off the /processed feed the QA view
+         * reads.
          */
         return {
             ok: res.status >= 200 && res.status < 300,
@@ -505,10 +448,8 @@ async function run_qa_check(folder, deps = {}) {
     }
 
     /*
-     * One AS session for the whole batch — much cheaper than a fresh
-     * session per package. We don't bother refreshing on 401 here
-     * because the worker only validates a handful of packages per
-     * request; the session won't expire mid-loop.
+     * One AS session for the whole batch. No 401 refresh: a QA run validates a
+     * handful of packages, so the session cannot expire mid-loop.
      */
     let token;
     try {
@@ -552,11 +493,6 @@ async function _validate_package(folder, pkg_name, { astools, aspace, validator,
                 errors: [`uri.txt fetch HTTP ${res.status}`],
             };
         }
-        /*
-         * Canonical curation-service shape is `{result:{uris:[...]}}`,
-         * but we also tolerate legacy bare strings + `{uri}` envelopes —
-         * _extract_uri handles all of those.
-         */
         uri = _extract_uri(res);
         if (!uri) {
             return { name: pkg_name, uri: null, ok: false, errors: ['uri.txt is empty'] };
@@ -593,9 +529,8 @@ async function _validate_package(folder, pkg_name, { astools, aspace, validator,
 }
 
 /*
- * submit_to_ingest: queue one package per archival object in the folder.
- * The actual ingest pipeline runs against the new queue rows; this
- * helper just enqueues them.
+ * Queue one row per archival-object package in the folder. The pipeline then
+ * runs against those rows; this only enqueues them.
  */
 async function submit_to_ingest(folder, actor, deps = {}) {
     const astools = deps.astools || astools_default;
@@ -606,14 +541,11 @@ async function submit_to_ingest(folder, actor, deps = {}) {
     }
 
     /*
-     * PRE-FLIGHT GATES — run before any queue inserts. If either
-     * fails, no queue rows are created and submit_to_ingest returns
-     * a sev-error envelope for the dashboard to render.
+     * PRE-FLIGHT GATES, before any queue insert. Either failing means zero
+     * queue rows and a sev-error envelope for the dashboard to render.
      *
-     * 1. Structure gate: loose files / empty or nested packages in
-     *    the batch would crash or corrupt the ready-stage pipeline —
-     *    refuse with the same staff wording the list views show.
-     * 2. Collection gate: see _ensure_collection_exists.
+     * 1. Structure gate — refuses with the same wording the list views show.
+     * 2. Collection gate — see _ensure_collection_exists.
      */
     const structure_block = await _structure_gate(astools, folder);
     if (structure_block) {
@@ -639,9 +571,8 @@ async function submit_to_ingest(folder, actor, deps = {}) {
     }
 
     /*
-     * We need a URI per package to set metadata_uri on the queue row;
-     * pull each from uri.txt. If any package is missing uri.txt the
-     * batch is rejected — the QA view should have caught that earlier.
+     * metadata_uri comes from each package's uri.txt. A package missing one
+     * rejects the whole batch; the QA view should have caught it earlier.
      */
     const rows = [];
     for (const pkg of folder_state.packages) {
@@ -657,32 +588,11 @@ async function submit_to_ingest(folder, actor, deps = {}) {
             batch: folder,
             package: pkg.name,
             /*
-             * The column's name is the truth: this is the local
-             * collection mirror's PID (a UUID), resolved by the
-             * pre-flight gate above. Three uses downstream:
-             * 
-             *   1. Stage 2 (upload) passes this to the curation-API
-             *      as the `uuid` query param for move_to_ingest /
-             *      move_to_sftp. The AM SFTP host ends up with one
-             *      `<sftp_path>/<collection_pid>/<package>/` per
-             *      package, all rooted at the SAME collection_pid
-             *      directory (matches v1's collection-shared layout
-             *      — see ingest_service.js:508 in v1).
-             *   2. Stage 5 (repository build) reads it to populate
-             *      is_member_of_collection on the new object row —
-             *      no folder-name parsing needed downstream.
-             *   3. The rollback / return-to-packaging path passes
-             *      it to clean_up_sftp + move-from-ingest-to-ready
-             *      so the right SFTP folder is found.
-             * 
-             * The human-readable folder name still lives in `batch`
-             * for traceability.
-             * 
-             * Note on UUID minting: collection_pid is minted ONCE
-             * per collection by the pre-flight gate — fresh
-             * randomUUID() ONLY when no local mirror exists for the
-             * AS resource URI. Existing collections reuse their PID,
-             * so sibling submits land in the same SFTP folder.
+             * The local collection mirror's PID (a UUID), not a folder name.
+             * Read downstream by Stage 2 (the curation-API `uuid` param),
+             * Stage 5 (is_member_of_collection on the new object row), and the
+             * rollback path (to find the right SFTP folder). The
+             * human-readable folder name stays in `batch`.
              */
             collection_uuid: gate.collection_pid,
             metadata_uri: uri,
@@ -692,11 +602,9 @@ async function submit_to_ingest(folder, actor, deps = {}) {
     try {
         const ids = await model.queue_packages(rows, { actor: actor || 'staff' });
         /*
-         * No explicit qa-passed clearing here: the controller
-         * records a `packaging_and_ingesting` job for this folder
-         * around this call, and that job (newer than any prior QA
-         * pass) naturally invalidates the qa-passed status via
-         * jobs.get_qa_passed_folders' "latest job per folder" rule.
+         * No qa-passed clearing needed: the controller records a
+         * packaging_and_ingesting job around this call, and
+         * get_qa_passed_folders keys off the latest job per folder.
          */
         return { ok: true, queue_ids: ids, count: ids.length };
     } catch (err) {
@@ -705,11 +613,10 @@ async function submit_to_ingest(folder, actor, deps = {}) {
 }
 
 /*
- * Extract a single AS URI from a /workspace/uri response. The canonical
- * curation-service shape is:
- *   { result: { uris: ['<uri>'], files: ['uri.txt', ...] }, errors: [] }
- * — uris may be empty if the file doesn't exist. We also fall back to
- * legacy shapes (bare string, {uri}, {value}) so test mocks stay simple.
+ * A single AS URI from a /workspace/uri response, or null. The canonical shape
+ * is { result: { uris: ['<uri>'], files: [...] }, errors: [] }, where uris is
+ * empty when the file does not exist. Legacy shapes (bare string, {uri},
+ * {value}) are also accepted.
  */
 function _extract_uri(res) {
     if (!res || res.status !== 200 || !res.data) return null;
@@ -729,16 +636,6 @@ function _extract_uri(res) {
     const fallback = String(res.data.uri || res.data.value || '').trim();
     return fallback || null;
 }
-
-/*
- * (Earlier versions of this file maintained an in-process Set of
- * qa-passed folder names plus mark_/clear_/test-reset helpers. That
- * machinery was replaced by jobs.get_qa_passed_folders, which reads
- * tbl_ingest_jobs. The marker now survives process restart and
- * auto-invalidates when a more recent MDO/submit/revert job lands
- * for the same folder — see list_workspace and the file's header
- * comment for the contract.)
- */
 
 module.exports = {
     list_workspace,

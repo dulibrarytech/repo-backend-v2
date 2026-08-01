@@ -7,17 +7,13 @@
  * claims up to `concurrency` PENDING rows per tick, fans out the
  * ArchivesSpace fetches in parallel, then writes results to tbl_objects
  * and finalizes each row's queue state.
- * 
- * Why one global worker (not one per batch):
- *   - We have to cap upstream load on ArchivesSpace regardless of how
- *     many batches are open. A single semaphore governs the world.
- *   - The queue table already serializes work via the (batch_uuid,
- *     is_complete) index — there's no benefit to per-batch coroutines.
- *   - Simpler shutdown: one stop signal, one drain.
- * 
- * Crash recovery: on start() we call model.reset_orphaned() which
- * returns any IN_PROGRESS rows to PENDING. So a kill -9 mid-fetch
- * loses ~1 fetch-window of work and that's it.
+ *
+ * One global worker serves every open batch, so a single semaphore caps
+ * upstream ArchivesSpace load.
+ *
+ * Crash recovery: start() calls model.reset_orphaned(), returning any
+ * IN_PROGRESS rows to PENDING, so a kill -9 mid-fetch loses about one
+ * fetch-window of work.
  */
 
 const app_config = require('../config/app');
@@ -28,13 +24,9 @@ const model = require('./model');
 const batches = require('./batches');
 
 /*
- * ArchivesSpace returns the metadata as response.data; the v1 worker
- * wrote that plus a denormalized envelope (display_record) and three
- * derived fields (compound_parts, is_compound) into tbl_objects. We
- * keep that shape for parity — the legacy indexer reads display_record,
- * and the v2 dashboard's projection assumes it too.
- * 
- * `metadata` is whatever ASpace gave us. We trust it's an object.
+ * Build the tbl_objects write from an ASpace metadata response:
+ * `mods`, the denormalized `display_record` envelope, and the derived
+ * `compound_parts` / `is_compound` fields.
  */
 function build_payload(existing_display_record, metadata) {
     let envelope = {};
@@ -43,19 +35,14 @@ function build_payload(existing_display_record, metadata) {
             const parsed = JSON.parse(existing_display_record);
             if (parsed && typeof parsed === 'object') envelope = parsed;
         } catch {
-            /*
-             * Corrupt prior display_record — overwrite with a fresh
-             * envelope. Better than failing the refresh.
-             */
+            /* Corrupt prior display_record — start a fresh envelope. */
         }
     }
     const is_compound = metadata && metadata.is_compound === true;
     /*
-     * For compound objects v1 preserves the existing parts list under
-     * the new display_record. The metadata fetch from ASpace doesn't
-     * include the parts manifest (that's local DIP data), so we read
-     * the old parts list BEFORE overwriting the inner display_record
-     * and splice it back into the fresh metadata.
+     * The ASpace fetch carries no parts manifest (that is local DIP
+     * data), so for compound objects read the old parts list before
+     * overwriting display_record and splice it back in.
      */
     let existing_parts = [];
     if (is_compound && envelope.display_record && Array.isArray(envelope.display_record.parts)) {
@@ -77,14 +64,10 @@ function build_payload(existing_display_record, metadata) {
 }
 
 /*
- * Whether a queue row belongs to an active system-refresh batch. Used
- * to decide whether the worker should roll up per-batch counters on
- * a terminal transition. On-demand refreshes (priority=0, no batch
- * row) skip the rollup entirely.
- * 
- * We treat any row that has a corresponding active batches row as a
- * "system" row — that way operator-canceled batches still get their
- * in-flight rows accounted for as the worker drains them.
+ * Whether a queue row belongs to a system-refresh batch, deciding
+ * whether a terminal transition rolls up per-batch counters. Any row
+ * with a matching batches row counts, including cancelled batches, so
+ * their in-flight rows are still accounted for as the worker drains.
  */
 async function row_is_system_refresh(batch_uuid) {
     if (!batch_uuid) return false;
@@ -124,14 +107,12 @@ async function roll_up(row, outcome) {
 }
 
 /*
- * One end-to-end process step for a single claimed row. Encapsulated
- * here so the worker loop can run `concurrency` of them in parallel
- * via Promise.allSettled. Returns nothing — all state lives in the DB.
- * 
- * The `token_holder` is a single-element array we mutate so 401-driven
- * refreshes update the value shared across concurrent fetches in the
- * same tick. (A bare local would be per-call; an object would also
- * work — array is just a convenient mutable holder.)
+ * One end-to-end process step for a single claimed row; the worker loop
+ * runs `concurrency` of these in parallel. Returns nothing — all state
+ * lives in the DB.
+ *
+ * `token_holder` is a mutable single-element array, so a 401-driven
+ * refresh updates the token shared by concurrent fetches in the tick.
  */
 async function process_row(row, aspace, token_holder, get_db_record) {
     let res;
@@ -143,11 +124,7 @@ async function process_row(row, aspace, token_holder, get_db_record) {
         return;
     }
 
-    /*
-     * On 401/403, refresh the token and retry once. v1's worker never
-     * did this — a single mid-batch token expiry there would silently
-     * fail every subsequent row.
-     */
+    /* On 401/403, refresh the token and retry once. */
     if (res.status === 401 || res.status === 403) {
         try {
             token_holder[0] = await aspace.get_session_token();
@@ -183,9 +160,8 @@ async function process_row(row, aspace, token_holder, get_db_record) {
         await repo_model.update_metadata_payload(row.uuid, payload);
         await model.mark_updated(row.id);
         /*
-         * In v2 we don't push to ES here — the indexer port will. Move
-         * the row straight to COMPLETE; the is_updated=1 flag tells
-         * the indexer to pick it up.
+         * No ES push here — is_updated=1 tells the indexer to pick the
+         * row up on its next tick.
          */
         await model.mark_complete(row.id);
         await roll_up(row, 'succeeded');
@@ -196,17 +172,17 @@ async function process_row(row, aspace, token_holder, get_db_record) {
 }
 
 /*
- * Factory so the entry point can pass in injected deps and tests can
- * substitute fakes for every external surface.
- * Backoff for the first-tick token bootstrap when ArchivesSpace is
- * unreachable. The self-rescheduling loop already prevents overlapping
- * ticks, but without backoff a down AS is re-probed every cadence for the
- * whole outage. Exponential backoff (base→max) caps that at one login
- * attempt per TOKEN_BACKOFF_MAX_MS while still recovering within that window.
+ * Exponential backoff for the first-tick token bootstrap when
+ * ArchivesSpace is unreachable, capping login attempts at one per
+ * TOKEN_BACKOFF_MAX_MS for the duration of an outage.
  */
 const TOKEN_BACKOFF_BASE_MS = 5000;
 const TOKEN_BACKOFF_MAX_MS = 60000;
 
+/*
+ * Build a worker. Every external surface is injectable so tests can
+ * substitute fakes.
+ */
 function create_worker({
     aspace = aspace_default,
     get_db_record = require_db_record,
@@ -218,25 +194,20 @@ function create_worker({
     let timer = null;
     let in_flight = Promise.resolve();
     /*
-     * Session token. We pull a fresh one at start() and refresh on
-     * 401. We ALSO rotate it periodically — see _maybe_rotate_token
-     * below — to mitigate AS-side per-session cache buildup that
-     * dominates the slow-down curve on multi-hour refreshes.
+     * Session token: minted at start(), refreshed on 401, and rotated
+     * periodically by _maybe_rotate_token below.
      */
     const token_holder = [null];
     /*
-     * Bootstrap backoff state (see TOKEN_BACKOFF_* above). Only the bootstrap
-     * path uses this — the periodic rotation in _maybe_rotate_token has its
-     * own recovery (it nulls the token so the next bootstrap re-mints).
+     * Bootstrap backoff state (TOKEN_BACKOFF_* above). Bootstrap only —
+     * _maybe_rotate_token recovers by nulling the token so the next
+     * bootstrap re-mints.
      */
     let token_fail_count = 0;
     let token_cooldown_until = 0;
     /*
-     * Count of rows claimed since the last token rotation. Each
-     * claimed row corresponds to ~1 AS request (occasionally 2 if a
-     * 401 forces a mid-request token refresh; we accept the
-     * undercount). When this hits the configured threshold, the
-     * post-tick rotation fires.
+     * Rows claimed since the last token rotation, each roughly one AS
+     * request. At the configured threshold the post-tick rotation fires.
      */
     let requests_since_token_rotation = 0;
 
@@ -254,12 +225,9 @@ function create_worker({
         const cfg = app_config().metadata_worker;
 
         /*
-         * First-tick token bootstrap. We delay until tick() instead of
-         * start() so a transient ASpace outage at boot doesn't crash
-         * the entry point — the worker just doesn't make progress
-         * until ASpace comes back. On failure we back off exponentially
-         * (see TOKEN_BACKOFF_* above) rather than re-attempting every
-         * cadence for the whole outage.
+         * First-tick token bootstrap, deferred to tick() rather than
+         * start() so an ASpace outage at boot does not crash the entry
+         * point. Failures back off exponentially (TOKEN_BACKOFF_*).
          */
         if (!token_holder[0]) {
             if (now() < token_cooldown_until) return; // in backoff window
@@ -285,17 +253,8 @@ function create_worker({
         }
 
         /*
-         * Periodic orphan sweep — runs every tick BEFORE we claim
-         * new rows. Catches rows that got stuck IN_PROGRESS because
-         * a previous tick's fetch hung or the process was killed
-         * mid-claim and somehow restarted without our boot-time
-         * reset_orphaned (e.g. an in-process worker restart). The
-         * threshold (default 300s) is comfortably above the worst-
-         * case legitimate per-row processing time (~30s), so we
-         * never reset a healthy in-flight claim.
-         * 
-         * Cheap: indexed query against (status, is_complete); 0
-         * affected rows in steady state.
+         * Orphan sweep, before claiming new rows: resets rows stuck
+         * IN_PROGRESS longer than orphan_reset_seconds.
          */
         try {
             const orphan_age = cfg.orphan_reset_seconds > 0 ? cfg.orphan_reset_seconds : 300;
@@ -308,11 +267,7 @@ function create_worker({
                 });
             }
         } catch (err) {
-            /*
-             * Sweep failure shouldn't block the tick; log and
-             * continue. Worst case is a stuck row stays stuck one
-             * more tick.
-             */
+            /* A sweep failure must not block the tick. */
             log.warn({ event: 'metadata_orphan_sweep_failed', err: err.message });
         }
 
@@ -328,10 +283,9 @@ function create_worker({
         log.debug({ event: 'metadata_tick', claimed: rows.length });
 
         /*
-         * Fan out: each row gets its own ASpace round-trip + DB write,
-         * running in parallel up to `concurrency`. allSettled because
-         * we want every claim to be finalized (success or failure) —
-         * never leave a row stuck in IN_PROGRESS.
+         * Fan out one ASpace round-trip + DB write per row, in parallel
+         * up to `concurrency`. allSettled so every claim is finalized
+         * and no row is left stuck at IN_PROGRESS.
          */
         in_flight = Promise.allSettled(
             rows.map((r) => process_row(r, aspace, token_holder, get_db_record))
@@ -339,11 +293,8 @@ function create_worker({
         await in_flight;
 
         /*
-         * Count requests against the rotation threshold. We use the
-         * claim count rather than per-request bookkeeping to avoid
-         * threading state through process_row — it's a lower bound
-         * (under-counts the 401-retry path by one) but that's fine
-         * for a periodic-rotation signal.
+         * Count claims, not requests, against the rotation threshold —
+         * a lower bound, since the 401-retry path under-counts by one.
          */
         requests_since_token_rotation += rows.length;
         await _maybe_rotate_token();
@@ -352,22 +303,13 @@ function create_worker({
     }
 
     /*
-     * Rotate the AS session token when the per-rotation request
-     * counter crosses the configured threshold. Called at the end of
-     * each tick. No-op when:
-     *   - the feature is disabled (threshold = 0)
-     *   - we haven't reached the threshold yet
-     *   - we have no current token (the first-tick bootstrap will
-     *     mint one fresh on the next tick anyway)
-     * 
-     * The rotation itself is best-effort:
-     *   1. Destroy old token, capped at 2s so a hung AS can't stall
-     *      the worker.
-     *   2. Mint a fresh token. If THIS fails, we leave token_holder
-     *      empty and let the next tick's bootstrap try again. The
-     *      counter is always reset (whether or not minting
-     *      succeeded) so we don't loop on the same exhausted token
-     *      ad infinitum.
+     * Rotate the AS session token once the request counter crosses the
+     * configured threshold. Called at the end of each tick; a no-op
+     * when the threshold is 0, not yet reached, or no token is held.
+     *
+     * Best-effort: destroys the old token (capped at 2s) then mints a
+     * fresh one. A failed mint leaves token_holder empty for the next
+     * tick's bootstrap. The counter resets either way.
      */
     async function _maybe_rotate_token() {
         const cfg = app_config().archivespace;

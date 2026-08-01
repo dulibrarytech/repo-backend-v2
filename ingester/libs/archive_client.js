@@ -4,7 +4,7 @@
  * Batch-archive browser client. Thin HTTP wrapper over the curation
  * service's read-only /api/v2/archive/* blueprint, which lists the
  * Wasabi batch archive (the retired 003-ingested folders' replacement
- * — repo/WASABI_ARCHIVE_BROWSER_PLAN.md) and mints presigned download
+ * — repo/notes/WASABI_ARCHIVE_BROWSER_PLAN.md) and mints presigned download
  * URLs:
  *
  *   GET  /collections

@@ -2,33 +2,26 @@
 
 /*
  * tbl_aip_store data layer.
- * 
- * Two readers + one writer touch this table:
- * 
- *   Reader 1 — Stage 6 (ingester/stages/aip_store.js). Calls
- *     get_by_uuid() at the start of each run to detect a prior
- *     successful copy (idempotent re-fire shouldn't re-upload).
- * 
- *   Reader 2 — dashboard AIPs view. Calls list() with filters +
- *     pagination to render the staff table, and get() for the
- *     download/retry actions.
- * 
- *   Writer — Stage 6 calls upsert_by_uuid() on success/failure;
- *     dashboard's "retry" action calls reset_for_retry() to clear
- *     the backoff + attempts before re-enqueuing.
- * 
- * Status conventions on `is_migrated` (kept compatible with the
- * legacy migration's value set):
- * 
+ *
+ * Callers:
+ *   Stage 6 (ingester/stages/aip_store.js) — get_by_uuid() to detect a
+ *     prior successful copy, upsert_by_uuid() on success/failure.
+ *   Dashboard AIPs view — list() with filters + pagination, get() for
+ *     the download/retry actions, reset_for_retry() to clear backoff
+ *     and attempts before re-enqueuing.
+ *
+ * Status conventions on `is_migrated`, compatible with the legacy
+ * migration's value set:
+ *
  *   0 — initial / unset
  *   2 — legacy: NOT_FOUND (source AIP missing in DuraCloud)
  *   3 — legacy: REQUEST_FAILED
  *   5 — legacy: migrated OK
  *   6 — v2 ingest: copied OK
  *   7 — v2 ingest: copy failed
- * 
- * is_terminal_success(row) and is_failure(row) helpers below hide
- * the numeric codes from the controller/view layer.
+ *
+ * is_terminal_success(row) and is_failure(row) hide the numeric codes
+ * from the controller/view layer.
  */
 
 const validator = require('validator');
@@ -58,14 +51,10 @@ const STATUS = {
     INGEST_COPIED_OK: 6,
     INGEST_COPY_FAILED: 7,
     /*
-     * 8 = AM_NOT_FOUND: orphan rows where Archivematica Storage
-     * Service returns 404 for the package UUID. These objects exist
-     * in tbl_objects (so they have a repository record) but AM has
-     * no metadata for the UUID — no retry can succeed. Marked
-     * terminal + excluded from backfill eligibility so we don't
-     * keep re-attempting the same dead end. Distinct from
-     * INGEST_COPY_FAILED (7) because that one IS retry-eligible
-     * (transient curation / Wasabi / AM-5xx errors).
+     * Orphans: AM Storage Service 404s for the package UUID though the
+     * object has a repository record. Terminal and excluded from
+     * backfill eligibility, unlike the retry-eligible
+     * INGEST_COPY_FAILED (7).
      */
     AM_NOT_FOUND: 8,
 };
@@ -154,10 +143,9 @@ async function get(id) {
 }
 
 /*
- * Paged + filtered list for the dashboard table. Mirrors the
- * signature of repository/model.list — same `page` / `page_size`
- * envelope so the views layer can reuse pagination helpers.
- * 
+ * Paged + filtered list for the dashboard table, using the same
+ * `page` / `page_size` envelope as repository/model.list.
+ *
  * Filters:
  *   q          — case-insensitive LIKE across uuid + aip + wasabi_key.
  *   source     — exact match ('ingest_v2' or 'legacy_migration').
@@ -269,31 +257,21 @@ async function list(filter = {}) {
     const count_q = q.clone().clearSelect().clearOrder().count({ total: '*' }).first();
 
     /*
-     * Sort (dashboard "Sort by" select — mirrors the Manage
-     * Collections options):
-     *   recent    — default: most-recent-copy first; rows without a
-     *               copied_at (legacy bulk) fall to the bottom. The
-     *               id DESC tiebreaker gives a stable order for
-     *               legacy rows (~20k of which share NULL).
+     * Sort keys:
+     *   recent    — default: most-recent copy first; NULL copied_at
+     *               (legacy rows) last, id DESC as a stable tiebreaker.
      *   title     — object title A–Z; see the branch below.
-     *   size      — bytes, largest first (NULL sizes last in DESC).
+     *   size      — bytes, largest first (NULL sizes last).
      *   downloads — download count, highest first.
      */
     const sort = ALLOWED_SORTS.has(filter.sort) ? filter.sort : 'recent';
 
     if (sort === 'title' && typeof filter.title_of === 'function') {
         /*
-         * Title order can't be computed in SQL at acceptable cost:
-         * MariaDB's json_extract over the ~21k 3KB display_records
-         * measured ~59s per query (correlated subquery AND join
-         * variants both). Instead the CALLER supplies a
-         * title_of(uuid) lookup — the AIPs controller keeps a
-         * short-TTL cached pid→title map (~0.7s to build) — and we
-         * sort the filtered id/uuid pairs in memory (tiny rows),
-         * page from the sorted list, then fetch just the page.
-         * Titles arrive as data so this model stays scoped to its
-         * own table, same reasoning as extra_uuids above. Rows
-         * without a resolvable title sort last; id DESC ties.
+         * Title order is computed in memory, not SQL: the caller
+         * supplies a title_of(uuid) lookup, the filtered id/uuid pairs
+         * are sorted here, and only the resulting page is fetched.
+         * Rows without a resolvable title sort last, id DESC on ties.
          */
         const pairs = await q.clone().clearSelect().select('id', 'uuid');
         pairs.sort((a, b) => {
@@ -344,13 +322,10 @@ async function list(filter = {}) {
         ]);
     } else {
         /*
-         * Default sort: attention rows FIRST, then newest-copied.
-         * Failed / in-flight rows have copied_at NULL, and MariaDB
-         * sorts NULLs LAST under plain `copied_at DESC` — which buried
-         * a failed Stage 6 copy behind ~20k legacy rows (2026-07-31:
-         * staff concluded the AIP was missing entirely). The IS NULL
-         * key floats those rows to the top; the happy rows keep their
-         * newest-first order below.
+         * Default sort: rows needing attention first, then
+         * newest-copied. Failed and in-flight rows have copied_at NULL,
+         * which MariaDB would otherwise sort last; the IS NULL key
+         * floats them to the top.
          */
         q.orderByRaw('(copied_at IS NULL) DESC, copied_at DESC, id DESC');
     }
@@ -370,23 +345,11 @@ async function list(filter = {}) {
 
 /*
  * Resolve a downloadable Wasabi key from a tbl_aip_store row, walking
- * a fallback chain: wasabi_key → aip → basename(aip_legacy).
- * 
- * Background: the original DuraCloud → Wasabi migration had a 2-step
- * shape: a `get_aip_locations()` pass that populated `aip_legacy`
- * (full DC path), then an `update_aips()` pass that extracted the
- * basename into `aip`. For ~332 legacy rows the second pass never
- * ran — they have `aip_legacy` set but `aip` empty. The file IS in
- * Wasabi at the basename of aip_legacy; we just need to extract it
- * at request time.
- * 
- * The basename strip mirrors the legacy migration:
- *   tmp = record.aip_legacy.split('/')
- *   aip = tmp[tmp.length - 1].replace('_transfer', '')
- * 
- * Returns null when none of the three columns yield a non-empty
- * value (e.g., true orphans). Callers should treat null as "no
- * downloadable key" and refuse the request with a clear message.
+ * the fallback chain wasabi_key → aip → basename(aip_legacy), where
+ * the basename strip is `split('/').pop().replace('_transfer', '')`.
+ *
+ * Returns null when no column yields a non-empty value; callers should
+ * treat that as "no downloadable key" and refuse the request.
  */
 function derive_wasabi_key(row) {
     if (!row) return null;
@@ -396,11 +359,7 @@ function derive_wasabi_key(row) {
         const parts = row.aip_legacy.split('/').filter(Boolean);
         const basename = parts[parts.length - 1];
         if (basename) {
-            /*
-             * String.prototype.replace with a non-regex literal
-             * replaces only the FIRST occurrence — matches the
-             * legacy migration's behavior exactly.
-             */
+            /* Non-regex replace: first occurrence only, by design. */
             return basename.replace('_transfer', '');
         }
     }
@@ -408,18 +367,12 @@ function derive_wasabi_key(row) {
 }
 
 /*
- * Map the numeric is_migrated code (+ context) to a stable string the
- * view layer renders directly. Keeps the EJS template free of
- * numeric branches.
- * 
- * Values:
+ * Map the numeric is_migrated code to a stable string the view layer
+ * renders directly:
  *   'copied'      — terminal success (legacy or v2)
- *   'failed'      — terminal-but-retryable failure (legacy NOT_FOUND,
- *                    legacy REQUEST_FAILED, v2 INGEST_COPY_FAILED).
- *                    The Retry kabob is offered for these.
- *   'orphan'      — AM Storage Service returned 404 (is_migrated=8).
- *                    Terminal AND non-retryable; the dashboard renders
- *                    a distinct pill and hides the Retry action.
+ *   'failed'      — retryable failure; the Retry action is offered
+ *   'orphan'      — is_migrated=8, terminal and non-retryable; the
+ *                   dashboard hides the Retry action
  *   'in_progress' — anything else (initial state, awaiting Stage 6)
  */
 function derive_display_status(row) {
@@ -430,17 +383,12 @@ function derive_display_status(row) {
 }
 
 /*
- * Insert-or-update by repository PID. Stage 6's primary writer.
- * Returns the row id (new or existing).
- * 
- * Why upsert rather than separate insert/update: Stage 6 is
- * idempotent — a retry should overwrite whatever was there from a
- * prior failed attempt. The natural key is (uuid). We don't use
- * ON DUPLICATE KEY UPDATE because the existing prod schema lacks a
- * UNIQUE on uuid (legacy rows allow duplicates from re-runs of the
- * one-time migration). A check-then-write is fine: Stage 6 is the
- * only v2-side writer and runs single-threaded against any given
- * uuid (the queue row gates it).
+ * Insert-or-update by repository PID, keyed on (uuid). Stage 6's
+ * primary writer. Returns { id, created }.
+ *
+ * Check-then-write rather than ON DUPLICATE KEY UPDATE, because the
+ * prod schema has no UNIQUE on uuid; safe because Stage 6 is the only
+ * v2-side writer and the queue row serializes it per uuid.
  */
 async function upsert_by_uuid(pid, patch) {
     require_pid(pid);
@@ -453,11 +401,7 @@ async function upsert_by_uuid(pid, patch) {
         return { id: existing.id, created: false };
     }
     const insert = { uuid: pid, ...patch };
-    /*
-     * Backstop the legacy NOT NULL columns: callers don't have to
-     * remember to pass 'aip' / 'aip_legacy' when those don't apply
-     * to a v2 ingest row.
-     */
+    /* Backstop the legacy NOT NULL columns. */
     if (insert.aip === undefined) insert.aip = '';
     if (insert.aip_legacy === undefined) insert.aip_legacy = '';
     const [id] = await db()(AIP_STORE).insert(insert);
@@ -475,11 +419,7 @@ async function update(id, patch) {
     return get(id);
 }
 
-/*
- * Increment the download counter atomically. Used by the dashboard
- * download action so the counter doesn't race with concurrent
- * downloads of the same row.
- */
+/* Atomically increment the download counter. */
 async function increment_downloaded(id) {
     require_id(id);
     const affected = await db()(AIP_STORE).where({ id }).increment('downloaded', 1);
@@ -487,22 +427,15 @@ async function increment_downloaded(id) {
 }
 
 /*
- * Reset a failed row for manual retry from the dashboard. Clears
- * attempts + next_attempt_at + error so Stage 6 picks it up again on the
- * next worker tick, and resets is_migrated to INITIAL.
- * 
- * Why reset is_migrated (it didn't used to): a retry-eligible failure
- * (INGEST_COPY_FAILED) gets overwritten by Stage 6 on its next run
- * anyway — but an ORPHAN row (AM_NOT_FOUND) is short-circuited on Stage 6
- * entry and re-dead-lettered before curation is ever called, so leaving
- * the tag made a retry a silent no-op. Resetting to INITIAL clears that
- * short-circuit so a deliberate operator retry actually re-attempts the
- * copy — the recovery path for an AIP that was mis-orphaned because AM
- * was still registering it in the Storage Service when Stage 6 first
- * looked.
- * 
- * Returns the updated row so the controller can re-render the table
- * row with the new state.
+ * Reset a failed row for manual retry from the dashboard: clears
+ * attempts, next_attempt_at and error, and resets is_migrated to
+ * INITIAL so Stage 6 picks it up on the next tick.
+ *
+ * Resetting is_migrated matters for orphans (AM_NOT_FOUND), which
+ * Stage 6 short-circuits on entry — without the reset an operator
+ * retry would be a silent no-op.
+ *
+ * Returns the updated row.
  */
 async function reset_for_retry(id) {
     require_id(id);

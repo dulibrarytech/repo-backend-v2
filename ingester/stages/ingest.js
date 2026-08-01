@@ -7,7 +7,7 @@
  *         | INGEST_IN_PROGRESS         (resume mid-ingest poll)
  *         | INGEST_COMPLETE            (resume after AM said done; needs DC)
  *         | WAITING_FOR_DURACLOUD      (resume mid-DC probe)
- *   exit:   MASTER_OBJECT_DATA_SAVED   (DC propagation confirmed)
+ *   exit:   METADATA_PROCESSED         (DC propagation confirmed)
  *         | INGEST_STATUS_TIMEOUT      (6 hr — post-AM rollback)
  *         | FAILED                     (AM reported failure mid-ingest)
  *         | AS_METADATA_DRIFT          (re-validation failed)

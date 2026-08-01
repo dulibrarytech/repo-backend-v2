@@ -223,7 +223,7 @@ function create_client(http = http_default) {
          * uploaded file is head_object-verified before the staging
          * copy is removed). The local 003-ingested archive copy was
          * retired 2026-07-26 — the route name is historical (see
-         * repo/INGESTED_RETIREMENT_PLAN.md).
+         * repo/notes/INGESTED_RETIREMENT_PLAN.md).
          *
          * Two query params, BOTH required by the curation route:
          *   uuid   — the per-ingest qa_uuid (row.collection_uuid;

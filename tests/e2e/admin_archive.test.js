@@ -2,7 +2,7 @@
 
 /*
  * E2E for the Batch Backups (Wasabi) browser
- * (/dashboard/admin/archive/* — repo/WASABI_ARCHIVE_BROWSER_PLAN.md).
+ * (/dashboard/admin/archive/* — repo/notes/WASABI_ARCHIVE_BROWSER_PLAN.md).
  *
  * The curation API is unconfigured in test land (CURATION_API absent),
  * so listing renders the friendly error envelope — which is itself the

@@ -1,41 +1,42 @@
 /*
- * repo-backend-v2 dashboard glue.
+ * repo-backend-v2 dashboard glue. The browser attaches the httpOnly session
+ * cookie to every request, so there is no API-key handling here.
  *
- * Browser already attaches our httpOnly session cookie to every request
- * — no API-key dance like the legacy v2 did. This file just handles:
- *
- *   1. 401 responses: redirect to login via HX-Redirect or location.
- *   2. Toast notifications: server emits HX-Trigger: { toast: {...} }
- *      and we render it into #toast-stack.
- *   3. Confirm modal: replaces native confirm() for hx-confirm prompts,
- *      so we can theme it (Bootstrap modal) and customize per-action.
- *   4. Indicator class management for live-search inputs.
+ *    1.  401 responses: redirect to login via HX-Redirect or location
+ *    2.  Toast notifications from HX-Trigger: { toast: {...} }
+ *    3.  Confirm modal (data-confirm), replacing htmx's hx-confirm
+ *    3a. Pause htmx polling while a confirm modal is open
+ *    4.  Modal auto-open on swap into #modal-content
+ *    5.  Modal close on HX-Trigger: { "modal:close": {} }
+ *    5a. Modal focus management (WCAG 2.4.3)
+ *    6.  Broken-thumbnail placeholder
+ *    7.  Bulk selection toolbar
+ *    8.  Thumbnail upload preview
+ *    9.  Abstract expand/collapse
+ *   10.  Deferred redirect after a workspace action
+ *   11.  Sidebar tooltips
+ *   11a. Handle-link tooltips (Admin > Handles)
+ *   12.  Add-objects picker: persistent multi-select
+ *   13.  Admin > Handles: repeatable mint rows
+ *   14.  Admin > Handles: copy a handle to the clipboard
  */
 (function () {
     'use strict';
 
     if (typeof window.htmx === 'undefined') {
-        /*
-         * Should not happen — layout.ejs loads htmx via CDN. But fail
-         * loud if it does.
-         */
         console.error('htmx not loaded; dashboard.js can not initialize');
         return;
     }
 
-    /*
-     * Read the dashboard base path from <body data-dashboard-base="...">.
-     * Avoids needing an inline <script> in the layout (CSP-friendly).
-     */
+    // From <body data-dashboard-base="...">, so the layout needs no inline script.
     const DASHBOARD_BASE =
         (document.body && document.body.dataset && document.body.dataset.dashboardBase) ||
         '/repo/dashboard';
 
     /*
      * ---- 1. 401 handling ----
-     * The dashboard auth middleware sets HX-Redirect on a 401. htmx
-     * follows it automatically; this handler is the fallback for
-     * legitimate API calls that bypass that middleware.
+     * The auth middleware sets HX-Redirect on a 401 and htmx follows it. This
+     * is the fallback for API calls that bypass that middleware.
      */
     document.body.addEventListener('htmx:responseError', function (evt) {
         const xhr = evt.detail.xhr;
@@ -60,11 +61,8 @@
     });
 
     /*
-     * Long-running actions (batch halt / batch rollback loop over up
-     * to ~100 rows with per-row curation calls) — surface immediate
-     * feedback the moment the request FIRES, so staff aren't staring
-     * at a silent page wondering whether the click took. Any element
-     * can opt in with data-busy-message="...".
+     * Immediate feedback the moment a long-running request fires. Any element
+     * opts in with data-busy-message="...".
      */
     document.body.addEventListener('htmx:beforeRequest', function (evt) {
         const src = evt.detail && evt.detail.elt;
@@ -122,47 +120,29 @@
 
     /*
      * ---- 3. Confirm modal ----
-     * We DON'T use htmx's hx-confirm — that fires window.confirm() as a
-     * fallback path, which produced a stacked native dialog + styled
-     * modal during the metadata refresh work (htmx 1.9.12 behavior).
-     * 
-     * Instead we use a custom attribute `data-confirm` and intercept
-     * the click at the capture phase, BEFORE htmx sees it. The styled
-     * modal opens; on OK we set a one-shot sentinel on the element and
-     * re-fire the click programmatically. The capture listener sees
-     * the sentinel and lets the click through to htmx. htmx never sees
-     * an hx-confirm attribute, so it never calls window.confirm.
-     * 
+     * Intercepts clicks on [data-confirm] at the CAPTURE phase, before htmx
+     * sees them, and opens the styled modal. On OK a one-shot sentinel is set
+     * on the element and the click is re-fired; the capture listener sees the
+     * sentinel and lets it through. htmx's own hx-confirm is not used.
+     *
      * Element contract:
      *   data-confirm="<message body>"     required
      *   data-confirm-title="<title>"      optional (default: "Confirm")
      *   data-confirm-label="<button>"     optional (default: "Confirm")
-     * 
-     * Side benefit: the same pattern works for non-htmx elements (e.g.
-     * a plain <a href>) — we just call elt.click() and the browser
-     * does whatever it would normally do.
+     *
+     * Works for non-htmx elements too — a plain <a href> just gets elt.click().
      */
     document.body.addEventListener(
         'click',
         function (evt) {
             const elt = evt.target.closest && evt.target.closest('[data-confirm]');
             if (!elt) return;
-            /*
-             * Sentinel: if we just programmatically re-fired this
-             * click after a confirm, let it through. The sentinel is
-             * single-use — cleared on entry so a real subsequent
-             * user-initiated click still gets confirmed.
-             */
+            // Single-use sentinel: cleared on entry, so the next real click confirms.
             if (elt.__confirmed) {
                 elt.__confirmed = false;
                 return;
             }
-            /*
-             * Block htmx (and any other handler) from seeing this
-             * particular click — stopImmediatePropagation also prevents
-             * other capture-phase listeners on document.body, but our
-             * own listener already had its turn so that's fine.
-             */
+            // Keep htmx and every other handler from seeing this click.
             evt.preventDefault();
             evt.stopImmediatePropagation();
             evt.stopPropagation();
@@ -172,11 +152,7 @@
             const label = elt.getAttribute('data-confirm-label') || 'Confirm';
 
             const modal_el = document.getElementById('confirm-modal');
-            /*
-             * Defensive fallback: no styled modal in the DOM, or
-             * Bootstrap not loaded. Use the native confirm and bypass
-             * re-interception on yes.
-             */
+            // No styled modal, or no Bootstrap: fall back to the native confirm.
             if (!modal_el || !window.bootstrap) {
                 if (window.confirm(question)) {
                     elt.__confirmed = true;
@@ -189,37 +165,23 @@
             modal_el.querySelector('#confirm-modal-message').textContent = question;
             const proceed = modal_el.querySelector('#confirm-modal-proceed');
             proceed.textContent = label;
-            /*
-             * Tint the proceed button red for destructive labels.
-             * Heuristic: any label containing "delete" or "remove".
-             */
+            // Red proceed button for destructive labels.
             const is_destructive = /delete|remove|cancel batch/i.test(label);
             proceed.className = 'btn ' + (is_destructive ? 'btn-danger' : 'btn-primary');
 
             const bs_modal = window.bootstrap.Modal.getOrCreateInstance(modal_el);
 
             /*
-             * Pause htmx polling while the confirm modal is open.
-             * Without this, a 2s-interval poller targeting the same
-             * region the click came FROM (e.g. the metadata-refresh
-             * admin page where Start/Cancel live inside the polled
-             * status partial) can swap the DOM mid-confirm — `elt`
-             * becomes detached and the proceed-click does nothing.
-             * 
-             * We use our own body class (not Bootstrap's .modal-open)
-             * because Bootstrap adds .modal-open ASYNCHRONOUSLY after
-             * the show transition begins — too late to win the race
-             * against the next polling tick. Our class is set
-             * synchronously here, and the polled element's
-             * hx-trigger filter checks for it on every tick.
+             * Set synchronously — section 3a reads it to suppress polling while
+             * the modal is open. Not Bootstrap's .modal-open, which is added
+             * asynchronously after the show transition begins.
              */
             document.body.classList.add('htmx-confirm-pending');
 
             /*
-             * Replace the onclick each time (not addEventListener) so
-             * we never accumulate stale closures pointing at old
-             * elements. Bootstrap's modal handles its own backdrop
-             * click + escape key, so cancel needs no wiring here.
+             * onclick, not addEventListener, so stale closures pointing at old
+             * elements never accumulate. Bootstrap handles backdrop click and
+             * Escape, so cancel needs no wiring.
              */
             proceed.onclick = function () {
                 bs_modal.hide();
@@ -227,21 +189,13 @@
                 elt.__confirmed = true;
                 elt.click();
             };
-            /*
-             * Belt-and-braces: clear the flag whenever the modal
-             * closes (proceed, cancel, escape, backdrop). One-shot
-             * listener so we don't accumulate handlers.
-             */
+            // Clear the flag on any close (proceed, cancel, Escape, backdrop).
             modal_el.addEventListener('hidden.bs.modal', function on_hide() {
                 document.body.classList.remove('htmx-confirm-pending');
                 modal_el.removeEventListener('hidden.bs.modal', on_hide);
             });
 
-            /*
-             * Remember the trigger so the dedicated focus-management
-             * handler (section 5a) can return focus there when the
-             * modal closes via cancel / Escape / backdrop / proceed.
-             */
+            // Section 5a returns focus here when the modal closes, however it closes.
             _capture_modal_trigger(modal_el, elt);
 
             bs_modal.show();
@@ -251,33 +205,16 @@
 
     /*
      * ---- 3a. Pause htmx polling while a confirm modal is open ----
-     * 
-     * Why this exists: the system-refresh admin page (and any other
-     * page that puts an action button INSIDE an `hx-trigger="every Ns"`
-     * polled region) has a race — the polling tick fires mid-confirm,
-     * swaps the partial, detaches the button DOM. The proceed-click
-     * then lands on an orphan and does nothing.
-     * 
-     * Why we can't use hx-trigger's "[filter]" syntax: htmx evaluates
-     * those filters with `new Function()`, which our CSP correctly
-     * forbids (no 'unsafe-eval'). So we gate from JS instead.
-     * 
-     * What we cancel: ONLY polling requests — identified by the
-     * source element having `every` in its hx-trigger attribute.
-     * Click/submit/load-triggered requests pass through untouched.
-     * We never want to block a user-initiated request just because
-     * a modal is open.
+     * Cancels ONLY polling requests, identified by `every` in the source
+     * element's hx-trigger. Click-, submit- and load-triggered requests always
+     * pass through.
      */
     document.body.addEventListener('htmx:beforeRequest', function (evt) {
         if (!document.body.classList.contains('htmx-confirm-pending')) return;
         const src = evt.detail && evt.detail.elt;
         if (!src) return;
         const trigger = src.getAttribute('hx-trigger');
-        /*
-         * Polling triggers use the htmx `every <interval>` keyword.
-         * Word-boundary match so `every2s` (typo) or `everyone` don't
-         * false-positive, and a substring like `evening` doesn't either.
-         */
+        // Word-boundary match, so `every2s`, `everyone` and `evening` don't match.
         if (trigger && /\bevery\b/.test(trigger)) {
             evt.preventDefault();
         }
@@ -285,10 +222,9 @@
 
     /*
      * ---- 4. Modal auto-open ----
-     * Any partial swapped into #modal-content (the inside of the
-     * generic #modal-mount in the layout) auto-opens the modal. Routes
-     * that return a modal-shaped fragment just need to target
-     * #modal-content — no extra JS per page.
+     * Any partial swapped into #modal-content (inside the layout's generic
+     * #modal-mount) opens the modal. A route returning a modal-shaped fragment
+     * only has to target #modal-content.
      */
     document.body.addEventListener('htmx:afterSwap', function (evt) {
         const target = evt.detail.target;
@@ -301,10 +237,9 @@
 
     /*
      * ---- 5. Modal close-on-server-event ----
-     * The thumbnail upload returns its swapped row to the row target
-     * (not the modal), so we need a separate signal to dismiss the
-     * open modal. Server emits HX-Trigger: { "modal:close": {} } and
-     * we hide whatever modal is currently open.
+     * Hides whatever modal is open when the server emits
+     * HX-Trigger: { "modal:close": {} }. Needed because handlers like the
+     * thumbnail upload swap their response into the row, not the modal.
      */
     document.body.addEventListener('modal:close', function () {
         const modal_el = document.getElementById('modal-mount');
@@ -315,36 +250,21 @@
 
     /*
      * ---- 5a. Modal focus management (WCAG 2.4.3) ----
-     * 
-     * Bootstrap 5 moves focus to the modal *element* on show and
-     * attempts to restore focus to the previously-focused element on
-     * hide. That default has two gaps in our HTMX flow:
-     * 
-     *   1. Keyboard users land on the modal container itself and must
-     *      Tab once before any interactive element gets focus. We move
-     *      focus to the first usable control instead so they can act
-     *      immediately.
-     * 
-     *   2. "Previously focused" is whatever had :focus when show() ran.
-     *      Our click handlers and HTMX requests can shift focus before
-     *      that point (e.g. confirm-modal preventDefaults the click;
-     *      htmx fires async; a row swap may detach the original click
-     *      target). Capturing the trigger explicitly is more reliable.
-     * 
-     * Applies to both #modal-mount (HTMX-swapped content) and
-     * #confirm-modal (intercepted-click confirmation). Per-modal state
-     * lives in a WeakMap keyed by the modal element so multiple
-     * modals can have independent triggers without leaking memory.
+     * On show, moves focus to the modal's first usable control rather than the
+     * container. On hide, returns focus to the trigger captured at request
+     * time rather than to whatever held :focus when show() ran.
+     *
+     * Applies to #modal-mount (HTMX-swapped content) and #confirm-modal
+     * (intercepted-click confirmation). Per-modal state lives in a WeakMap
+     * keyed by the modal element.
      */
     const _modal_triggers = new WeakMap();
 
     function _capture_modal_trigger(modal_el, trigger) {
         if (!modal_el) return;
         /*
-         * Walk to the nearest focusable ancestor so we don't try to
-         * focus an inner SVG path. Falls back to the raw element so
-         * a non-focusable trigger doesn't error out — focus() on it
-         * is a no-op in that case.
+         * Nearest focusable ancestor, so an inner SVG path isn't the target.
+         * Falls back to the raw element, where focus() is simply a no-op.
          */
         const focusable =
             trigger && typeof trigger.closest === 'function'
@@ -356,10 +276,8 @@
     function _focus_first_in_modal(modal_el) {
         if (!modal_el) return;
         /*
-         * Prefer the first non-dismiss control so keyboard users can
-         * act on the modal's primary affordance immediately. If the
-         * modal has nothing but a close button (e.g. a metadata view),
-         * focus that — at least focus is inside the dialog.
+         * First non-dismiss control, falling back to the close button for a
+         * modal that has nothing else (a metadata view, say).
          */
         const primary = modal_el.querySelector(
             'input:not([disabled]):not([type="hidden"]),' +
@@ -377,10 +295,8 @@
         const trigger = _modal_triggers.get(modal_el);
         _modal_triggers.delete(modal_el);
         /*
-         * The trigger may have been swapped out by HTMX between open
-         * and close (e.g. a polled row that re-rendered while the
-         * modal was open). In that case let the browser's default
-         * behavior take over rather than focusing a detached node.
+         * HTMX may have swapped the trigger out between open and close. Leave
+         * focus to the browser rather than targeting a detached node.
          */
         if (trigger && document.body.contains(trigger)) {
             trigger.focus();
@@ -399,9 +315,9 @@
     });
 
     /*
-     * For #modal-mount, the trigger is whatever HTMX element requested
-     * a swap into #modal-content. Capture it at request-start time so
-     * it's reliable even if focus shifts during the network roundtrip.
+     * For #modal-mount the trigger is whatever HTMX element requested the swap
+     * into #modal-content, captured at request start so a focus shift during
+     * the round trip cannot lose it.
      */
     document.body.addEventListener('htmx:beforeRequest', function (evt) {
         const target = evt.detail && evt.detail.target;
@@ -414,13 +330,9 @@
 
     /*
      * ---- 6. Broken-thumbnail handler ----
-     * Replaces a failed <img class="thumb-img"> with the placeholder
-     * icon. Has to use capture-phase listening because `error` events
-     * on <img> elements don't bubble — a delegated listener attached
-     * to document.body via addEventListener defaults to bubble and
-     * would never fire. CSP's `script-src-attr 'none'` forbids the
-     * inline `onerror=` attribute we used to use; this is the
-     * equivalent behavior implemented in a CSP-safe way.
+     * Replaces a failed <img class="thumb-img"> with the placeholder icon.
+     * MUST be capture-phase: `error` events on <img> do not bubble, so a
+     * bubble-phase delegated listener would never fire.
      */
     document.body.addEventListener(
         'error',
@@ -428,14 +340,9 @@
             const el = evt.target;
             if (!el || el.tagName !== 'IMG' || !el.classList.contains('thumb-img')) return;
             /*
-             * Build a placeholder span that matches the EJS partial's
-             * empty-state markup (.thumb-placeholder + a media-specific icon).
-             * The icon is keyed off the img's data-media (set server-side from
-             * the object mime_type) so a failed audio/video/pdf thumbnail
-             * shows its own icon, not the image one. These icons MUST stay in
-             * sync with views/dashboard/partials/thumb_placeholder.ejs.
-             * Absent data-media (e.g. collection rows) → 'image', preserving
-             * the prior image-off placeholder for those.
+             * Keyed off the img's data-media (set server-side from mime_type),
+             * defaulting to 'image' when absent. These icons MUST stay in sync
+             * with views/dashboard/partials/thumb_placeholder.ejs.
              */
             const THUMB_ICONS = {
                 audio:
@@ -468,15 +375,10 @@
 
     /*
      * ---- 7. Bulk selection toolbar ----
-     * The toolbar (rendered by objects_table.ejs) is visible only when
-     * at least one row checkbox is checked. State lives in the DOM —
-     * no SPA store needed — because HTMX may swap the table multiple
-     * times during a session and re-running the swap should leave any
-     * newly-rendered rows unchecked (which it does, since rows render
-     * without `checked`).
-     * 
-     * The hidden #bulk-pids input is the single source of truth the
-     * forms read from; the per-row checkboxes only feed it.
+     * The toolbar (rendered by objects_table.ejs) is visible only while at
+     * least one row checkbox is checked. State lives in the DOM. The hidden
+     * #bulk-pids input is what the forms read; the per-row checkboxes only
+     * feed it.
      */
     function update_bulk_toolbar() {
         const toolbar = document.querySelector('.bulk-toolbar');
@@ -488,18 +390,12 @@
         toolbar.classList.toggle('is-active', count > 0);
         const pids_input = document.getElementById('bulk-pids');
         if (pids_input) {
-            /*
-             * Comma-join — small payload, easy for the server to parse,
-             * bypasses Express body parser's array-key heuristics.
-             */
+            // Comma-joined, which bypasses the Express body parser's array heuristics.
             pids_input.value = Array.from(checks)
                 .map((c) => c.value)
                 .join(',');
         }
-        /*
-         * Keep the header "select all" in sync — checked if every visible
-         * row is selected, indeterminate otherwise.
-         */
+        // Header "select all": checked when every visible row is, else indeterminate.
         const all_rows = document.querySelectorAll('.row-select');
         const select_all = document.querySelector('.select-all');
         if (select_all && all_rows.length > 0) {
@@ -540,9 +436,9 @@
     });
 
     /*
-     * After HTMX swaps the objects table (filter change, pagination,
-     * post-bulk refresh), recompute the toolbar state. The new rows
-     * come in unchecked so the count drops to 0 and the toolbar hides.
+     * Recompute after any objects-table swap (filter, pagination, post-bulk
+     * refresh). New rows arrive unchecked, so the count drops to 0 and the
+     * toolbar hides.
      */
     document.body.addEventListener('htmx:afterSwap', function (evt) {
         if (evt.detail.target && evt.detail.target.id === 'objects-table') {
@@ -551,18 +447,9 @@
     });
 
     /*
-     * Note: the #objects-table region declares
-     *   hx-trigger="load, objects:refresh from:body"
-     * so the bulk-action HX-Trigger response is enough to refresh the
-     * table. No JS plumbing needed for that path.
-     */
-
-    /*
      * ---- 8. Thumbnail upload preview ----
-     * Delegated change listener for the file input inside the upload
-     * modal. Renders a local preview via FileReader so the user sees
-     * their choice before submitting. Kept here (and not inline in the
-     * partial) because our CSP forbids inline scripts.
+     * Delegated change listener for the upload modal's file input; renders a
+     * local FileReader preview before submit.
      */
     document.body.addEventListener('change', function (evt) {
         const input = evt.target;
@@ -577,10 +464,7 @@
         }
         const reader = new FileReader();
         reader.onload = function (e) {
-            /*
-             * Replace slot contents with a preview <img>. textContent
-             * first to clear any prior children safely.
-             */
+            // textContent first, to clear any prior children safely.
             slot.textContent = '';
             slot.className = 'thumb-preview';
             const img = document.createElement('img');
@@ -593,15 +477,11 @@
 
     /*
      * ---- 9. Abstract expand/collapse ----
-     * Click .abstract-toggle → toggle .abstract-collapsed on the
-     * sibling .abstract-body. Used by long abstracts on the
-     * collection-detail page (and any future page that opts in via
-     * the same .abstract-block / .abstract-body / .abstract-toggle
-     * markup). The full text is always in the DOM; we only flip
-     * which portion is visible.
-     * 
-     * No inline onclick — CSP forbids that. Delegated handler so it
-     * works for partials swapped in via htmx too.
+     * Click .abstract-toggle → toggle .abstract-collapsed on the sibling
+     * .abstract-body. Any page opts in with the .abstract-block /
+     * .abstract-body / .abstract-toggle markup. The full text is always in the
+     * DOM; only the visible portion changes. Delegated, so htmx-swapped
+     * partials are covered.
      */
     document.body.addEventListener('click', function (evt) {
         const btn = evt.target.closest && evt.target.closest('.abstract-toggle');
@@ -617,21 +497,13 @@
 
     /*
      * ---- 10. Deferred redirect (workspace action results) ----
-     * Some workspace actions (Submit to Ingest is the only one
-     * today) show a success card briefly, then navigate the
-     * browser to the queue view so staff sees the rows appearing
-     * there. Previously this used an inline <script> in the
-     * returned partial — that's a CSP `script-src-elem` violation
-     * because our policy forbids inline scripts. Instead the
-     * partial drops a .workspace-deferred-redirect sentinel
-     * <div data-redirect-target="…" data-redirect-delay="…">;
-     * we pick it up on htmx:afterSwap and schedule the navigation
-     * from this (self-hosted) bundle.
-     * 
-     * Idempotency: we remove the sentinel after scheduling so a
-     * subsequent re-render of the SAME partial (e.g. an htmx
-     * polling tick that happened to land mid-redirect) doesn't
-     * chain multiple timeouts.
+     * A workspace action's partial can drop a .workspace-deferred-redirect
+     * sentinel <div data-redirect-target="…" data-redirect-delay="…">; the
+     * navigation is scheduled here on htmx:afterSwap. Submit to Ingest is the
+     * only user today.
+     *
+     * The sentinel is removed once scheduled, so a re-render of the same
+     * partial cannot chain multiple timeouts.
      */
     document.body.addEventListener('htmx:afterSwap', function (evt) {
         const root = evt.detail && evt.detail.target;
@@ -648,17 +520,12 @@
     });
 
     /*
-     * ---- 5. Sidebar tooltips ----
-     * The icon-only nav rail relies on hover labels. Native `title`
-     * tooltips are slow to appear (~0.5s+, browser-controlled) and plainly
-     * styled, so upgrade the sidebar links to Bootstrap tooltips: placed to
-     * the right (clear of the rail), a short ~100ms show delay so they pop
-     * quickly, and a `.sidebar-tooltip` custom class for a more prominent
-     * bubble (see styles.css). Bootstrap consumes each link's `title` on
-     * init (clears the attribute) so the native tooltip doesn't also fire.
-     * Progressive enhancement: with JS off, the native `title` still works.
-     * The rail is server-rendered once (not htmx-swapped), so a one-time
-     * init on load covers every link; getOrCreateInstance is idempotent.
+     * ---- 11. Sidebar tooltips ----
+     * Upgrades the icon-only nav rail's hover labels to Bootstrap tooltips:
+     * placed right, ~100ms show delay, `.sidebar-tooltip` custom class (see
+     * styles.css). Bootstrap consumes each link's `title` on init so the
+     * native tooltip does not also fire; with JS off the `title` still works.
+     * The rail is server-rendered once, so one init on load covers every link.
      */
     function init_tooltips(scope, selector, options) {
         if (!window.bootstrap || !window.bootstrap.Tooltip) return;
@@ -683,17 +550,13 @@
     });
 
     /*
-     * ---- 5b. Handle-link tooltips (Admin > Handles) ----
-     * Same prominent treatment as the rail, but this table IS htmx-swapped
-     * (mint, delete and the status filter all replace #handles-list), so a
-     * one-time init on load is not enough:
+     * ---- 11a. Handle-link tooltips (Admin > Handles) ----
+     * Same treatment as the rail, but #handles-list IS htmx-swapped (by mint,
+     * delete and the status filter), so one init on load is not enough:
      *
-     *   - re-init after every swap, or rows that arrive later get only the
-     *     slow native tooltip
-     *   - dispose BEFORE the swap, or a tooltip that happens to be showing
-     *     when the row is replaced is orphaned in the body with nothing to
-     *     anchor to — a bubble stranded mid-page. Clicking Delete while
-     *     hovering the handle is exactly that case.
+     *   - re-init after every swap, or later rows get only the native tooltip
+     *   - dispose BEFORE the swap, or a tooltip showing when its row is
+     *     replaced is left orphaned in the body with nothing to anchor to
      */
     const HANDLE_TOOLTIP = 'a.handle-link[title], a.handle-link[data-bs-original-title]';
     const HANDLE_TOOLTIP_OPTS = {
@@ -716,10 +579,10 @@
     });
 
     /*
-     * WCAG 2.1 SC 1.4.13 (Content on Hover or Focus) requires hover/focus
-     * content to be dismissible without moving the pointer or focus.
-     * Bootstrap tooltips do not handle Escape themselves, so do it here —
-     * this covers the rail as well as the handle links.
+     * Escape dismisses any open tooltip (WCAG 2.1 SC 1.4.13 — hover/focus
+     * content must be dismissible without moving the pointer or focus).
+     * Bootstrap does not handle Escape itself. Covers the rail and the handle
+     * links alike.
      */
     document.addEventListener('keydown', function (evt) {
         if (evt.key !== 'Escape') return;
@@ -734,15 +597,13 @@
     });
 
     /*
-     * ---- 6. Add-objects picker: persistent multi-select ----
-     * The picker's results region is HTMX-swapped on every search + page, so a
-     * checkbox's state can't live in the row. We keep the selected pids in a
-     * Set, mirror it into hidden <input name="pids"> elements inside the form
-     * (so the POST submits the FULL selection, not just the visible page),
-     * re-apply checked state after each swap, and keep the count + submit button
-     * in sync. CSP-safe: all behavior lives here, no inline handlers. The
-     * visible checkboxes are UI-only (data-pid, no name); the hidden inputs are
-     * the submitted source of truth.
+     * ---- 12. Add-objects picker: persistent multi-select ----
+     * The results region is HTMX-swapped on every search and page, so checkbox
+     * state cannot live in the row. Selected pids are held in a Set, mirrored
+     * into hidden <input name="pids"> elements in the form so the POST submits
+     * the FULL selection, re-applied to the visible rows after each swap.
+     * The visible checkboxes are UI-only (data-pid, no name); the hidden
+     * inputs are the submitted source of truth.
      */
     (function add_objects_selection() {
         const form = document.getElementById('add-objects-form');
@@ -752,11 +613,7 @@
         const submit_btn = document.getElementById('add-objects-submit');
         const selected = new Set();
 
-        /*
-         * Mirror the server cap (collections.add_members allows ≤100 per add)
-         * so the header "select all" can't build a selection the POST would
-         * 400 on — we warn + block submit instead.
-         */
+        // Mirrors the server cap in collections.add_members. Over it, submit is blocked.
         const MAX_ADD = 100;
 
         function render() {
@@ -783,10 +640,7 @@
             if (submit_btn) submit_btn.disabled = n === 0 || over;
         }
 
-        /*
-         * Reflect the visible page's state in the header "select all" checkbox:
-         * checked when every visible row is selected, indeterminate when some.
-         */
+        // Header checkbox: checked when every visible row is selected, else indeterminate.
         function sync_header() {
             const header = document.getElementById('add-objects-select-page');
             if (!header) return;
@@ -847,22 +701,19 @@
     })();
 
     /*
-     * ---- Admin > Handles: repeatable mint rows ----
+     * ---- 13. Admin > Handles: repeatable mint rows ----
      *
-     * The page renders ONE row; this grows it to at most data-max. Rows are
-     * cloned client-side rather than fetched, so adding one is instant.
+     * The page renders ONE row; this clones it client-side up to data-max.
      *
-     * Accessibility is most of the work here:
+     * Accessibility behavior:
      *   - focus moves to the new row's URL field on add, and to the previous
-     *     row on remove — otherwise a keyboard user has no idea the DOM
-     *     changed and has to hunt for where they are
+     *     row on remove
      *   - every add/remove is announced through a polite live region,
      *     including how many more are allowed
      *   - renumber() reassigns ids, label `for`, label text and each Remove
      *     button's accessible name after ANY change, so "Remove handle 3"
      *     always names the row it will actually remove
-     *   - Remove is hidden when only one row is left: there is nothing to
-     *     remove, and a dead control is worse than no control
+     *   - Remove is hidden while only one row is left
      */
     (function handle_mint_rows() {
         const tbody = document.getElementById('handle-rows');
@@ -915,17 +766,12 @@
         }
 
         /*
-         * Gate Mint on at least one target URL being filled in, so an empty
-         * form cannot reach the server. The button is rendered ENABLED and
-         * disabled here — the reverse would leave the form dead with JS off.
-         *
-         * Presence only, deliberately: `type="url"` already gives the browser
-         * format checking on submit, and the server re-validates the host
-         * allowlist regardless. A whitespace-only field does not count.
-         *
-         * Never re-enables a button the server disabled (HANDLE_* not
-         * configured): those rows' inputs are disabled too, so nothing can be
-         * typed and the count stays zero.
+         * Enables Mint once at least one target URL is non-blank; whitespace
+         * does not count. Presence only — `type="url"` covers format and the
+         * server re-validates the host allowlist. The button is rendered
+         * ENABLED and disabled here, so the form still works with JS off, and
+         * it cannot re-enable a button the server disabled (HANDLE_*
+         * unconfigured) because those inputs are disabled too.
          */
         function sync_submit() {
             if (!submit_btn) return;
@@ -992,13 +838,8 @@
 
         /*
          * Emitted by the mint POST via HX-Trigger, but ONLY when every handle
-         * succeeded. Clearing on a partial failure would throw away the URLs
-         * the operator still needs to correct; leaving values after a full
-         * success invites a second click that mints a duplicate.
-         *
-         * Focus is deliberately left on the Mint button — the operator's
-         * attention belongs on the toast and the refreshed list, not back in
-         * an empty field.
+         * succeeded. Resets to a single empty row. Focus stays on the Mint
+         * button rather than moving into a field.
          */
         document.body.addEventListener('handles-reset', function () {
             rows().slice(1).forEach(function (row) { row.remove(); });
@@ -1016,22 +857,12 @@
     })();
 
     /*
-     * ---- Admin > Handles: copy a handle to the clipboard ----
+     * ---- 14. Admin > Handles: copy a handle to the clipboard ----
      *
-     * Staff paste these into other sites and citations, so the button copies
-     * the RESOLVER url (https://hdl.handle.net/<prefix>/<uuid>) rather than
-     * the bare handle, which is not clickable on its own. The value comes
-     * from data-clipboard-text so this never has to reconstruct it.
-     *
-     * Delegated from document, not bound per button: #handles-list is
-     * replaced by htmx on mint, delete and filter, and delegation means
-     * nothing has to be re-initialised afterwards.
-     *
-     * Feedback is a toast plus a polite live region. An inline "Copied"
-     * label was the first attempt, but the item lives in a kebab menu that
-     * Bootstrap closes on click — the confirmation would flash out of
-     * existence with the menu. (It would also have had to avoid
-     * `textContent`, which would wipe the item's icon.)
+     * Copies the RESOLVER url (https://hdl.handle.net/<prefix>/<uuid>), read
+     * from data-clipboard-text, not the bare handle. Delegated from document,
+     * since htmx replaces #handles-list on mint, delete and filter. Feedback
+     * is a toast plus a polite live region.
      */
     (function handle_copy_buttons() {
         function announce(message) {
@@ -1039,11 +870,7 @@
             if (status) status.textContent = message;
         }
 
-        /*
-         * navigator.clipboard needs a secure context. The dashboard is behind
-         * HTTPS in production, but a plain-http dev host would otherwise fail
-         * silently — hence the execCommand fallback.
-         */
+        // navigator.clipboard needs a secure context; execCommand covers plain-http dev.
         function write_clipboard(text) {
             if (navigator.clipboard && window.isSecureContext) {
                 return navigator.clipboard.writeText(text);

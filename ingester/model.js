@@ -16,14 +16,10 @@
  *      ingester/state_metadata.js whenever a status is written.
  *      Callers can override either by passing them explicitly.
  * 
- *   4. `updated` is bumped on every row UPDATE. Used by the dashboard
- *      to sort by recent activity and by the worker's orphan recovery
- *      logic to find rows that haven't progressed in a while.
- * 
- * The model is intentionally narrow: the worker + the dashboard call
- * these functions, not knex directly. Anyone tempted to UPDATE
- * tbl_ingest_queue from elsewhere should add a method here instead —
- * otherwise the event log silently develops gaps.
+ *   4. `updated` is bumped on every row UPDATE.
+ *
+ * All writes to tbl_ingest_queue go through this model; writing knex
+ * directly from elsewhere leaves gaps in the event log.
  */
 
 const { db_queue } = require('../config/db');
@@ -37,10 +33,8 @@ const EVENTS = tables.ingest_events;
 // --- Helpers ---------------------------------------------------------
 
 /*
- * Stringify a payload for the events row. We store JSON in a TEXT
- * column to stay portable across MariaDB + SQLite (the latter only
- * recently learned native JSON). Returns null for null/undefined so
- * the column reads cleanly back as null, not 'null'.
+ * Stringify a payload for the events row's TEXT column. Returns null
+ * for null/undefined so the column reads back as null, not 'null'.
  */
 function serialize_payload(payload) {
     if (payload === undefined || payload === null) return null;
@@ -65,11 +59,8 @@ function enrich_update(data, knex) {
         out.pipeline_state = data.status;
     }
     /*
-     * Look up severity/suggested_action against the *resolved*
-     * pipeline_state on `out`, not the raw `data` — the common caller
-     * pattern is to pass only `status`, which the mirror step above
-     * has just copied into `out.pipeline_state`. Reading `data.pipeline_state`
-     * here would skip metadata population for every status-only update.
+     * Resolve against `out.pipeline_state`, not `data.pipeline_state` —
+     * status-only updates have just had their state mirrored onto `out`.
      */
     if (out.pipeline_state !== undefined) {
         const meta = get_status_metadata(out.pipeline_state);
@@ -152,14 +143,9 @@ async function update_queue(where, data, opts = {}) {
         throw new ValidationError('update data is required');
     }
     /*
-     * One-shot retry on optimistic-concurrency conflicts. MariaDB
-     * throws "Record has changed since last read in table" when a
-     * concurrent transaction commits a write to the same row between
-     * our SELECT and UPDATE. Callers (esp. the worker's stage code)
-     * are supposed to serialize their own writes, but the retry is
-     * here as a belt-and-braces guard against any race that slips
-     * through. The retry re-runs the whole txn from scratch, so the
-     * event log still records the correct from→to transition.
+     * One-shot retry on an optimistic-concurrency conflict. Re-runs the
+     * whole transaction, so the event log still records the correct
+     * from→to transition.
      */
     try {
         return await _update_queue_txn(where, data, opts);
@@ -211,17 +197,13 @@ async function _update_queue_txn(where, data, opts) {
 }
 
 /*
- * Append an informational event to a queue row's timeline WITHOUT
- * touching the queue row itself. update_queue only writes events when
- * pipeline_state actually transitions; some long silent windows have
- * no transition to record — e.g. Stage 3's start_transfer, where
- * Archivematica copies the whole package before responding and the row
- * rests at UPLOAD_COMPLETE the entire time. A one-off marker event
- * keeps the timeline honest through such windows.
+ * Append an informational event to a queue row's timeline without
+ * touching the queue row itself — for marking long windows that have
+ * no pipeline_state transition of their own.
  *
- * `to_state` is required (the timeline renders it as the event label);
- * `from_state` defaults to null so the entry reads as a single label,
- * not a transition.
+ * `to_state` is required and renders as the event label; `from_state`
+ * defaults to null so the entry reads as a single label rather than a
+ * transition.
  */
 async function insert_event(
     queue_id,
@@ -240,13 +222,9 @@ async function insert_event(
 }
 
 /*
- * MariaDB throws this specific error text when an InnoDB optimistic
- * row-version check fails between SELECT and UPDATE inside a
- * transaction. (Same family as ER_LOCK_DEADLOCK / ER_LOCK_WAIT_TIMEOUT,
- * but distinct: this one fires under READ COMMITTED + concurrent
- * writer.) We match by substring rather than errno because the
- * underlying mysql2 driver versions surface the condition under
- * different codes across MariaDB releases.
+ * Detect MariaDB's optimistic row-version conflict. Matched by message
+ * substring rather than errno, because mysql2 surfaces the condition
+ * under different codes across MariaDB releases.
  */
 function _is_concurrent_modification(err) {
     if (!err || !err.message) return false;
@@ -267,33 +245,20 @@ async function list_queue(filters = {}, { limit = 100, offset = 0 } = {}) {
     if (filters.status) q.where({ status: filters.status });
     if (filters.batch) q.where({ batch: filters.batch });
     if (filters.is_complete !== undefined) q.where({ is_complete: filters.is_complete ? 1 : 0 });
-    /*
-     * sip_uuid lookup is used by the AIPs dashboard's retry action
-     * to find the ingest queue row corresponding to a tbl_aip_store
-     * row. The natural join key is AM's SIP UUID (which we stored on
-     * the aip_store row as aip_uuid at copy time).
-     */
+    /* Join key to tbl_aip_store rows (AM's SIP UUID). */
     if (filters.sip_uuid) q.where({ sip_uuid: filters.sip_uuid });
     /*
-     * The AIP backfill (ingester/aip_backfill.js) inserts synthetic
-     * queue rows with batch='aip-backfill-<uuid>'. They drive Stage 6
-     * for already-ingested objects and are real work — the WORKER
-     * must see them — but the regular ingest queue dashboard would
-     * get noisy if they showed up alongside actual ingest jobs.
-     * Callers opt in to hiding them; the worker leaves the flag off
-     * so its claim queries still pick them up.
+     * Hide the synthetic backfill rows (batch='aip-backfill-<uuid>')
+     * that ingester/aip_backfill.js inserts. Opt-in: the worker leaves
+     * the flag off so its claim queries still pick them up.
      */
     if (filters.exclude_backfill) q.whereNot('batch', 'like', 'aip-backfill-%');
     return q.orderBy('id', 'desc').limit(limit).offset(offset);
 }
 
 /*
- * Count non-complete rows whose pipeline_state is in `states`.
- * Used by the worker's AM-active gate (see ingester/worker.js) to
- * decide whether it's safe to admit a new package into Archivematica.
- * Cheap — indexed status lookup with COUNT(*) and a small whereIn set.
- * Returns a plain number (not a knex object) so callers don't need
- * to know about driver quirks.
+ * Count non-complete rows whose pipeline_state is in `states`. Drives
+ * the worker's AM-active gate. Returns a plain number.
  */
 async function count_rows_in_states(states) {
     if (!Array.isArray(states) || states.length === 0) return 0;
@@ -330,21 +295,12 @@ function parse_payload(p) {
 }
 
 /*
- * Orphan recovery. Called at worker startup: any row whose pipeline_state
- * indicates "actively running" (not a terminal or wait state) gets
- * moved back to PENDING so the worker can pick it up cleanly. This
- * mirrors metadata/worker.js's reset_orphaned but is keyed off a
- * different state set because the ingest pipeline has more stages.
- * 
- * The set of "actively running" states is fixed here — the worker
- * puts a row into one of these, then advances OR halts. If we see one
- * after a process restart, the worker died mid-step and the row needs
- * to start its current stage over.
- * 
- * We deliberately exclude WAIT states (e.g. WAITING_FOR_DURACLOUD,
- * TRANSFER_IN_PROGRESS) — those are "we're waiting on an external
- * system to do something" and don't need to restart from PENDING;
- * the resume logic in Phase 3 will reconcile with the external state.
+ * States that mean "the worker was mid-step". At startup, rows in
+ * these are reset to PENDING so the stage restarts cleanly.
+ *
+ * Wait states (WAITING_FOR_DURACLOUD, TRANSFER_IN_PROGRESS, …) are
+ * excluded: those are waiting on an external system and are resumed in
+ * place rather than restarted.
  */
 const ACTIVELY_RUNNING_STATES = new Set([
     'STARTING',
@@ -365,13 +321,11 @@ const ACTIVELY_RUNNING_STATES = new Set([
  * Guarded against:
  *   - terminal rows (COMPLETE, *_TIMEOUT, FAILED, INGEST_HALTED,
  *     CANCELLED_BY_USER, ROLLED_BACK_TO_READY, AM_DELETION_REQUESTED)
- *     — cancel is a no-op, returns { ok:false, reason:'already_terminal' }.
- *   - rows that don't exist — throws NotFoundError up the stack.
- * 
- * The worker-side AbortController signalling is the caller's job
- * (controller.cancel_row pairs the two). Doing them separately
- * means the model has no transitive dependency on the worker,
- * and tests can exercise each half in isolation.
+ *     — no-op, returns { ok:false, reason:'already_terminal' }.
+ *   - rows that don't exist — throws NotFoundError.
+ *
+ * Signalling the worker's AbortController is the caller's job;
+ * controller.cancel_row pairs the two.
  */
 async function cancel(id, { actor = 'system', reason = 'Cancelled by staff' } = {}) {
     const row = await get_queue_row({ id });
@@ -449,14 +403,9 @@ const TERMINAL_FOR_CANCEL = new Set([
 ]);
 
 /*
- * Finalize any COMPLETE rows left with is_complete=0. These are rows
- * where Stage 5 wrote the success state but the worker died (or was
- * gracefully aborted) before the post-hold is_complete=1 flip fired.
- * Idempotent — bulk UPDATE skips rows already at is_complete=1.
- * 
- * We deliberately don't write an event row here: the COMPLETE event
- * was already recorded by Stage 5; this sweep is a cleanup of the
- * is_complete column only.
+ * Finalize COMPLETE rows left at is_complete=0 by a worker that died
+ * during Stage 5's post-hold window. Idempotent, and writes no event —
+ * Stage 5 already recorded COMPLETE; this touches is_complete only.
  */
 async function finalize_pending_completes() {
     const knex = db_queue();
@@ -474,11 +423,7 @@ async function reset_orphaned({ actor = 'system' } = {}) {
         .select('id', 'pipeline_state');
     if (candidates.length === 0) return { affected: 0 };
 
-    /*
-     * Use update_queue so the events log captures each transition
-     * back to PENDING. Slightly slower than a bulk UPDATE but the
-     * audit-trail correctness is worth it.
-     */
+    /* Per-row update_queue so the events log captures each reset. */
     let affected = 0;
     for (const row of candidates) {
         const r = await update_queue(

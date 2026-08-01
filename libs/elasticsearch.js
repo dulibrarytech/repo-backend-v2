@@ -1,27 +1,24 @@
 'use strict';
 
 /*
- * Thin wrapper around @elastic/elasticsearch. Concerns it owns:
- * 
- *   1. `is_configured()` — cheap gate so the worker can skip ticks in
- *      dev/test environments without an ES instance available.
- *   2. `ensure_index()` — idempotent index creation. Safe to call on
- *      every boot; no-ops if the index already exists.
- *   3. `delete_index()` — idempotent index drop. Silent on 404. Paired
- *      with ensure_index() for the admin "drop & rebuild" flow.
- *   4. `index_document(pid, body)` — single-doc upsert. Uses the row's
- *      pid as the _id so re-indexing replaces in place.
- *   5. `delete_document(pid)` — silent on 404 (ineligible-but-not-yet-
- *      indexed is a valid steady state, not an error).
- *   6. `bulk_write(ops)` — batched index/delete in a single HTTP call.
- *      Returns per-item results so the worker can mark/requeue rows
- *      individually even when some operations in the batch failed.
- *   7. `health()` — cluster ping for the /health endpoint + the
- *      admin status page. Returns { ok, status } or { ok: false, err }.
- * 
- * The native client is created lazily so a missing/unreachable ES at
- * boot doesn't crash the process — the worker just stays idle until
- * ES comes back. Factory-injectable for tests.
+ * Thin wrapper around @elastic/elasticsearch.
+ *
+ *   is_configured()           cheap gate, so the worker can skip ticks where no
+ *                             ES instance is available
+ *   ensure_index()            idempotent create; safe on every boot
+ *   delete_index()            idempotent drop, silent on 404; pairs with
+ *                             ensure_index for the admin drop & rebuild flow
+ *   index_document(pid, body) single-doc upsert keyed by pid as _id, so a
+ *                             re-index replaces in place
+ *   delete_document(pid)      silent on 404
+ *   bulk_write(ops)           batched index/delete in one HTTP call, returning
+ *                             per-item results
+ *   health()                  cluster ping → { ok, status } | { ok: false, err }
+ *   count()                   doc count for the admin status page
+ *   search_documents/get_document   read side for the public API
+ *   project_for_index(row, dr)      row → indexed document shape
+ *
+ * The native client is created lazily and is factory-injectable for tests.
  */
 
 const fs = require('node:fs');
@@ -30,11 +27,8 @@ const app_config = require('../config/app');
 const log = require('./log');
 const { UpstreamError } = require('./errors');
 /*
- * Index mappings live in a sibling JSON file (es_mappings.json) rather
- * than inline below. They mirror the production `repo_public` mapping
- * the public discovery site (digitaldu-frontend-master) queries
- * directly, so the v2 index is a drop-in for that consumer. See
- * project_for_index() for the matching document shape.
+ * Mirrors the production `repo_public` mapping the public discovery site
+ * queries directly. See project_for_index() for the matching document shape.
  */
 const INDEX_MAPPINGS = require('./es_mappings.json');
 
@@ -44,24 +38,16 @@ function is_configured() {
 }
 
 /*
- * Build the TLS option block for the ES Client. Three layers:
- * 
- *   1. ca_cert_file (optional) — read and added to the trust chain.
- *      Use this for internal CAs OR to patch around a server that
- *      doesn't send its intermediate. We READ the file synchronously
- *      ONCE at client construction; subsequent reloads need a restart.
- *      A read failure is logged but doesn't break the client — we'd
- *      rather have a working client with the default trust store than
- *      no client at all.
- * 
- *   2. rejectUnauthorized=false (optional, dev only) — disables cert
- *      verification entirely. Loud warning logged at construction.
- * 
- *   3. Default (no env vars set) — Node's bundled trust store; same
- *      behavior the @elastic/elasticsearch client has out of the box.
- * 
- * Returns undefined when no TLS customization is needed, so the
- * Client constructor doesn't get a stray `tls: {}` option.
+ * The TLS option block for the ES Client, or undefined when no customization
+ * is needed (so the constructor never sees a stray `tls: {}`).
+ *
+ *   ca_cert_file            added to the trust chain; read synchronously ONCE
+ *                           at client construction, so a reload needs a restart.
+ *                           A read failure is logged and falls back to the
+ *                           default trust store.
+ *   reject_unauthorized:false  disables cert verification. Dev only; logged
+ *                           loudly.
+ *   neither                 Node's bundled trust store.
  */
 function build_tls_options() {
     const cfg = app_config().elasticsearch;
@@ -88,10 +74,6 @@ function build_tls_options() {
 
     if (cfg.reject_unauthorized === false) {
         tls.rejectUnauthorized = false;
-        /*
-         * Make this very obvious in the logs. Cert verification off
-         * is acceptable in dev, never in prod.
-         */
         log.warn({
             event: 'es_tls_verification_disabled',
             msg:
@@ -104,10 +86,9 @@ function build_tls_options() {
 }
 
 /*
- * Default client factory. The @elastic/elasticsearch Client constructor
- * throws on bogus URLs at construction time, so we wrap it; an invalid
- * host shouldn't kill the worker — it should just be unreachable until
- * fixed.
+ * Default client factory. Returns null rather than throwing on a bogus host —
+ * the Client constructor throws on an invalid URL, and that should leave ES
+ * unreachable, not kill the worker.
  */
 function default_client_factory() {
     const cfg = app_config().elasticsearch;
@@ -116,11 +97,7 @@ function default_client_factory() {
         return new Client({
             node: cfg.host,
             requestTimeout: cfg.timeout_ms,
-            /*
-             * sniffOnStart=false: we don't want the client probing the
-             * cluster topology at boot (slow on a cold ES, fails
-             * outright on a single-node dev cluster behind a proxy).
-             */
+            // No topology probe at boot: slow on a cold ES, fails behind a proxy.
             sniffOnStart: false,
             tls: build_tls_options(),
         });
@@ -131,10 +108,9 @@ function default_client_factory() {
 }
 
 /*
- * Helper: the first useful string from a value that might be a
- * string, an array of strings, or null. Mirrors libs/object_projection
- * (we duplicate the tiny logic here to keep this module free of
- * dashboard-domain imports).
+ * The first useful string from a value that may be a string, an array of
+ * strings, or null. Duplicates libs/object_projection's helper to keep this
+ * module free of dashboard-domain imports.
  */
 function first_string(v) {
     if (typeof v === 'string') return v;
@@ -144,19 +120,14 @@ function first_string(v) {
 
 /*
  * ---- v1-compatible projection helpers --------------------------------
- * 
- * These mirror digitaldu-backend/libs/display-record.js create_display_record,
- * the function that produced the production `repo_public` documents the
- * public site reads. We derive every denormalized top-level field from
- * the inner ArchivesSpace record so the output is correct regardless of
- * whether the stored display_record column is a rich legacy envelope or
- * the sparse one v2's own ingester writes.
+ *
+ * Mirror digitaldu-backend/libs/display-record.js create_display_record. Every
+ * denormalized top-level field is derived from the INNER ArchivesSpace record,
+ * so the output is correct whether the stored display_record column is a rich
+ * legacy envelope or the sparse one v2's ingester writes.
  */
 
-/*
- * abstract: the `abstract`-type note's content (string or array), with a
- * plain `abstract` field as fallback.
- */
+// abstract: the `abstract`-type note's content, falling back to a plain field.
 function extract_abstract(inner, dr) {
     if (inner && Array.isArray(inner.notes)) {
         const note = inner.notes.find((n) => n && n.type === 'abstract');
@@ -188,11 +159,10 @@ function derive_f_subjects(inner, dr) {
 }
 
 /*
- * The single canonical parts manifest. Stored once at display_record.parts.
- * Prefer an *enriched* copy (one carrying object/thumbnail DuraCloud paths),
- * since the inner ASpace record's own parts are un-enriched for simple
- * objects. Looks in the envelope's `parts`/`compound` (v2 ingest + legacy)
- * before the inner record's `parts`.
+ * The single canonical parts manifest, stored once at display_record.parts.
+ * Prefers an ENRICHED copy — one carrying object/thumbnail DuraCloud paths —
+ * because the inner ASpace record's own parts are un-enriched for simple
+ * objects. Checks the envelope's `parts`/`compound` before the inner `parts`.
  */
 function pick_parts(inner, dr) {
     const candidates = [dr && dr.parts, dr && dr.compound, inner && inner.parts];
@@ -207,10 +177,9 @@ function pick_parts(inner, dr) {
 }
 
 /*
- * Master file path for the top-level `object` field. Legacy envelopes
- * carry it directly; otherwise take it from the master part, and as a
- * last resort from the row's file_name column (which mirrors the DIP
- * path for normally-ingested objects).
+ * Master file path for the top-level `object` field: the legacy envelope's own
+ * value, else the master part, else the row's file_name column (which mirrors
+ * the DIP path for normally-ingested objects).
  */
 function master_object(inner, dr, parts, row) {
     if (typeof dr.object === 'string' && dr.object) return dr.object;
@@ -225,10 +194,9 @@ function master_object(inner, dr, parts, row) {
 }
 
 /*
- * Kaltura entry id for A/V objects (top-level convenience field; the
- * per-part ids stay inside display_record.parts). Single-file legacy
- * A/V objects carry it on the envelope (or inner record) rather than
- * in a parts entry.
+ * Kaltura entry id for A/V objects — a top-level convenience field; the
+ * per-part ids stay inside display_record.parts. Single-file legacy A/V objects
+ * carry it on the envelope or inner record rather than in a parts entry.
  */
 function derive_entry_id(parts, dr, inner) {
     if (Array.isArray(parts)) {
@@ -241,10 +209,9 @@ function derive_entry_id(parts, dr, inner) {
 }
 
 /*
- * Coarse resource type from the mime type — last-resort fallback so an
- * object whose metadata never carried resource_type still lands in a
- * Format facet bucket. Values match the dominant type observed per mime
- * family across the corpus (and the frontend's facet normalization).
+ * Coarse resource type from the mime type — a last-resort fallback so an object
+ * whose metadata never carried resource_type still lands in a Format facet
+ * bucket. Values match the frontend's facet normalization.
  */
 function type_from_mime(mime) {
     if (typeof mime !== 'string' || !mime) return null;
@@ -256,16 +223,15 @@ function type_from_mime(mime) {
 }
 
 /*
- * Public-domain projection — emits the 2-level production `repo_public`
- * document shape (top-level denormalized query/display surface +
- * `display_record` = the raw ArchivesSpace record, verbatim).
- * 
- * This deliberately does NOT wrap the document in an extra envelope or
- * nest the raw record under display_record.display_record (the bloated
- * 3-level shape earlier versions produced). The parts manifest is stored
- * exactly once at display_record.parts. See INDEX_STRUCTURE_FINAL.md.
- * 
+ * Public-domain projection — the 2-level production `repo_public` document
+ * shape: a top-level denormalized query/display surface, plus `display_record`
+ * holding the raw ArchivesSpace record verbatim. No extra envelope, and the raw
+ * record is NOT nested under display_record.display_record. The parts manifest
+ * appears exactly once, at display_record.parts.
+ *
  * Collections get the stripped shape prod uses (title/abstract only).
+ *
+ * See repo/notes/INDEX_STRUCTURE_FINAL.md.
  */
 function project_for_index(row, dr) {
     dr = dr && typeof dr === 'object' ? dr : {};
@@ -302,10 +268,7 @@ function project_for_index(row, dr) {
         handle: row.handle || null,
         thumbnail: row.thumbnail || null,
         mime_type: row.mime_type || null,
-        /*
-         * v2's ingester tags compounds object_type='compound'; v1/the
-         * frontend only know 'object' (+ is_compound). Normalize.
-         */
+        // v1 and the frontend know only 'object' + is_compound, never 'compound'.
         object_type: 'object',
         is_published: row.is_published ? 1 : 0, // INTEGER 1/0 (matches prod)
         is_compound: inner.is_compound === true || row.is_compound ? 1 : 0,
@@ -319,11 +282,8 @@ function project_for_index(row, dr) {
     };
     if (entry_id) doc.entry_id = entry_id;
     /*
-     * Transcripts live in tbl_objects columns and were never projected
-     * (in v1 or v2). The frontend displays object.transcript and its
-     * advanced search targets the `transcript` field, so index the
-     * display text under both names. A few rows carry junk placeholder
-     * values ("{}") — skip anything that isn't real text.
+     * Indexed under both names: the frontend displays object.transcript, and
+     * its advanced search targets the `transcript` field.
      */
     const transcript = meaningful_text(row.transcript) || meaningful_text(row.transcript_search);
     if (transcript) {
@@ -350,11 +310,7 @@ function create_client(factory = default_client_factory) {
         return cached_client;
     }
 
-    /*
-     * Test seam: when an injected factory returns a new client per
-     * call we want callers to pick it up. Used only in tests that
-     * swap the underlying client mid-test.
-     */
+    // Test seam — drops the cache so an injected factory's next client is used.
     function _reset_client() {
         cached_client = null;
     }
@@ -366,10 +322,7 @@ function create_client(factory = default_client_factory) {
         const c = client();
         if (!c) throw new UpstreamError('Elasticsearch client unavailable');
         const cfg = app_config().elasticsearch;
-        /*
-         * exists -> if true, no-op; if false, create with the
-         * configured shard/replica counts.
-         */
+        // Existing index no-ops; otherwise create at the configured shards/replicas.
         let exists;
         try {
             exists = await c.indices.exists({ index: cfg.index });
@@ -377,10 +330,7 @@ function create_client(factory = default_client_factory) {
             log.warn({ event: 'es_exists_check_failed', err: err.message });
             throw new UpstreamError(`ES exists check failed: ${err.message}`);
         }
-        /*
-         * @elastic/elasticsearch v8 returns a plain boolean; v7
-         * returned { body: boolean }. Handle both defensively.
-         */
+        // v8 returns a plain boolean; v7 returned { body: boolean }.
         if (exists === true || (exists && exists.body === true)) return { created: false };
         try {
             await c.indices.create({
@@ -389,33 +339,12 @@ function create_client(factory = default_client_factory) {
                     number_of_shards: cfg.shards,
                     number_of_replicas: cfg.replicas,
                 },
-                /*
-                 * Mappings come from es_mappings.json — the production
-                 * repo_public mapping the public site queries. Key points:
-                 *   - is_compound/is_published are `long` (prod's 0/1 wire
-                 *     format), matched by the integer flags project_for_index
-                 *     now emits.
-                 *   - top-level text fields carry a `.keyword` sub-field for
-                 *     exact-match facets/sort (object_type.keyword,
-                 *     creator.keyword, f_subjects.keyword, type.keyword, …).
-                 *   - display_record is an `object` with `dynamic: false` but
-                 *     WITH explicit sub-properties: the fields the frontend
-                 *     queries inside it (dates/identifiers as `nested`,
-                 *     names.title.keyword, subjects.terms.*, t_language.text,
-                 *     notes.*) are mapped and queryable; any other/odd-shaped
-                 *     sub-field is stored in _source but not indexed, so a
-                 *     shape collision can't throw mapper_parsing_exception.
-                 */
                 mappings: INDEX_MAPPINGS,
             });
             log.info({ event: 'es_index_created', index: cfg.index });
             return { created: true };
         } catch (err) {
-            /*
-             * Race: another process created it between our exists()
-             * and create(). Idempotent semantics demand we treat
-             * "resource_already_exists_exception" as success.
-             */
+            // Another process won the race between exists() and create().
             const code =
                 err && err.meta && err.meta.body && err.meta.body.error
                     ? err.meta.body.error.type
@@ -428,10 +357,9 @@ function create_client(factory = default_client_factory) {
     }
 
     /*
-     * Drop the index. Used by the admin "drop & rebuild" flow when a
-     * mapping change requires more than a re-push of documents. A 404
-     * (index doesn't exist) is a normal outcome — treat it as success
-     * so a rebuild against an empty/fresh ES doesn't spuriously fail.
+     * Drop the index, for the admin "drop & rebuild" flow when a mapping change
+     * needs more than a re-push of documents. A 404 returns
+     * { ok: true, deleted: false }, so a rebuild against a fresh ES succeeds.
      */
     async function delete_index() {
         if (!is_configured()) throw new UpstreamError('Elasticsearch is not configured');
@@ -460,11 +388,7 @@ function create_client(factory = default_client_factory) {
                 index: cfg.index,
                 id: pid,
                 document: body,
-                /*
-                 * refresh=false: don't force a flush per write — the
-                 * indexer batches and ES does its own near-realtime
-                 * refresh on a 1s cadence anyway.
-                 */
+                // No per-write flush; ES refreshes on its own 1s cadence.
                 refresh: false,
             });
             return { ok: true };
@@ -483,11 +407,7 @@ function create_client(factory = default_client_factory) {
             await c.delete({ index: cfg.index, id: pid });
             return { ok: true, deleted: true };
         } catch (err) {
-            /*
-             * 404 = the doc wasn't there. That's a normal steady
-             * state when a never-published row gets suppressed: the
-             * indexer would call delete_document anyway. Don't throw.
-             */
+            // 404 = already absent, which is the desired end state.
             if (err && err.meta && err.meta.statusCode === 404) {
                 return { ok: true, deleted: false };
             }
@@ -497,32 +417,21 @@ function create_client(factory = default_client_factory) {
     }
 
     /*
-     * Batched index/delete via the _bulk API. One HTTP roundtrip per
-     * call instead of N — the dominant cost in the indexer worker
-     * (single-doc index_document/delete_document each paid full
-     * request latency). ES _bulk handles partial failures: each item
-     * is independent, so a poison row in the middle of a batch
-     * doesn't abort the rest.
-     * 
+     * Batched index/delete via the _bulk API — one HTTP round trip instead of N.
+     * Each item is independent, so a poison row mid-batch does not abort the rest.
+     *
      * Input — array of:
      *   { op: 'index',  pid, body }   indexed under _id = pid
      *   { op: 'delete', pid }         delete by _id = pid
-     * 
+     *
      * Output:
-     *   {
-     *     items: [
-     *       { op, pid, ok: true }                  successful op
-     *       { op, pid, ok: false, err: 'reason' }  failed op (caller requeues)
-     *     ]
-     *   }
-     * 
-     * Notes:
-     *   - 404 on a delete is treated as success: the doc wasn't there,
-     *     which is the desired end state. Mirrors delete_document.
-     *   - On empty input, returns { items: [] } without touching ES.
-     *   - If ES returns a top-level error (network failure, auth, etc.),
-     *     throws UpstreamError. The caller should treat that as a
-     *     batch-wide failure and requeue all pids.
+     *   { items: [ { op, pid, ok: true },
+     *              { op, pid, ok: false, err: 'reason' }   caller requeues ] }
+     *
+     * Items align with input order. A 404 on a delete counts as success, and
+     * empty input returns { items: [] } without touching ES. A top-level ES
+     * error (network, auth) throws UpstreamError — a batch-wide failure the
+     * caller should requeue in full.
      */
     async function bulk_write(ops) {
         if (!Array.isArray(ops) || ops.length === 0) return { items: [] };
@@ -530,10 +439,7 @@ function create_client(factory = default_client_factory) {
         const c = client();
         if (!c) throw new UpstreamError('Elasticsearch client unavailable');
         const cfg = app_config().elasticsearch;
-        /*
-         * Build the interleaved operations array. The v8 client accepts
-         * a flat array and serializes it correctly on the wire.
-         */
+        // Interleaved action/document array; the v8 client serializes it as-is.
         const operations = [];
         for (const op of ops) {
             if (op.op === 'index') {
@@ -554,11 +460,7 @@ function create_client(factory = default_client_factory) {
         }
         const body = res && res.body ? res.body : res;
         const raw_items = (body && body.items) || [];
-        /*
-         * ES returns one wrapper per op, keyed by the op verb
-         * ({index:{...}} or {delete:{...}}). Unwrap and align with the
-         * input order so callers can match by index.
-         */
+        // ES wraps each result under its op verb ({index:{…}} / {delete:{…}}).
         const items = ops.map((op, i) => {
             const wrapper = raw_items[i] || {};
             const inner = wrapper.index || wrapper.delete || wrapper.create || wrapper.update || {};
@@ -607,24 +509,19 @@ function create_client(factory = default_client_factory) {
     }
 
     /*
-     * Read-side helpers powering the public API. These return raw ES
-     * hits/docs — projection to the public response shape happens in
-     * api/model.js so the lib stays free of domain shaping.
-     * 
-     * search_documents:
-     *   - opts.query: a fully-formed ES query DSL object. The caller
-     *     (api/model) builds this from request params; we don't try
-     *     to abstract over it here.
-     *   - opts.from / opts.size: pagination, in ES-native 0-indexed form.
-     *   - opts.sort: optional sort spec. Defaults to relevance.
-     *   - opts.source: optional _source filter ({ excludes: [...] })
-     *     so the search response can omit the bulky display_record.
-     * 
-     *   Returns { total, hits } where hits is an array of { pid, body, score }.
-     * 
-     * get_document:
-     *   - Looks up one doc by pid (which is the ES _id).
-     *   - Returns the full _source on hit, null on 404.
+     * Read-side helpers for the public API. They return raw ES hits and docs;
+     * projection to the public response shape happens in api/model.js.
+     *
+     * search_documents(opts):
+     *   opts.query   a fully-formed ES query DSL object, built by the caller
+     *   opts.from    pagination offset, ES-native 0-indexed
+     *   opts.size    page size, capped at 100, default 25
+     *   opts.sort    optional sort spec; defaults to relevance
+     *   opts.source  optional _source filter ({ excludes: [...] }), e.g. to omit
+     *                the bulky display_record
+     *   → { total, hits: [{ pid, body, score }] }
+     *
+     * get_document(pid): the full _source, or null on 404.
      */
     async function search_documents(opts = {}) {
         if (!is_configured()) throw new UpstreamError('Elasticsearch is not configured');
@@ -640,7 +537,7 @@ function create_client(factory = default_client_factory) {
         if (opts.source) body._source = opts.source;
         try {
             const res = await c.search({ index: cfg.index, ...body });
-            // v8 returns the body directly; v7 wraps it in res.body.
+            // v8 returns the body directly; v7 wraps it.
             const r = res && res.body ? res.body : res;
             const total =
                 r.hits && r.hits.total
@@ -670,11 +567,7 @@ function create_client(factory = default_client_factory) {
             const body = res && res.body ? res.body : res;
             return body && body._source ? body._source : null;
         } catch (err) {
-            /*
-             * 404 is the expected miss path — the doc simply isn't
-             * indexed (because it isn't eligible). Return null so
-             * the controller can map to its own 404.
-             */
+            // 404 = not indexed, because the row isn't eligible. Not an error.
             if (err && err.meta && err.meta.statusCode === 404) return null;
             log.warn({ event: 'es_get_failed', pid, err: err.message });
             throw new UpstreamError(`ES get failed: ${err.message}`);
@@ -701,9 +594,5 @@ module.exports = create_client();
 module.exports.create_client = create_client;
 module.exports.is_configured = is_configured;
 module.exports.project_for_index = project_for_index;
-/*
- * Exported for unit tests — capturing the Client constructor's TLS
- * argument requires module mocking, but the helper is pure config
- * translation and trivially testable on its own.
- */
+// Exported for unit tests — pure config translation, testable on its own.
 module.exports.build_tls_options = build_tls_options;

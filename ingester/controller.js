@@ -2,23 +2,29 @@
 
 /*
  * Ingest pipeline REST surface — staff actions on tbl_ingest_queue.
- * 
- * Endpoints (mounted in routes.js):
- * 
- *   POST   /api/ingest/queue                  → enqueue a batch of packages
- *   GET    /api/ingest                        → list queue rows (paginated)
- *   GET    /api/ingest/:id                    → fetch one row
- *   GET    /api/ingest/:id/timeline           → event log for one row
- *   POST   /api/ingest/:id/rollback-pre       → return folder + clear queue
- *   POST   /api/ingest/:id/rollback-am        → submit AM AIP deletion + halt
- *   POST   /api/ingest/:id/reset              → reset to PENDING (no AM action)
- *   POST   /api/ingest/reset-orphaned         → boot-time orphan recovery
- * 
- * Auth scheme: every endpoint requires a valid JWT (require_auth). The
- * actor on event-log rows is the JWT's `du_id` claim — so every staff
- * action is attributable. No role check yet; Phase 3 will introduce a
- * staff-vs-admin split.
- * 
+ *
+ * Mounted in ingester/routes.js:
+ *
+ *   POST /api/ingest/queue                   → enqueue a batch of packages
+ *   GET  /api/ingest                         → list queue rows (paginated)
+ *   GET  /api/ingest/:id                     → fetch one row
+ *   GET  /api/ingest/:id/timeline            → event log for one row
+ *   POST /api/ingest/:id/rollback-pre        → return folder + clear queue
+ *   POST /api/ingest/:id/rollback-am         → submit AM AIP deletion + halt
+ *   POST /api/ingest/:id/reset               → reset to PENDING (no AM action)
+ *   POST /api/ingest/:id/cancel              → halt an in-flight row
+ *   POST /api/ingest/:id/return-to-packaging → post-cancel follow-up
+ *   POST /api/ingest/reset-orphaned          → boot-time orphan recovery
+ *
+ * cancel_batch and rollback_batch_pre have no REST route. They are mounted in
+ * ingester/dashboard_routes.js at /dashboard/ingest/:id/cancel-batch and
+ * /dashboard/ingest/:id/rollback-batch-pre, and are reached only through the
+ * wrappers in ingester/dashboard.js.
+ *
+ * Auth: every endpoint requires a valid JWT (require_auth); every write also
+ * requires PERMISSIONS.MANAGE_INGEST. The actor on event-log rows is the JWT's
+ * `du_id` claim.
+ *
  * Errors thrown here flow through the central error handler in
  * config/express.js — ValidationError → 400, NotFoundError → 404, etc.
  */
@@ -32,25 +38,17 @@ const {
     AM_PRIOR_STATES,
 } = require('./state_metadata');
 const { ValidationError, NotFoundError, ForbiddenError } = require('../libs/errors');
-/*
- * External clients used by the rollback endpoints. Required lazily
- * at call-time inside each handler so the modules' env reads happen
- * against the live config (test setup mutates env between cases).
- */
+// External clients used by the rollback endpoints.
 const qa_service = require('./libs/qa_service');
 const archivematica = require('../libs/archivematica');
 const worker_registry = require('./worker');
 const log = require('../libs/log');
 
 /*
- * Write a FAILED packaging_and_ingesting job-history row for a
- * rolled-back queue row. The queue row itself is hidden from the
- * default queue view (via is_complete=1 set by the caller); the
- * history row keeps the action visible on the Job History page.
- * 
- * Best-effort: a job-history write failure does NOT unwind the
- * rollback. We log + continue — the queue row + audit event are
- * the canonical record; history is a staff-convenience view.
+ * Write a FAILED packaging_and_ingesting job-history row for a rolled-back
+ * queue row, keeping the action visible on the Job History page after the
+ * caller's is_complete=1 hides the queue row. Best-effort: a write failure is
+ * logged and does not unwind the rollback.
  */
 async function _record_rollback_in_history(row, { actor, action, error_text }) {
     try {
@@ -73,9 +71,9 @@ async function _record_rollback_in_history(row, { actor, action, error_text }) {
 }
 
 /*
- * Helper: pull a stable actor string from the authenticated principal.
- * JWT payload shape (see auth/controller.js): { id, du_id, email, ... }.
- * We prefer du_id (matches v1's audit format) then email then id.
+ * Stable actor string from the authenticated principal. JWT payload shape (see
+ * auth/controller.js) is { id, du_id, email, ... }; du_id wins, then email,
+ * then `user:<id>`, then 'staff'.
  */
 function actor_of(req) {
     const u = req.user || {};
@@ -83,19 +81,11 @@ function actor_of(req) {
 }
 
 /*
- * Helper: derive the curation-API "uuid" namespace for a queue row.
- * MUST match the resolution in stages/upload.js so the rollback path
- * targets the SAME SFTP folder Stage 2 created.
- * 
- * v1 (ingest_service.js:508) names the SFTP folder after the
- * collection's PID — all packages in a collection share one folder.
- * The collection PID is minted only when a new collection is created
- * (workspace._ensure_collection_exists); existing collections reuse
- * it across submits.
- * 
- * Defensive fallback for legacy rows with the schema default
- * `collection_uuid='PENDING'` (rows that bypassed the gate): fall
- * through to `q-<id>` so the SFTP namespace is still per-row valid.
+ * The curation-API "uuid" namespace for a queue row: the collection_uuid, or
+ * `q-<id>` for legacy rows still at the schema default 'PENDING'.
+ *
+ * MUST match the resolution in stages/upload.js, so a rollback targets the same
+ * SFTP folder Stage 2 created.
  */
 function _qa_uuid(row) {
     return row.collection_uuid && row.collection_uuid !== 'PENDING'
@@ -104,16 +94,14 @@ function _qa_uuid(row) {
 }
 
 /*
- * Compose a human-readable error description for the FAILED job-
- * history row a rollback writes. The pieces:
+ * Human-readable error description for the FAILED job-history row a rollback
+ * writes:
  *   action   — short label of the rollback path
  *   from     — the state the row was in BEFORE the rollback
- *   existing — row.error (whatever the pipeline already recorded)
+ *   existing — row.error, whatever the pipeline already recorded
  *   note     — staff-supplied note or reason
  *   extra    — optional addendum (qa_error / am_error)
- * All falsy fields are dropped so the result reads cleanly even
- * when most context is missing. Capped well under the jobs table's
- * 1000-char error column truncation in record_job.
+ * Falsy fields are dropped.
  */
 function _rollback_error_text({ action, from, existing, note, extra }) {
     const parts = [];
@@ -130,7 +118,7 @@ function _rollback_error_text({ action, from, existing, note, extra }) {
 
 /*
  * --- POST /api/ingest/queue ---------------------------------------------
- * 
+ *
  * Body shape:
  *   {
  *     rows: [
@@ -146,7 +134,7 @@ function _rollback_error_text({ action, from, existing, note, extra }) {
  *       ...
  *     ]
  *   }
- * 
+ *
  * Returns { count, ids }. The model writes one 'state_change' event per
  * row with actor = the JWT principal.
  */
@@ -155,11 +143,7 @@ async function enqueue(req, res) {
     if (!Array.isArray(body.rows) || body.rows.length === 0) {
         throw new ValidationError('rows must be a non-empty array');
     }
-    /*
-     * Per-row minimum-field validation. Surfaced as a single 400 with
-     * a per-row reason list so the dashboard can highlight bad inputs
-     * without N round-trips.
-     */
+    // One 400 carrying a per-row reason list, rather than N round-trips.
     const errors = [];
     body.rows.forEach((row, i) => {
         if (!row || typeof row !== 'object') {
@@ -181,7 +165,7 @@ async function enqueue(req, res) {
 
 /*
  * --- GET /api/ingest ----------------------------------------------------
- * 
+ *
  * Query params: status, batch, is_complete, limit (default 100, cap 500),
  * offset.
  */
@@ -196,11 +180,10 @@ async function list(req, res) {
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
     const rows = await model.list_queue(filters, { limit, offset });
     /*
-     * Attach the available-actions list per row so the dashboard
-     * doesn't have to know the state-set classification rules.
-     * For CANCELLED_BY_USER rows we need to consult the audit log to
-     * recover the prior state — the rollback target depends on
-     * whether AM had started ingesting when the cancel fired.
+     * Each row carries its available-actions list, so the dashboard needs no
+     * knowledge of the state-set rules. CANCELLED_BY_USER rows need the audit
+     * log's prior state, since the rollback target depends on whether AM had
+     * started ingesting when the cancel fired.
      */
     const out = await Promise.all(
         rows.map(async (r) => {
@@ -224,20 +207,16 @@ async function get_one(req, res) {
 }
 
 /*
- * CANCELLED_BY_USER is the only state whose action-set depends on a
- * prior state. For every other state we skip the audit lookup —
- * avoids a DB roundtrip per row on the queue page.
+ * The prior state for a CANCELLED_BY_USER row, else null — the only state whose
+ * action set depends on one, so every other state skips the audit lookup and
+ * its per-row DB round trip. Returns null on lookup failure, which leaves the
+ * dashboard on 'reset'.
  */
 async function _prev_state_if_needed(row) {
     if (row.pipeline_state !== 'CANCELLED_BY_USER') return null;
     try {
         return await model.get_prev_state_for_cancel(row.id);
     } catch (err) {
-        /*
-         * The action lookup degrades gracefully — without prev_state
-         * the dashboard falls back to 'reset', which is the safest
-         * option (no upstream side effects).
-         */
         log.warn({
             event: 'prev_state_lookup_failed',
             queue_id: row.id,
@@ -262,14 +241,12 @@ async function get_timeline(req, res) {
 
 /*
  * --- POST /api/ingest/:id/rollback-pre ----------------------------------
- * 
- * "Rollback before Archivematica activity". Used when the row halted
- * in a PRE_AM_FAILURE state. The folder is in 002-ingest but no AIP
- * exists yet, so we tell QA to move it back to 001-ready, then flip
- * the queue row to ROLLED_BACK_TO_READY. The QA call is best-effort —
- * if it fails we still flip the queue row (staff intervention may
- * move the folder manually) but record the QA error in the audit
- * payload so the dashboard can surface it.
+ *
+ * "Rollback before Archivematica activity", for a row halted in a
+ * PRE_AM_FAILURE state: the folder is in 002-ingest but no AIP exists yet, so
+ * QA moves it back to 001-ready and the queue row flips to
+ * ROLLED_BACK_TO_READY. The QA call is best-effort — a failure still flips the
+ * row and records the error in the audit payload.
  */
 async function rollback_pre_ingest(req, res) {
     const id = parseInt(req.params.id, 10);
@@ -298,35 +275,24 @@ async function rollback_pre_ingest(req, res) {
 }
 
 /*
- * Shared core of the pre-AM rollback: QA folder move + queue flip +
- * Job History record for ONE row. Callers have already verified the
- * row's state allows rollback_pre_ingest. Used by the single-row
- * endpoint above and the batch endpoint below.
+ * Shared core of the pre-AM rollback for ONE row: QA folder move, queue flip,
+ * Job History record. Callers have already verified the row's state allows
+ * rollback_pre_ingest. Used by the single-row endpoint above and the batch
+ * endpoint below.
  */
 async function _rollback_pre_row(row, { actor, note = null } = {}) {
-    /*
-     * Match upload.js's qa_uuid resolution exactly — the rollback
-     * needs to target the same SFTP folder Stage 2 created. See
-     * upload.js for why we treat the legacy '0' default as missing.
-     */
     const qa_uuid = _qa_uuid(row);
 
     /*
-     * Fire the QA move-from-ingest-to-ready. Best-effort: we capture
-     * the outcome in the audit payload but never block the queue
-     * flip on it. A 200 is success; anything else (including a
-     * transport throw) gets folded into qa_error for the timeline.
+     * Best-effort move-from-ingest-to-ready, never blocking the queue flip.
+     * 200 is success; anything else, including a transport throw, folds into
+     * qa_error for the timeline.
      */
     let qa_outcome = null;
     let qa_error = null;
     if (qa_service.is_configured && qa_service.is_configured()) {
         try {
-            /*
-             * Curation-API needs uuid + folder (row.batch) + package
-             * (row.package) — it moves one package at a time. Passing
-             * only uuid silently returned HTTP 400, leaving the
-             * folder stuck in 002-ingest.
-             */
+            // Needs uuid + folder + package: it moves one package at a time.
             const r = await qa_service.move_from_ingest_to_ready(qa_uuid, row.batch, row.package, {
                 actor,
             });
@@ -363,12 +329,7 @@ async function _rollback_pre_row(row, { actor, note = null } = {}) {
             },
         }
     );
-    /*
-     * Surface the rollback on the Job History page as a FAILED
-     * packaging_and_ingesting entry — the queue row is now hidden
-     * (is_complete=1) and history is staff's only visible record
-     * that this package's ingest attempt was rolled back.
-     */
+    // The queue row is now hidden (is_complete=1); history keeps it visible.
     const error_text = _rollback_error_text({
         action: 'pre-ingest rollback',
         from: row.pipeline_state,
@@ -385,24 +346,17 @@ async function _rollback_pre_row(row, { actor, note = null } = {}) {
 }
 
 /*
- * --- POST /api/ingest/:id/rollback-batch-pre -----------------------------
+ * --- POST /dashboard/ingest/:id/rollback-batch-pre -----------------------
  *
- * Batch-wide pre-AM rollback, anchored on any rolled-back-able row of
- * the batch. Born from the 95-package overload incident (2026-07-29):
- * a big submit burst tipped over ArchivesSpace logins and AM's SFTP
- * connection cap, halting dozens of rows at once — recovering them
- * one kebab click at a time doesn't scale.
+ * Batch-wide pre-AM rollback, anchored on any rolled-back-able row of the
+ * batch. Every OPEN row of the anchor's batch whose state allows
+ * rollback_pre_ingest gets the same per-row rollback (QA folder move, flip,
+ * history); post-cancel rows get the Return-to-Packaging cleanup instead.
+ * Everything else is counted and left alone — in-flight rows (staff must
+ * cancel first) and AM-side failures (which need the per-row rollback-am
+ * decision).
  *
- * Semantics: every OPEN row of the anchor's batch whose state allows
- * rollback_pre_ingest gets the exact same per-row rollback (QA folder
- * move + flip + history). Everything else is counted and left alone:
- *   - in-flight rows (cancellable) — staff must cancel them first;
- *     yanking a row the worker is actively driving invites races.
- *   - AM-side failures — those need the deliberate per-row
- *     rollback-am (AIP deletion request) decision, never a bulk one.
- *
- * Rows are processed SEQUENTIALLY on purpose — the whole point is
- * recovering from a burst; the recovery must not create another one.
+ * Rows are processed SEQUENTIALLY. Returns a summary object of counts.
  */
 async function rollback_batch_pre(req, res) {
     const id = parseInt(req.params.id, 10);
@@ -412,10 +366,8 @@ async function rollback_batch_pre(req, res) {
     const anchor = await model.get_queue_row({ id });
     if (!anchor) throw new NotFoundError(`queue row ${id} not found`);
     /*
-     * Anchor must itself be batch-rollback-able: either a halt-state
-     * row (rollback_pre_ingest) or a post-cancel row
-     * (rollback_to_packaging — the "Halt entire batch" flow can leave
-     * a batch that is ALL cancelled rows, and staff anchor from one).
+     * The anchor must itself be batch-rollback-able: a halt-state row
+     * (rollback_pre_ingest) or a post-cancel row (rollback_to_packaging).
      */
     const anchor_prev =
         anchor.pipeline_state === 'CANCELLED_BY_USER'
@@ -450,11 +402,7 @@ async function rollback_batch_pre(req, res) {
         skipped_other: 0,
     };
     for (const row of rows) {
-        /*
-         * CANCELLED_BY_USER rows need prev_state for both the
-         * action check and the state-aware cleanup — one audit read
-         * per cancelled row, same price the single endpoint pays.
-         */
+        // prev_state feeds both the action check and the state-aware cleanup.
         const prev_state =
             row.pipeline_state === 'CANCELLED_BY_USER'
                 ? await model.get_prev_state_for_cancel(row.id)
@@ -465,11 +413,7 @@ async function rollback_batch_pre(req, res) {
             summary.rolled_back++;
             if (r.qa_error) summary.qa_errors++;
         } else if (actions.includes('rollback_to_packaging')) {
-            /*
-             * Post-cancel rows (the "Halt entire batch" flow lands
-             * every moving row here) — same state-aware cleanup the
-             * per-row Return-to-Packaging runs.
-             */
+            // Post-cancel rows get the same cleanup the per-row action runs.
             const r = await _return_row_to_packaging(row, { actor, note, prev_state });
             summary.rolled_back++;
             if (r.qa_error) summary.qa_errors++;
@@ -487,18 +431,16 @@ async function rollback_batch_pre(req, res) {
 }
 
 /*
- * --- POST /api/ingest/:id/cancel-batch -----------------------------------
+ * --- POST /dashboard/ingest/:id/cancel-batch -----------------------------
  *
- * Batch-wide HALT, anchored on any row of the batch. Companion to the
- * batch rollback: that one only recovers rows already in a FAILURE
- * state, so after a partial-batch incident the untouched
- * PENDING/QA_COMPLETE rows kept marching forward (2026-07-30 report).
- * This stops the whole batch: every open row in a cancellable state
- * gets the same two-step the per-row cancel does — abort the worker's
- * in-flight dispatch (if any), then flip to CANCELLED_BY_USER.
- * Already-halted rows are left as they are (they're not moving), and
- * completed rows are never touched. Follow with "Return entire batch
- * to Packaging", which now also cleans up the cancelled rows.
+ * Batch-wide HALT, anchored on any row of the batch. Every open row in a
+ * cancellable state gets the same two-step the per-row cancel does: abort the
+ * worker's in-flight dispatch, then flip to CANCELLED_BY_USER. Already-halted
+ * rows are left alone and completed rows are never touched. Returns a summary
+ * object of counts.
+ *
+ * Follow with "Return entire batch to Packaging", which cleans up the
+ * cancelled rows.
  */
 async function cancel_batch(req, res) {
     const id = parseInt(req.params.id, 10);
@@ -552,14 +494,13 @@ async function cancel_batch(req, res) {
 
 /*
  * --- POST /api/ingest/:id/rollback-am -----------------------------------
- * 
- * "Rollback after Archivematica activity". Submits an AIP deletion
- * request to AM Storage Service (async — an AM admin approves in the
- * Storage Service UI) and moves the row to AM_DELETION_REQUESTED.
- * 
- * Requires the row to have a sip_uuid (set by stage 3). Without one
- * we can't even tell AM what to delete; we surface a 422 in that
- * case so staff can pick a different rollback path.
+ *
+ * "Rollback after Archivematica activity". Submits an AIP deletion request to
+ * the AM Storage Service — async, an AM admin approves it in the Storage
+ * Service UI — and moves the row to AM_DELETION_REQUESTED.
+ *
+ * Requires a sip_uuid (set by stage 3); without one there is nothing to name to
+ * AM, and the request is rejected so staff can pick another rollback path.
  */
 async function rollback_archivematica(req, res) {
     const id = parseInt(req.params.id, 10);
@@ -581,11 +522,10 @@ async function rollback_archivematica(req, res) {
     const reason = (req.body && req.body.reason) || 'staff-initiated rollback';
 
     /*
-     * Submit the deletion request to AM. 202 = request accepted
-     * (pending AM admin approval). 200 with a "deletion request
-     * already exists" body is also fine (idempotent). Anything else
-     * we record + still flip the queue row so staff have something
-     * to investigate in the timeline.
+     * 202 = accepted, pending AM admin approval. 200 with a "deletion request
+     * already exists" body is also success (idempotent). Anything else is
+     * recorded and the queue row still flips, leaving a timeline to
+     * investigate.
      */
     let am_outcome = null;
     let am_error = null;
@@ -652,10 +592,10 @@ async function rollback_archivematica(req, res) {
 
 /*
  * --- POST /api/ingest/:id/reset -----------------------------------------
- * 
- * "Reset, no rollback needed". Used when the row halted before any
- * folder move (AS_METADATA_INVALID). No AM activity, no QA folder
- * move — we just clear the queue row to PENDING so staff can re-run.
+ *
+ * "Reset, no rollback needed", for a row that halted before any folder move
+ * (AS_METADATA_INVALID). No AM activity and no QA folder move: the queue row
+ * just returns to PENDING so staff can re-run.
  */
 async function reset_row(req, res) {
     const id = parseInt(req.params.id, 10);
@@ -681,27 +621,21 @@ async function reset_row(req, res) {
 
 /*
  * --- POST /api/ingest/:id/cancel ----------------------------------------
- * 
- * Staff-initiated cancel of an in-flight row. Two-step:
- * 
- *   1. Signal the worker's AbortController for the row (if any).
- *      Long-poll stages (UPLOADING wait, TRANSFER_IN_PROGRESS poll,
- *      DuraCloud propagation wait) wake immediately and return; no-op
- *      if the row isn't currently dispatched.
- * 
- *   2. Flip the queue row to CANCELLED_BY_USER and write an audit
- *      event whose payload records the prior state (`from`). The
- *      dashboard's available_actions(state, prev_state) consults
- *      that on the next render to surface the right rollback target.
- * 
- * State guard: cancel is rejected if the row is already in a terminal
- * state (see TERMINAL_FOR_CANCEL in model.js) — returns 409 with the
- * current state so the toast can explain.
- * 
- * Cancel does NOT clean up SFTP / AM by itself; that's the rollback
- * step that follows. The two-step is intentional — staff might cancel
- * for reasons other than wanting a full rollback (e.g. interrupt a
- * runaway poll to investigate AM state out-of-band).
+ *
+ * Staff-initiated cancel of an in-flight row. Two steps:
+ *
+ *   1. Signal the worker's AbortController for the row. The long-poll stages
+ *      (UPLOADING wait, TRANSFER_IN_PROGRESS poll, DuraCloud propagation wait)
+ *      wake immediately and return. No-op if the row isn't dispatched.
+ *
+ *   2. Flip the row to CANCELLED_BY_USER and write an audit event recording the
+ *      prior state as `from`. available_actions(state, prev_state) reads it on
+ *      the next render to offer the right rollback target.
+ *
+ * Rejected with 409 and the current state if the row is already terminal (see
+ * TERMINAL_FOR_CANCEL in model.js).
+ *
+ * Cancel does NOT clean up SFTP or AM — that is the rollback step that follows.
  */
 async function cancel_row(req, res) {
     const id = parseInt(req.params.id, 10);
@@ -717,10 +651,9 @@ async function cancel_row(req, res) {
     const actor = actor_of(req);
 
     /*
-     * 1. Signal worker AbortController. No-op if the row isn't
-     *    currently being dispatched (e.g. it's PENDING but the next
-     *    tick hasn't claimed it yet). The worker registry returns
-     *    `null` in tests / non-bootstrapped runs — handle gracefully.
+     * 1. Signal the worker AbortController. No-op when the row isn't dispatched
+     *    (PENDING before the next tick claims it), and the registry returns
+     *    null in tests and non-bootstrapped runs.
      */
     let was_running = false;
     const worker = worker_registry.get_active_worker();
@@ -730,9 +663,8 @@ async function cancel_row(req, res) {
     }
 
     /*
-     * 2. Flip the queue row + audit log. The model guards against
-     *    races where the row reached a terminal state between our
-     *    read above and the write here.
+     * 2. Flip the row and write the audit event. The model guards the race
+     *    where the row went terminal between the read above and this write.
      */
     const result = await model.cancel(id, { actor, reason });
     if (!result.ok && result.reason === 'already_terminal') {
@@ -753,11 +685,8 @@ async function cancel_row(req, res) {
 }
 
 /*
- * If the row we just cancelled was mid-upload, tell the curation side
- * to stop the background put too (2026-07-30: cancelling the queue row
- * stopped the Node poll, but the curation daemon thread kept uploading
- * to completion). Best-effort — a failure here never blocks the
- * cancel; the put just runs out its course like before.
+ * For a row cancelled mid-upload, ask the curation side to stop its background
+ * put as well. Best-effort: on failure the put simply runs its course.
  */
 async function _cancel_inflight_upload(row, prev_state) {
     if (prev_state !== 'UPLOADING') return;
@@ -775,37 +704,28 @@ async function _cancel_inflight_upload(row, prev_state) {
 
 /*
  * --- POST /api/ingest/:id/return-to-packaging ---------------------------
- * 
- * Single follow-up for any CANCELLED_BY_USER row, regardless of
- * prev_state. Always lands the row in RETURNED_TO_PACKAGING; the
- * physical-cleanup side-effects branch internally on prev_state so
- * staff only sees one kebab item:
- * 
- *   - prev_state ∈ PRE_UPLOAD_PRIOR_STATES (PENDING / STARTING /
- *     PROCESSING_METADATA / QA_COMPLETE): folder never left
- *     001-ready, so curation-API still lists it in /processed. We
- *     just flip the queue row. No QA call.
- * 
- *   - prev_state ∈ POST_UPLOAD_PRE_AM_PRIOR_STATES (UPLOADING /
- *     UPLOAD_COMPLETE / TRANSFER_*): Stage 2 moved the folder to
- *     002-ingest. Call qa.move_from_ingest_to_ready to put it back
- *     into 001-ready (uri.txt preserved → visible in /processed).
- *     The curation-API also cleans up the SFTP staging copy.
- * 
- *   - prev_state ∈ AM_PRIOR_STATES (INGEST_IN_PROGRESS /
- *     INGEST_COMPLETE / WAITING_FOR_DURACLOUD / ...): AM has its
- *     own copy of the SIP (from the SFTP source), but the staff-
- *     visible folder is still in 002-ingest — nothing in the
- *     pipeline moves it out automatically (qa.move_to_ingested
- *     exists but is never called). Same as the post-upload case:
- *     call qa.move_from_ingest_to_ready so the folder reappears
- *     in /processed. The needed_am_cleanup flag stays set so the
- *     dashboard reminds staff to delete the AIP in AM's Storage
- *     Service UI manually — that's an independent concern.
- * 
- * QA failure: best-effort. If the QA call fails we still flip the
- * queue row (staff may be moving folders manually) and record the
- * error in the audit payload.
+ *
+ * The single follow-up for any CANCELLED_BY_USER row. Always lands the row in
+ * RETURNED_TO_PACKAGING; the physical cleanup branches on prev_state, so staff
+ * see one kebab item:
+ *
+ *   - PRE_UPLOAD_PRIOR_STATES (PENDING / STARTING / PROCESSING_METADATA /
+ *     QA_COMPLETE): the folder never left 001-ready. Queue flip only, no QA
+ *     call.
+ *
+ *   - POST_UPLOAD_PRE_AM_PRIOR_STATES (UPLOADING / UPLOAD_COMPLETE /
+ *     TRANSFER_*): Stage 2 moved the folder to 002-ingest.
+ *     qa.move_from_ingest_to_ready puts it back into 001-ready (uri.txt
+ *     preserved, so it reappears in /processed) and clears the SFTP staging
+ *     copy.
+ *
+ *   - AM_PRIOR_STATES (INGEST_IN_PROGRESS / INGEST_COMPLETE /
+ *     WAITING_FOR_DURACLOUD / …): same QA move, plus needed_am_cleanup so the
+ *     dashboard tells staff to delete the AIP in AM's Storage Service UI by
+ *     hand.
+ *
+ * QA failure is best-effort: the queue row still flips and the error is
+ * recorded in the audit payload.
  */
 async function return_to_packaging(req, res) {
     const id = parseInt(req.params.id, 10);
@@ -815,10 +735,7 @@ async function return_to_packaging(req, res) {
     const row = await model.get_queue_row({ id });
     if (!row) throw new NotFoundError(`queue row ${id} not found`);
 
-    /*
-     * Read the prior state from the audit log. It's the only thing
-     * that tells us whether the folder needs to be moved or not.
-     */
+    // The audit log's prior state is the only signal for whether the folder moved.
     const prev_state = await model.get_prev_state_for_cancel(id);
     const allowed = available_actions(row.pipeline_state, prev_state).includes(
         'rollback_to_packaging'
@@ -849,45 +766,35 @@ async function return_to_packaging(req, res) {
 }
 
 /*
- * Shared core of the post-cancel Return-to-Packaging: state-aware QA
- * folder move + queue flip + Job History record for ONE row. Callers
- * have already verified the action is available for the row (and
- * fetched prev_state — passed in so the batch path pays one audit
- * read per row, same as the single path). Used by the single-row
- * endpoint above and the batch rollback below.
+ * Shared core of the post-cancel Return-to-Packaging for ONE row: state-aware
+ * QA folder move, queue flip, Job History record. Callers have already verified
+ * the action is available and fetched prev_state, which is passed in so the
+ * batch path pays one audit read per row, the same as the single path.
  */
 async function _return_row_to_packaging(row, { actor, note = null, prev_state }) {
-    /*
-     * Same SFTP folder Stage 2 created — see _qa_uuid helper for why
-     * we ignore the legacy '0' default.
-     */
     const qa_uuid = _qa_uuid(row);
 
     /*
-     * Call QA whenever the folder physically left 001-ready — that's
-     * any post-upload prev_state. AM-side cancels included: AM reads
-     * from the SFTP source, not from 002-ingest, so the staff folder
-     * is still there waiting to be moved back.
+     * QA is called whenever the folder physically left 001-ready — any
+     * post-upload prev_state, AM-side included: AM reads from the SFTP source,
+     * not from 002-ingest, so the staff folder is still there.
      */
     let qa_outcome = null;
     let qa_error = null;
     const needs_qa_move =
         POST_UPLOAD_PRE_AM_PRIOR_STATES.has(prev_state) || AM_PRIOR_STATES.has(prev_state);
     /*
-     * AM-side cancels leave an AIP behind that this endpoint can't
-     * clean up — the response carries the flag so the dashboard can
-     * surface a "manual AM cleanup required" hint, and the audit log
-     * captures it for ops. Independent of needs_qa_move.
+     * AM-side cancels leave an AIP this endpoint cannot clean up. The flag goes
+     * into the response and the audit log so the dashboard can prompt for
+     * manual AM cleanup. Independent of needs_qa_move.
      */
     const needs_am_cleanup = AM_PRIOR_STATES.has(prev_state);
     if (needs_qa_move) {
         if (qa_service.is_configured && qa_service.is_configured()) {
             try {
                 /*
-                 * The curation-API endpoint requires uuid + folder
-                 * (row.batch) + package — it operates one package at
-                 * a time. row.batch is the SFTP folder name; row.package
-                 * is the archival object directory inside it.
+                 * One package at a time. row.batch is the SFTP folder name;
+                 * row.package is the archival object directory inside it.
                  */
                 const r = await qa_service.move_from_ingest_to_ready(
                     qa_uuid,
@@ -954,10 +861,9 @@ async function _return_row_to_packaging(row, { actor, note = null, prev_state })
 
 /*
  * --- POST /api/ingest/reset-orphaned ------------------------------------
- * 
- * Boot/maintenance: sweep ACTIVELY_RUNNING rows back to PENDING.
- * Normally fired automatically by the worker on startup; exposed here
- * for staff to trigger after a manual worker restart.
+ *
+ * Sweeps ACTIVELY_RUNNING rows back to PENDING. The worker fires this on
+ * startup; the endpoint exists for staff to trigger after a manual restart.
  */
 async function reset_orphaned(req, res) {
     const result = await model.reset_orphaned({ actor: actor_of(req) });
