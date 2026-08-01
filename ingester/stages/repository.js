@@ -164,9 +164,24 @@ async function run(row, deps = {}) {
      * In dev environments without HANDLE_* set we skip this and
      * tbl_objects.handle ends up empty — the row is still useful and
      * staff can mint a handle manually later via an admin tool.
+     *
+     * TEST BATCHES skip it for the same reason, deliberately. A test ingest
+     * run against production would otherwise mint a real, permanent
+     * identifier under the live prefix, and removing one afterwards is hard
+     * on purpose: the prefix cannot be enumerated, and object state cannot
+     * prove a handle was never public. Batch-name prefixes come from
+     * HANDLE_SKIP_BATCH_PREFIXES (default "test-").
      */
     let handle_url = null;
-    if (handles.is_configured && handles.is_configured()) {
+    const skip_mint = handles.is_skipped_batch && handles.is_skipped_batch(row.batch);
+    if (skip_mint) {
+        log.info({
+            event: 'handle_mint_skipped_test_batch',
+            queue_id: row.id,
+            batch: row.batch,
+        });
+    }
+    if (!skip_mint && handles.is_configured && handles.is_configured()) {
         try {
             const h = await handles.create_handle(row.sip_uuid);
             if (h.status === 201 && h.handle) {

@@ -686,6 +686,27 @@ function build() {
              * a DU persistent identifier point anywhere.
              */
             allowed_target_hosts: optional('HANDLE_ALLOWED_TARGET_HOSTS', ''),
+            /*
+             * Batch-name prefixes whose ingests must NOT mint a handle.
+             * Comma-separated, case-insensitive.
+             *
+             * A test ingest run against production would otherwise put a real,
+             * permanent identifier into the 10176 prefix, and cleaning that up
+             * afterwards is deliberately hard — the prefix cannot be
+             * enumerated, and object state cannot prove a handle was never
+             * public. Not minting in the first place is the only cheap fix.
+             *
+             * A convention rather than a flag on purpose: a flag has to be
+             * remembered and flipped back, and the failure mode of forgetting
+             * is a permanent identifier.
+             *
+             * Note optional() treats '' as unset, so BLANKING this restores
+             * the default rather than disabling the skip. To genuinely turn it
+             * off, set a prefix nothing will match. That asymmetry is
+             * deliberate: failing towards "did not mint" is recoverable,
+             * failing towards "minted" is not.
+             */
+            skip_batch_prefixes: optional('HANDLE_SKIP_BATCH_PREFIXES', 'test-'),
             prefix: optional('HANDLE_PREFIX', ''),
             server: optional('HANDLE_SERVER', ''),
             ttl: integer('HANDLE_TTL', 86400),

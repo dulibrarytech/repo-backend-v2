@@ -121,6 +121,66 @@ describe('libs/handles', () => {
         });
     });
 
+    /*
+     * A test ingest run against production would otherwise mint a real,
+     * permanent identifier under the live prefix. Removing one afterwards is
+     * hard on purpose (see scripts/delete_object_handles.js), so not minting
+     * is the only cheap fix.
+     */
+    describe('is_skipped_batch', () => {
+        beforeEach(() => {
+            process.env.HANDLE_SKIP_BATCH_PREFIXES = 'test-,tmp-';
+            app_config._reset();
+        });
+
+        it.each(['test-2026-07-31', 'TEST-Foo', 'tmp-scratch', '  test-padded  '])
+            ('skips %s', (batch) => {
+                expect(handles_module.is_skipped_batch(batch)).toBe(true);
+            });
+
+        /* Prefix, not substring: a real collection must not be caught. */
+        it.each(['testament-papers', 'Denver-Test-1', 'attestation', 'real-batch'])
+            ('does not skip %s', (batch) => {
+                expect(handles_module.is_skipped_batch(batch)).toBe(false);
+            });
+
+        /*
+         * Absence of a name is not evidence of a test. Silently withholding a
+         * handle from a real ingest is the worse error.
+         */
+        it.each([['PENDING', 'PENDING'], ['empty', ''], ['whitespace', '   '],
+            ['null', null], ['undefined', undefined], ['a number', 42]])
+            ('does not skip %s', (_label, batch) => {
+                expect(handles_module.is_skipped_batch(batch)).toBe(false);
+            });
+
+        /*
+         * config's optional() treats '' as unset, so blanking the variable
+         * restores the default rather than disabling the skip. That is the
+         * safe direction — the failure mode of accidentally disabling it is a
+         * permanent identifier — but it is surprising, so pin it.
+         */
+        it('falls back to the default when blanked, rather than disabling', () => {
+            process.env.HANDLE_SKIP_BATCH_PREFIXES = '';
+            app_config._reset();
+            expect(handles_module.is_skipped_batch('test-x')).toBe(true);
+        });
+
+        /* To genuinely disable it, set a prefix nothing will match. */
+        it('can be disabled with a non-matching prefix', () => {
+            process.env.HANDLE_SKIP_BATCH_PREFIXES = '__never__';
+            app_config._reset();
+            expect(handles_module.is_skipped_batch('test-x')).toBe(false);
+        });
+
+        it('defaults to test- when unset', () => {
+            delete process.env.HANDLE_SKIP_BATCH_PREFIXES;
+            app_config._reset();
+            expect(handles_module.is_skipped_batch('test-x')).toBe(true);
+            expect(handles_module.is_skipped_batch('prod-x')).toBe(false);
+        });
+    });
+
     describe('build_handle_url', () => {
         it('joins server + prefix + uuid with a single slash between each', () => {
             expect(handles_module.build_handle_url(UUID)).toBe(HANDLE_URL);

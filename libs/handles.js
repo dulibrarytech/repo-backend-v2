@@ -83,6 +83,33 @@ function is_configured() {
     );
 }
 
+/*
+ * Should an ingest of this batch skip minting entirely?
+ *
+ * Test ingests run against production would otherwise mint a real,
+ * permanent identifier under 10176. Cleaning one up afterwards is
+ * deliberately hard: the prefix cannot be enumerated, and object state
+ * cannot prove a handle was never public (soft_delete refuses published
+ * objects, so every deleted row reads is_published=0 whether or not it was
+ * live for years first). Not minting is the only cheap fix.
+ *
+ * Matching is on a batch-name prefix, case-insensitive, configured by
+ * HANDLE_SKIP_BATCH_PREFIXES (default "test-"). An unnamed or PENDING batch
+ * is NOT skipped — the absence of a name is not evidence of a test, and
+ * silently withholding a handle from a real ingest is the worse error.
+ */
+function is_skipped_batch(batch) {
+    if (typeof batch !== 'string' || batch.trim() === '') return false;
+    const cfg = app_config().handles;
+    const prefixes = (cfg.skip_batch_prefixes || '')
+        .split(',')
+        .map((p) => p.trim().toLowerCase())
+        .filter(Boolean);
+    if (prefixes.length === 0) return false;
+    const name = batch.trim().toLowerCase();
+    return prefixes.some((p) => name.startsWith(p));
+}
+
 function build_handle_url(uuid) {
     const cfg = app_config().handles;
     /*
@@ -321,3 +348,4 @@ module.exports = create_client();
 module.exports.create_client = create_client;
 module.exports.is_configured = is_configured;
 module.exports.build_handle_url = build_handle_url;
+module.exports.is_skipped_batch = is_skipped_batch;
