@@ -361,6 +361,26 @@ const AM_PRIOR_STATES = new Set([
  */
 function available_actions(state, prev_state) {
     const actions = ['timeline'];
+    /*
+     * Stage 6 rows get their own action vocabulary (2026-08-01). The
+     * ingest itself is COMPLETE once a row reaches these states, so
+     * none of the cancel/rollback machinery applies — rolling back
+     * would wrongly imply the batch needs re-ingesting:
+     *
+     *   stop_aip_copy    — PENDING/IN_PROGRESS: abort the copy (or its
+     *                      retry loop) and park at AIP_STORE_FAILED.
+     *   dismiss_aip_row  — FAILED: acknowledge + clear from the open
+     *                      queue view; the AIPs dashboard keeps
+     *                      tracking the failed copy and owns Retry.
+     */
+    if (state === 'AIP_STORE_PENDING' || state === 'AIP_STORE_IN_PROGRESS') {
+        actions.push('stop_aip_copy');
+        return actions;
+    }
+    if (state === 'AIP_STORE_FAILED') {
+        actions.push('dismiss_aip_row');
+        return actions;
+    }
     if (state === 'CANCELLED_BY_USER') {
         /*
          * Single follow-up: Return to Packaging. The handler

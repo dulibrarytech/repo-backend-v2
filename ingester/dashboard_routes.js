@@ -140,6 +140,27 @@ module.exports = function mount(app) {
         controller.cancel_row_action
     );
     /*
+     * Stage 6 staff actions. Stop parks an in-flight/queued
+     * preservation copy at AIP_STORE_FAILED (the ingest itself is
+     * already complete — no rollback involved); Dismiss clears an
+     * acknowledged failure from the open queue view (is_complete=1)
+     * while the AIPs dashboard keeps tracking + retrying it.
+     */
+    app.post(
+        `${base}/:id/stop-aip-copy`,
+        require_dashboard_auth,
+        can_ingest,
+        write_limiter(),
+        controller.stop_aip_copy_action
+    );
+    app.post(
+        `${base}/:id/dismiss-aip-row`,
+        require_dashboard_auth,
+        can_ingest,
+        write_limiter(),
+        controller.dismiss_aip_row_action
+    );
+    /*
      * Per-row rollback / reset / return-to-packaging — dashboard
      * wrappers around the matching REST endpoints. They run the same
      * mutation logic but return the rendered row partial so HTMX can

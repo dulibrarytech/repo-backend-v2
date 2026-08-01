@@ -38,6 +38,12 @@
     // — the MDO / QA views render this same partial without these locals.
     const ingest_in_progress = (typeof locals.ingest_in_progress !== 'undefined') && locals.ingest_in_progress;
     const ingest_in_progress_count = locals.ingest_in_progress_count || 0;
+    /*
+     * Background preservation copies (Stage 6). Informational only —
+     * never disables Submit: the ingest itself is complete by Stage 6,
+     * and the worker runs the copy alongside the next package.
+     */
+    const aip_copy_in_progress_count = locals.aip_copy_in_progress_count || 0;
     const empty_message = {
         'make-digital-objects': 'No folders are awaiting Make Digital Objects.',
         'aspace-qa': 'No folders have completed Make Digital Objects yet.',
@@ -70,6 +76,32 @@
             (<%= ingest_in_progress_count %> package<%= ingest_in_progress_count === 1 ? '' : 's' %> in the pipeline).
             Archivematica handles one ingest at a time — wait until it finishes
             before submitting another. This list refreshes automatically.
+        </div>
+    </div>
+<% } %>
+
+<% if (view === 'packaging-and-ingesting' && !ingest_in_progress && aip_copy_in_progress_count > 0) { %>
+    <%/* Non-blocking notice: a Stage 6 preservation copy is running in
+         the background. Submit stays ENABLED — the previous ingest is
+         complete (Archivematica, DuraCloud, repository record); only
+         its backup copy to cloud storage is still transferring. Hidden
+         while a real ingest is in progress (the warn banner above
+         already owns that state). */%>
+    <div class="content-card" role="status" aria-live="polite"
+         style="padding: 12px 16px; margin-bottom: 12px; display: flex; align-items: center; gap: 12px;">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+             stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"
+             aria-hidden="true" style="flex: none;">
+            <path d="M17.5 19H7a5 5 0 1 1 .9-9.92A6 6 0 0 1 19.5 12a4 4 0 0 1-2 7"/>
+            <polyline points="12 17 12 12"/>
+            <polyline points="9.5 14.5 12 12 14.5 14.5"/>
+        </svg>
+        <div>
+            <strong>Preservation copy running in the background.</strong>
+            <%= aip_copy_in_progress_count %> completed
+            ingest<%= aip_copy_in_progress_count === 1 ? ' is' : 's are' %> still copying
+            to preservation cloud storage (see the Ingest Queue). This does not
+            block new submissions.
         </div>
     </div>
 <% } %>

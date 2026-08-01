@@ -195,6 +195,8 @@
             <li><strong>Cancel</strong> — stop an in-flight package. After cancelling, a <strong>Return to Packaging</strong> action appears for the cleanup.</li>
             <li><strong>Return to Packaging</strong> — for cancelled or halted packages: moves the folder back to the Packaging and Ingesting view so it can be re-submitted after the issue is addressed.</li>
             <li><strong>Rollback AIP</strong> — for packages that failed after Archivematica stored them: submits an AIP deletion request (an Archivematica admin must approve it before removal).</li>
+            <li><strong>Stop preservation copy</strong> — for packages in the final preservation-copy step: stops the backup copy to cloud storage. The ingest itself is already complete, so nothing is rolled back; the copy can be retried any time from the AIPs dashboard.</li>
+            <li><strong>Dismiss from queue</strong> — for a failed preservation copy: clears the row from the queue view once you've seen it. The AIPs dashboard keeps tracking it and offers Retry.</li>
             <li><strong>Reset</strong> — clears a halted row that never reached any outside system, so the package can be re-submitted.</li>
         </ul>
     </details>

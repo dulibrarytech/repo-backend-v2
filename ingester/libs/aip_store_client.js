@@ -83,7 +83,7 @@ function create_client(http = http_default) {
          * Throws UpstreamError on a transport-level failure (timeout,
          * DNS, TLS) — Stage 6 treats that as a retryable error.
          */
-        async copy_to_wasabi(aip_uuid, repo_uuid, { timeout_ms } = {}) {
+        async copy_to_wasabi(aip_uuid, repo_uuid, { timeout_ms, signal } = {}) {
             const cfg = app_config().curation_api;
             const effective_timeout =
                 timeout_ms || app_config().aip_store.copy_timeout_ms || cfg.timeout_ms;
@@ -94,6 +94,15 @@ function create_client(http = http_default) {
                     { aip_uuid, repo_uuid },
                     {
                         timeout: effective_timeout,
+                        /*
+                         * The row's AbortSignal — lets a staff Stop (or
+                         * worker shutdown) tear down this multi-hour
+                         * request immediately instead of waiting for it
+                         * to settle. The curation side may keep copying
+                         * server-side; its idempotency probe makes any
+                         * later retry safe.
+                         */
+                        signal,
                         headers: default_headers(),
                         /*
                          * Always pass through — Stage 6 distinguishes

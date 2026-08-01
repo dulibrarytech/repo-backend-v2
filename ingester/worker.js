@@ -615,6 +615,8 @@ function get_active_worker() {
 module.exports = {
     create_worker,
     STAGE_BY_STATE,
+    STAGE6_STATES,
+    PIPELINE_STATES,
     AM_ENTRY_STATES,
     AM_INSIDE_STATES,
     AM_ACTIVE_STATES,

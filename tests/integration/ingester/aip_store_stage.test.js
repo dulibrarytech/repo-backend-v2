@@ -212,6 +212,44 @@ describe('ingester/stages/aip_store — Stage 6', () => {
         expect(Number(after2.last_poll_at)).toBeGreaterThan(0);
     });
 
+    it('abort mid-copy returns aborted WITHOUT recording a failure (staff Stop / shutdown)', async () => {
+        /*
+         * The row's AbortSignal now rides into the copy HTTP call. On
+         * abort the stage must NOT burn an attempt or write any state
+         * — a staff Stop writes its own terminal row, and recording a
+         * failure here would race it (flipping the row back to
+         * AIP_STORE_PENDING after staff parked it).
+         */
+        const { queue_id, pid } = await seed_pipeline_at_stage_6();
+        const row = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        const controller = new AbortController();
+        const client = make_fake_client({
+            copy_to_wasabi: (_a, _b, { signal } = {}) =>
+                new Promise((_resolve, reject) => {
+                    signal.addEventListener('abort', () =>
+                        reject(new Error('canceled'))
+                    );
+                }),
+        });
+        const run_promise = aip_store_stage.run(row, {
+            client,
+            signal: controller.signal,
+        });
+        /* Let the stage enter the copy call, then abort. */
+        await new Promise((r) => setTimeout(r, 50));
+        controller.abort();
+        const result = await run_promise;
+
+        expect(result.ok).toBe(false);
+        expect(result.aborted).toBe(true);
+        /* Row untouched beyond the IN_PROGRESS entry flip. */
+        const after = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        expect(after.pipeline_state).toBe('AIP_STORE_IN_PROGRESS');
+        /* No failure recorded on tbl_aip_store. */
+        const stored = await aip_store_model.get_by_uuid(pid);
+        expect(stored).toBeNull();
+    });
+
     it('skipped when AIP_STORE_ENABLED=false', async () => {
         process.env.AIP_STORE_ENABLED = '0';
         require('../../../config/app')._reset();

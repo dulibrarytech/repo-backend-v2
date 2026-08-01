@@ -326,8 +326,25 @@ async function run(row, deps = {}) {
     try {
         res = await client.copy_to_wasabi(row.sip_uuid, pid, {
             timeout_ms: cfg.copy_timeout_ms,
+            /*
+             * Row AbortSignal rides into the HTTP request itself, so a
+             * staff Stop or worker shutdown tears the multi-hour call
+             * down immediately instead of after it settles.
+             */
+            signal,
         });
     } catch (err) {
+        if (signal && signal.aborted) {
+            /*
+             * Aborted, not failed — a staff Stop (which writes its own
+             * terminal state) or a worker shutdown (resume re-runs;
+             * curation is idempotent). Recording a failure here would
+             * burn an attempt AND race the Stop handler's row write —
+             * _record_failure could flip the row back to
+             * AIP_STORE_PENDING after staff explicitly parked it.
+             */
+            return { ok: false, aborted: true };
+        }
         // Transport-level (timeout, network, TLS). Always retryable.
         return await _record_failure({
             aip_store_model,

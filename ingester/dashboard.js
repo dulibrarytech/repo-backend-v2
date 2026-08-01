@@ -318,18 +318,33 @@ async function help_page(req, res) {
 }
 
 /*
- * Count of ingests actively moving through the pipeline. Any row in a
- * worker-claimable state (STAGE_BY_STATE — PENDING through upload, the
- * Archivematica transfer/ingest stages, and AIP-store) counts as "in
- * progress". Halted/terminal rows are NOT claimable, so they don't count —
- * staff can still submit when a prior ingest has halted awaiting action.
- * Used to surface the "Ingest in progress" banner and to block a second
- * simultaneous submit: Archivematica serializes transfers (one at a time),
- * so overlapping ingests confuse staff and strain SFTP. count_rows_in_states
- * already filters is_complete=0.
+ * Count of ingests actively moving through the PIPELINE (stages 1–5:
+ * metadata through repository record). Halted/terminal rows are NOT
+ * claimable, so they don't count — staff can still submit when a prior
+ * ingest has halted awaiting action. Used to surface the "Ingest in
+ * progress" banner and to block a second simultaneous submit:
+ * Archivematica serializes transfers (one at a time), so overlapping
+ * ingests confuse staff and strain SFTP. count_rows_in_states already
+ * filters is_complete=0.
+ *
+ * Stage 6 (AIP→Wasabi) states are deliberately EXCLUDED (2026-08-01):
+ * the ingest itself — AM, DuraCloud, repository record — is complete
+ * by then, the worker already overlaps Stage 6 with the next package,
+ * and a large AIP copy can run (or retry against a broken AM download
+ * path) for hours. Blocking submits on it stalled staff for no
+ * integrity gain. Stage 6 activity is surfaced separately via
+ * aip_copy_count() as a non-blocking notice.
  */
 async function active_ingest_count() {
-    return model.count_rows_in_states(Object.keys(worker_registry.STAGE_BY_STATE));
+    return model.count_rows_in_states([...worker_registry.PIPELINE_STATES]);
+}
+
+/*
+ * Count of background preservation copies (Stage 6) currently pending
+ * or running. Informational only — never blocks submits.
+ */
+async function aip_copy_count() {
+    return model.count_rows_in_states([...worker_registry.STAGE6_STATES]);
 }
 
 async function packaging_list_partial(req, res) {
@@ -337,7 +352,10 @@ async function packaging_list_partial(req, res) {
         scope: 'processed',
         q: req.query.q,
     });
-    const in_progress = await active_ingest_count();
+    const [in_progress, aip_copies] = await Promise.all([
+        active_ingest_count(),
+        aip_copy_count(),
+    ]);
     render_partial(req, res, 'dashboard/partials/workspace_table', {
         ...data,
         view: 'packaging-and-ingesting',
@@ -346,10 +364,13 @@ async function packaging_list_partial(req, res) {
          * Drives the "Ingest in progress" banner + the disabled submit
          * buttons in workspace_table.ejs. The list partial re-polls every
          * 30s (+ on workspace:refresh), so both clear automatically once
-         * the active ingest finishes.
+         * the active ingest finishes. aip_copy_in_progress_count is the
+         * non-blocking "preservation copy running in the background"
+         * notice — it never disables Submit.
          */
         ingest_in_progress: in_progress > 0,
         ingest_in_progress_count: in_progress,
+        aip_copy_in_progress_count: aip_copies,
     });
 }
 
@@ -610,6 +631,150 @@ async function cancel_row_action(req, res) {
      * (and the post-cancel action list — rollback options surface
      * here based on the captured prior state).
      */
+    const updated = await model.get_queue_row({ id });
+    const [decorated] = await decorate([updated]);
+    res.set('HX-Trigger', 'queue:refresh');
+    render_partial(req, res, 'dashboard/partials/ingest_row', { row: decorated });
+}
+
+/*
+ * Staff-initiated stop of a Stage 6 preservation copy. The ingest
+ * itself (AM, DuraCloud, repository record) is COMPLETE by the time a
+ * row is in a Stage 6 state, so this deliberately offers no rollback —
+ * it only parks the AIP→Wasabi copy at AIP_STORE_FAILED (skipping any
+ * remaining retry budget) so a copy stuck against a broken AM download
+ * path stops churning. The AIPs dashboard remains the retry surface;
+ * its Retry re-opens the queue row regardless of what happens here.
+ *
+ * The worker abort wakes the in-flight curation call immediately (the
+ * copy request carries the row's AbortSignal); the stage sees the
+ * abort and returns WITHOUT recording a failure, leaving this
+ * handler's row write as the terminal word.
+ */
+const STOPPABLE_AIP_STATES = new Set(['AIP_STORE_PENDING', 'AIP_STORE_IN_PROGRESS']);
+
+async function stop_aip_copy_action(req, res) {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+        throw new ValidationError('id must be a positive integer');
+    }
+    const row = await model.get_queue_row({ id });
+    if (!row) throw new NotFoundError(`queue row ${id} not found`);
+    if (!STOPPABLE_AIP_STATES.has(row.pipeline_state)) {
+        return res.status(409).json({
+            id,
+            error: 'not_stoppable',
+            current_state: row.pipeline_state,
+        });
+    }
+    const actor = actor_from_request(req);
+
+    // 1. Abort any in-flight copy call in the worker.
+    const worker = worker_registry.get_active_worker();
+    if (worker && typeof worker.cancel_row === 'function') {
+        worker.cancel_row(id);
+    }
+
+    /*
+     * 2. Mark the tbl_aip_store row failed (best-effort — the row may
+     *    not exist yet if no attempt has failed before; create it so
+     *    the AIPs dashboard shows the stopped copy with its Retry).
+     */
+    try {
+        const { db } = require('../config/db');
+        const tables = require('../config/db_tables');
+        const obj = await db()(tables.objects)
+            .select('pid')
+            .where({ sip_uuid: row.sip_uuid })
+            .first();
+        if (obj && obj.pid) {
+            const aip_store_model = require('../repository/aip_store_model');
+            await aip_store_model.upsert_by_uuid(obj.pid, {
+                aip_uuid: row.sip_uuid,
+                source: aip_store_model.SOURCE.INGEST_V2,
+                is_migrated: aip_store_model.STATUS.INGEST_COPY_FAILED,
+                next_attempt_at: null,
+                error: 'Preservation copy stopped by staff',
+                message: 'STOPPED_BY_STAFF',
+            });
+        }
+    } catch (err) {
+        log.warn({
+            event: 'aip_stop_store_write_failed',
+            queue_id: id,
+            err: err.message,
+        });
+    }
+
+    // 3. Park the queue row. Stays visible (is_complete=0) until Dismissed.
+    await model.update_queue(
+        { id },
+        {
+            status: 'AIP_STORE_FAILED',
+            is_complete: 0,
+            error: 'Preservation copy stopped by staff',
+            suggested_action:
+                'Preservation copy to cloud storage was stopped by staff. The' +
+                ' ingest itself is complete. Retry any time from the AIPs' +
+                ' dashboard, or use Dismiss to clear this row.',
+        },
+        {
+            actor,
+            event_type: 'staff_action',
+            payload: { stage: 'aip_store', step: 'stopped_by_staff' },
+        }
+    );
+
+    const updated = await model.get_queue_row({ id });
+    const [decorated] = await decorate([updated]);
+    res.set('HX-Trigger', 'queue:refresh');
+    render_partial(req, res, 'dashboard/partials/ingest_row', { row: decorated });
+}
+
+/*
+ * Staff acknowledgment of a failed preservation copy: flips
+ * is_complete=1 so the row leaves the open queue view. Nothing else
+ * changes — the AIPs dashboard keeps tracking the failed copy, and
+ * its Retry re-opens the queue row (AIP_STORE_PENDING, is_complete=0)
+ * whenever staff wants another attempt. The audit event is written
+ * via insert_event because is_complete alone is not a state
+ * transition (update_queue only records those).
+ */
+async function dismiss_aip_row_action(req, res) {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+        throw new ValidationError('id must be a positive integer');
+    }
+    const row = await model.get_queue_row({ id });
+    if (!row) throw new NotFoundError(`queue row ${id} not found`);
+    if (row.pipeline_state !== 'AIP_STORE_FAILED') {
+        return res.status(409).json({
+            id,
+            error: 'not_dismissable',
+            current_state: row.pipeline_state,
+        });
+    }
+    const actor = actor_from_request(req);
+    await model.update_queue({ id }, { is_complete: 1 });
+    try {
+        await model.insert_event(id, {
+            event_type: 'staff_action',
+            actor,
+            to_state: 'AIP_STORE_FAILED',
+            payload: {
+                stage: 'aip_store',
+                step: 'dismissed_by_staff',
+                note: 'Row dismissed from the queue view; the failed preservation copy remains tracked on the AIPs dashboard.',
+            },
+        });
+    } catch (err) {
+        log.warn({
+            event: 'aip_dismiss_event_write_failed',
+            queue_id: id,
+            err: err.message,
+        });
+    }
+
     const updated = await model.get_queue_row({ id });
     const [decorated] = await decorate([updated]);
     res.set('HX-Trigger', 'queue:refresh');
@@ -1207,6 +1372,10 @@ module.exports = {
     ingest_list_partial,
     ingest_timeline_partial,
     cancel_row_action,
+    stop_aip_copy_action,
+    dismiss_aip_row_action,
+    _active_ingest_count: active_ingest_count,
+    _aip_copy_count: aip_copy_count,
     rollback_pre_ingest_action,
     rollback_batch_pre_action,
     cancel_batch_action,

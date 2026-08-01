@@ -99,6 +99,33 @@ describe('ingester/state_metadata — get_status_metadata', () => {
     });
 });
 
+describe('ingester/state_metadata — available_actions (Stage 6)', () => {
+    const { available_actions } = require('../../../ingester/state_metadata');
+
+    it('offers stop_aip_copy (and nothing else) on active Stage 6 states', () => {
+        /*
+         * The ingest is complete by Stage 6 — cancel/rollback would
+         * wrongly imply the batch needs re-ingesting, so those never
+         * appear here.
+         */
+        expect(available_actions('AIP_STORE_PENDING')).toEqual([
+            'timeline',
+            'stop_aip_copy',
+        ]);
+        expect(available_actions('AIP_STORE_IN_PROGRESS')).toEqual([
+            'timeline',
+            'stop_aip_copy',
+        ]);
+    });
+
+    it('offers dismiss_aip_row (and nothing else) on AIP_STORE_FAILED', () => {
+        expect(available_actions('AIP_STORE_FAILED')).toEqual([
+            'timeline',
+            'dismiss_aip_row',
+        ]);
+    });
+});
+
 describe('ingester/state_metadata — available_actions', () => {
     it('always includes "timeline"', () => {
         expect(available_actions('PENDING')).toContain('timeline');
