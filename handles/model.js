@@ -6,25 +6,12 @@
  * Admin staff mint a small number of handles directly and remove ones minted
  * by mistake. Unlike ingest-minted handles these are NOT necessarily attached
  * to repository records: they may point at exhibits, finding aids or other DU
- * pages. See repo/REPOV2_HANDLES_ADMIN_PLAN.md.
+ * pages.
  *
- * Two invariants drive the shape of everything here:
- *
- *  1. RECORD BEFORE MINTING. The 10176 prefix cannot be enumerated, so a
- *     handle that exists on the server with no tbl_handles row is invisible
- *     forever — precisely the accident this view is meant to clean up. Rows
- *     are inserted `pending` first; the worst case then is a pending row with
- *     no handle behind it, which is visible and harmless.
- *
- *  2. DELETION IS NARROW. Only rows in this table, only when nothing in
- *     tbl_objects references the handle. The ~23,000 published object
- *     identifiers are unreachable from this surface.
  */
 
 const crypto = require('node:crypto');
-
 const validator = require('validator');
-
 const { db } = require('../config/db');
 const tables = require('../config/db_tables');
 const app_config = require('../config/app');
