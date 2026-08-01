@@ -113,7 +113,6 @@ async function handles_page(req, res) {
         max_per_submission: handles_model.MAX_PER_SUBMISSION,
         allowed_hosts: handles_model.allowed_hosts(),
         configured: handles_client.is_configured(),
-        handle_prefix: (app_config().handles.prefix || '').replace(/^\/+|\/+$/g, ''),
         ...data,
     });
 }
