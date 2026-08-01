@@ -1,4 +1,4 @@
-# DU Digital Repository Backend
+# Digital Archives Manager @ DU
 
 ## Table of Contents
 
