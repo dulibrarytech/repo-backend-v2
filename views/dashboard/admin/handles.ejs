@@ -116,12 +116,21 @@
              more are allowed. */%>
         <p id="handle-rows-status" class="visually-hidden" role="status" aria-live="polite"></p>
 
+        <%/* Rendered ENABLED and disabled by dashboard.js on init, not the
+             other way round: hardcoding `disabled` here would leave the form
+             unusable with JS off, where typing one URL and submitting still
+             works (the server rejects an empty submission with a toast). */%>
         <div>
             <button type="submit"
+                    id="handle-mint-submit"
                     class="btn btn-primary btn-sm"
                     <%= configured ? '' : 'disabled' %>>
                 Mint handles
             </button>
+            <span id="handle-mint-ready"
+                  class="text-muted"
+                  style="font-size: 12px; margin-left: 8px;"
+                  aria-live="polite"></span>
             <span class="htmx-indicator">
                 <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Minting"></span>
             </span>

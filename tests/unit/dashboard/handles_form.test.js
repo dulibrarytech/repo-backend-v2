@@ -34,8 +34,8 @@ const LOCALS = {
     handle_prefix: '10176',
 };
 
-async function mount() {
-    const html = await ejs.renderFile(VIEW, LOCALS);
+async function mount(overrides = {}) {
+    const html = await ejs.renderFile(VIEW, { ...LOCALS, ...overrides }, { filename: VIEW });
     const dom = new JSDOM(
         `<!doctype html><body data-dashboard-base="/repo/dashboard">${html}</body>`,
         /*
@@ -51,6 +51,14 @@ async function mount() {
 }
 
 const rows = (d) => d.window.document.querySelectorAll('.handle-row');
+const submit = (d) => d.window.document.getElementById('handle-mint-submit');
+const ready = (d) => d.window.document.getElementById('handle-mint-ready').textContent;
+
+function type_url(d, index, value) {
+    const input = rows(d)[index].querySelector('input[name="target_url"]');
+    input.value = value;
+    input.dispatchEvent(new d.window.Event('input', { bubbles: true }));
+}
 const add_btn = (d) => d.window.document.getElementById('handle-add-row');
 const status = (d) => d.window.document.getElementById('handle-rows-status').textContent;
 const focused = (d) => d.window.document.activeElement;
@@ -158,6 +166,87 @@ describe('Admin > Handles mint form rows', () => {
         rows(d)[0].querySelector('.handle-row-remove').click();
         expect(rows(d)).toHaveLength(1);
         expect(focused(d).id).toBe('target-1');
+    });
+
+    /*
+     * Client-side gate: an empty form must not reach the server at all.
+     * Presence only — `type="url"` covers format, and the server re-checks
+     * the host allowlist regardless.
+     */
+    describe('submit gating', () => {
+        it('disables Mint until a target URL is entered', async () => {
+            const d = await mount();
+            expect(submit(d).disabled).toBe(true);
+            expect(ready(d)).toBe('');
+
+            type_url(d, 0, 'https://du.edu/a');
+            expect(submit(d).disabled).toBe(false);
+            expect(ready(d)).toBe('1 handle ready to mint');
+        });
+
+        it('re-disables when the field is cleared', async () => {
+            const d = await mount();
+            type_url(d, 0, 'https://du.edu/a');
+            type_url(d, 0, '');
+            expect(submit(d).disabled).toBe(true);
+            expect(ready(d)).toBe('');
+        });
+
+        it('does not count a whitespace-only field', async () => {
+            const d = await mount();
+            type_url(d, 0, '   ');
+            expect(submit(d).disabled).toBe(true);
+        });
+
+        it('counts filled rows, ignoring blank ones', async () => {
+            const d = await mount();
+            add_btn(d).click();
+            add_btn(d).click();
+            type_url(d, 0, 'https://du.edu/a');
+            type_url(d, 2, 'https://du.edu/c');
+
+            expect(ready(d)).toBe('2 handles ready to mint');
+            expect(submit(d).disabled).toBe(false);
+        });
+
+        it('re-disables when the only filled row is removed', async () => {
+            const d = await mount();
+            add_btn(d).click();
+            type_url(d, 1, 'https://du.edu/b');
+            expect(submit(d).disabled).toBe(false);
+
+            rows(d)[1].querySelector('.handle-row-remove').click();
+            expect(submit(d).disabled).toBe(true);
+        });
+
+        /*
+         * The reset after a successful mint must also re-arm the gate,
+         * or a second click could resubmit. 
+         */
+        it('re-disables after handles-reset', async () => {
+            const d = await mount();
+            type_url(d, 0, 'https://du.edu/a');
+            d.window.document.body.dispatchEvent(
+                new d.window.CustomEvent('handles-reset', { bubbles: true })
+            );
+            expect(submit(d).disabled).toBe(true);
+        });
+
+        /*
+         * Must never re-enable a button the server disabled. The guarantee
+         * is structural rather than behavioural: the inputs are disabled too,
+         * so the filled count can never rise. Asserted that way on purpose —
+         * driving `input.value` directly would bypass the disabled attribute
+         * and prove nothing a real user could do.
+         */
+        it('leaves Mint disabled when handle minting is not configured', async () => {
+            const d = await mount({ configured: false });
+            expect(submit(d).disabled).toBe(true);
+            rows(d).forEach((row) => {
+                expect(row.querySelector('input[name="target_url"]').disabled).toBe(true);
+                expect(row.querySelector('input[name="note"]').disabled).toBe(true);
+            });
+        });
     });
 
     /*

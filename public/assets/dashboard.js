@@ -870,6 +870,8 @@
 
         const add_btn = document.getElementById('handle-add-row');
         const status = document.getElementById('handle-rows-status');
+        const submit_btn = document.getElementById('handle-mint-submit');
+        const ready_el = document.getElementById('handle-mint-ready');
         const max = parseInt(tbody.dataset.max, 10) || 5;
 
         function rows() {
@@ -908,7 +910,41 @@
                 add_btn.hidden = false;
                 add_btn.disabled = list.length >= max;
             }
+
+            sync_submit();
         }
+
+        /*
+         * Gate Mint on at least one target URL being filled in, so an empty
+         * form cannot reach the server. The button is rendered ENABLED and
+         * disabled here — the reverse would leave the form dead with JS off.
+         *
+         * Presence only, deliberately: `type="url"` already gives the browser
+         * format checking on submit, and the server re-validates the host
+         * allowlist regardless. A whitespace-only field does not count.
+         *
+         * Never re-enables a button the server disabled (HANDLE_* not
+         * configured): those rows' inputs are disabled too, so nothing can be
+         * typed and the count stays zero.
+         */
+        function sync_submit() {
+            if (!submit_btn) return;
+
+            const filled = rows().filter(function (row) {
+                const input = row.querySelector('input[name="target_url"]');
+                return input && input.value.trim() !== '';
+            }).length;
+
+            submit_btn.disabled = filled === 0;
+            if (ready_el) {
+                ready_el.textContent = filled === 0
+                    ? ''
+                    : filled + ' handle' + (filled === 1 ? '' : 's') + ' ready to mint';
+            }
+        }
+
+        /* Delegated, so cloned rows are covered without rebinding. */
+        tbody.addEventListener('input', sync_submit);
 
         if (add_btn) {
             add_btn.addEventListener('click', function () {
