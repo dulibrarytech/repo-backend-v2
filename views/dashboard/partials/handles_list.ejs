@@ -12,7 +12,7 @@
     const list_url = dashboard_base + '/admin/handles/list';
 %>
 
-<div class="content-card-header" style="border-top: 1px solid var(--border, #dee2e6);">
+<div class="content-card-header">
     <h2 style="font-size: 18px; margin: 0;">Minted handles</h2>
     <div class="control-group">
         <label for="handles-status" class="visually-hidden">Filter by status</label>
@@ -47,7 +47,6 @@
     <thead>
         <tr>
             <th>Handle</th>
-            <th>Target</th>
             <th>Note</th>
             <th>Status</th>
             <th>Minted by</th>
@@ -57,28 +56,38 @@
     <tbody>
     <% rows.forEach(function (row) { %>
         <tr>
-            <td>
-                <%/* The cell shows the bare handle, which wraps over two
-                     lines and says nothing about where it resolves. The
-                     tooltip carries the full hdl.handle.net URL — the thing
-                     staff actually copy into a citation — plus the fact that
-                     the link opens elsewhere. Upgraded to a Bootstrap
-                     tooltip by dashboard.js; the native `title` still works
-                     with JS off. */%>
-                <% if (row.status === 'minted') { %>
-                    <a href="<%= row.resolver_url %>"
-                       class="handle-link"
-                       target="_blank"
-                       rel="noopener noreferrer"
-                       data-bs-toggle="tooltip"
-                       title="<%= row.resolver_url %> — opens in a new tab">
-                        <%= row.handle %>
-                    </a>
-                <% } else { %>
-                    <code><%= row.handle %></code>
-                <% } %>
+            <%/* Handle over target, in the package-cell shape the objects and
+                 collection tables use: the identifier is the primary line and
+                 what it resolves to is the muted sub-line. Replaces a separate
+                 Target column, which competed with the handle for width and
+                 made both wrap.
+
+                 The handle link's tooltip still carries the full
+                 hdl.handle.net URL — that is the thing staff copy into a
+                 citation, and it is not otherwise on screen. Upgraded to a
+                 Bootstrap tooltip by dashboard.js; the native `title` still
+                 works with JS off. */%>
+            <td class="package-cell">
+                <div class="package-name">
+                    <% if (row.status === 'minted') { %>
+                        <a href="<%= row.resolver_url %>"
+                           class="handle-link"
+                           target="_blank"
+                           rel="noopener noreferrer"
+                           data-bs-toggle="tooltip"
+                           title="<%= row.resolver_url %> — opens in a new tab">
+                            <%= row.handle %>
+                        </a>
+                    <% } else { %>
+                        <code><%= row.handle %></code>
+                    <% } %>
+                </div>
+                <div class="package-sub" style="font-style: normal; line-height: 1.5;">
+                    <span class="text-muted" style="word-break: break-all;">
+                        <%= row.target_url %>
+                    </span>
+                </div>
             </td>
-            <td style="word-break: break-all;"><%= row.target_url %></td>
             <td><%= row.note || '' %></td>
             <td>
                 <%= row.status %>
