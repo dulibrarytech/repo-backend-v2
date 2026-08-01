@@ -343,10 +343,16 @@ async function list(filter = {}) {
             { column: 'id', order: 'desc' },
         ]);
     } else {
-        q.orderBy([
-            { column: 'copied_at', order: 'desc' },
-            { column: 'id', order: 'desc' },
-        ]);
+        /*
+         * Default sort: attention rows FIRST, then newest-copied.
+         * Failed / in-flight rows have copied_at NULL, and MariaDB
+         * sorts NULLs LAST under plain `copied_at DESC` — which buried
+         * a failed Stage 6 copy behind ~20k legacy rows (2026-07-31:
+         * staff concluded the AIP was missing entirely). The IS NULL
+         * key floats those rows to the top; the happy rows keep their
+         * newest-first order below.
+         */
+        q.orderByRaw('(copied_at IS NULL) DESC, copied_at DESC, id DESC');
     }
     q.limit(page_size).offset((page - 1) * page_size);
 

@@ -164,6 +164,36 @@ describe('repository/aip_store_model', () => {
             expect(statuses).toEqual(['copied', 'failed', 'in_progress']);
         });
 
+        it('default sort floats attention rows (copied_at NULL) above copied rows', async () => {
+            /*
+             * Failed / in-flight rows never get copied_at, and MariaDB
+             * sorts NULLs last under plain `copied_at DESC` — a failed
+             * Stage 6 copy sank behind ~20k legacy rows (2026-07-31)
+             * and staff concluded the AIP was missing. The default
+             * sort must surface NULL-copied_at rows first, with the
+             * copied rows newest-first below them.
+             */
+            const old_ok = await db_helper.seed_aip_store({
+                is_migrated: 6,
+                copied_at: new Date('2026-01-01T00:00:00Z'),
+            });
+            const new_ok = await db_helper.seed_aip_store({
+                is_migrated: 6,
+                copied_at: new Date('2026-07-01T00:00:00Z'),
+            });
+            const failed = await db_helper.seed_aip_store({
+                is_migrated: 7,
+                error: 'copy failed',
+                copied_at: null,
+            });
+            const result = await model.list({});
+            expect(result.items.map((r) => r.id)).toEqual([
+                failed.id,
+                new_ok.id,
+                old_ok.id,
+            ]);
+        });
+
         it('filters by status="failed"', async () => {
             await db_helper.seed_aip_store({ is_migrated: 6 });
             await db_helper.seed_aip_store({ is_migrated: 7 });
