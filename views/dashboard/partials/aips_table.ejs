@@ -58,8 +58,8 @@
             </div>
             <nav class="page-controls" aria-label="Pagination">
                 <%
-                    var prev = Math.max(1, page - 1);
-                    var next = page * page_size < total ? page + 1 : page;
+                    const prev = Math.max(1, page - 1);
+                    const next = page * page_size < total ? page + 1 : page;
                 %>
                 <button type="button"
                         <%= page === 1 ? 'disabled' : '' %>

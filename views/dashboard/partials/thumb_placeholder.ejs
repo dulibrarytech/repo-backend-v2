@@ -10,16 +10,16 @@
      public/assets/dashboard.js renders the SAME icons (keyed off the
      <img data-media> attribute) when a thumbnail URL fails to load —
      keep the two icon sets in sync if you change one. */%>
-<% var _m = (typeof media !== 'undefined' && media) ? media : 'file'; %>
+<% const _m = (typeof media !== 'undefined' && media) ? media : 'file'; %>
 <%
-    var _labels = {
+    const _labels = {
         audio: 'Audio file',
         video: 'Video file',
         pdf: 'PDF document',
         image: 'No thumbnail',
         file: 'No thumbnail',
     };
-    var _label = _labels[_m] || 'No thumbnail';
+    const _label = _labels[_m] || 'No thumbnail';
 %>
 <div class="thumb-placeholder" data-media="<%= _m %>" aria-label="<%= _label %>" title="<%= _label %>">
     <% if (_m === 'audio') { %>

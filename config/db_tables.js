@@ -19,6 +19,15 @@ module.exports = {
      * column inventory and docstring.
      */
     aip_store: process.env.REPO_AIP_STORE || 'tbl_aip_store',
+    /*
+     * tbl_handles — local record of handles minted through the Admin Utils
+     * handles view. Required rather than optional: the 10176 prefix cannot
+     * be enumerated (allow_list_hdls is off), and these handles are not
+     * necessarily attached to objects, so a mint that isn't recorded here
+     * is invisible everywhere. See
+     * knex/migrations/repo/20260731000001_handles.js.
+     */
+    handles: process.env.REPO_HANDLES || 'tbl_handles',
 
     // repo_queue DB
     ingest_queue: process.env.REPO_INGEST_QUEUE || 'tbl_ingest_queue',

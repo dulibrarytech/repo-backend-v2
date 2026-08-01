@@ -86,6 +86,39 @@ async function get_by_du_id(du_id, { include_inactive = false } = {}) {
 }
 
 /*
+ * Resolve MANY du_ids to display names in one query.
+ *
+ * actor_label() is per-principal and hits the DB each call, which is right
+ * for stamping a single audit string but is N queries when a list column
+ * needs a name per row (Admin > Handles "Minted by"). Returns a Map of
+ * du_id -> "First Last", omitting anyone with no name on file so the caller
+ * can fall back to the du_id itself.
+ *
+ * include_inactive: a deactivated user's past actions should still show
+ * their name, same reasoning as actor_label.
+ *
+ * NEVER throws — a display label must not be able to break the list it
+ * decorates.
+ */
+async function names_by_du_id(du_ids) {
+    const wanted = [...new Set((du_ids || []).filter(Boolean).map(String))];
+    const out = new Map();
+    if (wanted.length === 0) return out;
+    try {
+        const rows = await db()(tables.users)
+            .select('du_id', 'first_name', 'last_name')
+            .whereIn('du_id', wanted);
+        for (const row of rows) {
+            const name = `${row.first_name || ''} ${row.last_name || ''}`.trim();
+            if (name) out.set(String(row.du_id), name);
+        }
+    } catch {
+        /* fall through: caller shows du_ids */
+    }
+    return out;
+}
+
+/*
  * Build a human-readable audit "actor" label from a JWT principal
  * (req.user — which carries only du_id/email/sub, NOT the name). Returns
  * "First Last (du_id)" when the name resolves from the users table, else
@@ -167,6 +200,7 @@ module.exports = {
     list,
     get,
     get_by_du_id,
+    names_by_du_id,
     actor_label,
     create,
     update,

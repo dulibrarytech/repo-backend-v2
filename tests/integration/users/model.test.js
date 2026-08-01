@@ -144,6 +144,69 @@ describe('users/model — DB integration', () => {
         expect((await user_model.get_by_du_id('lookup', { include_inactive: true })).id).toBe(u.id);
     });
 
+    /*
+     * Batch sibling of actor_label, for list columns that need a name per
+     * row (Admin > Handles "Minted by"). One query, not one per row.
+     */
+    describe('names_by_du_id (display names for a list column)', () => {
+        it('resolves several du_ids in a single map', async () => {
+            await db_helper.seed_user({
+                du_id: 'a1', first_name: 'Ada', last_name: 'Lovelace',
+            });
+            await db_helper.seed_user({
+                du_id: 'b2', first_name: 'Alan', last_name: 'Turing',
+            });
+
+            const map = await user_model.names_by_du_id(['a1', 'b2']);
+            expect(map.get('a1')).toBe('Ada Lovelace');
+            expect(map.get('b2')).toBe('Alan Turing');
+        });
+
+        /* Past actions should still carry a name after deactivation. */
+        it('includes deactivated users', async () => {
+            const u = await db_helper.seed_user({
+                du_id: 'c3', first_name: 'Grace', last_name: 'Hopper',
+            });
+            await user_model.soft_delete(u.id);
+            expect((await user_model.names_by_du_id(['c3'])).get('c3')).toBe('Grace Hopper');
+        });
+
+        /* Omitted, not blanked — the caller falls back to showing the du_id. */
+        it('omits du_ids with no user row', async () => {
+            const map = await user_model.names_by_du_id(['ghost']);
+            expect(map.has('ghost')).toBe(false);
+        });
+
+        /*
+         * first_name/last_name are nullable in tbl_users, so a nameless row
+         * is possible. Inserted directly: seed_user substitutes defaults for
+         * empty names (`overrides.first_name || 'Test'`) and so cannot
+         * produce this state.
+         */
+        it('omits a user whose name was never filled in', async () => {
+            await db()(tables.users).insert({
+                du_id: 'd4',
+                email: 'nameless@du.edu',
+                first_name: null,
+                last_name: null,
+                role: 'staff',
+                is_active: 1,
+                token: '0',
+            });
+            expect((await user_model.names_by_du_id(['d4'])).has('d4')).toBe(false);
+        });
+
+        it('de-duplicates and ignores empty input', async () => {
+            await db_helper.seed_user({
+                du_id: 'e5', first_name: 'Edsger', last_name: 'Dijkstra',
+            });
+            const map = await user_model.names_by_du_id(['e5', 'e5', null, undefined, '']);
+            expect(map.size).toBe(1);
+            expect(await user_model.names_by_du_id([])).toEqual(new Map());
+            expect(await user_model.names_by_du_id(undefined)).toEqual(new Map());
+        });
+    });
+
     describe('actor_label (audit "Deleted by ..." label)', () => {
         it('returns "First Last (du_id)" when the user resolves', async () => {
             await db_helper.seed_user({

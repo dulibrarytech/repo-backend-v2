@@ -15,7 +15,7 @@ Backend and staff dashboard for the University of Denver Libraries' digital repo
 
 ### Screenshots
 
-**Dashboard home — recent ingests and top collections**
+**Dashboard home — stats**
 
 <img src="docs/screenshots/01-dashboard-home.png" alt="Dashboard home" width="720">
 
@@ -33,15 +33,21 @@ Backend and staff dashboard for the University of Denver Libraries' digital repo
 
 <hr>
 
+**Ingest Queue**
+
+<img src="docs/screenshots/04-ingest-queue.png" alt="Ingest queue" width="720">
+
+<hr>
+
 **Preservation tier — AIP browse and download**
 
-<img src="docs/screenshots/04-aips.png" alt="AIPs" width="720">
+<img src="docs/screenshots/05-aips.png" alt="AIPs" width="720">
 
 <hr>
 
 **Services health — live probes for every external dependency**
 
-<img src="docs/screenshots/05-services-health.png" alt="Services health" width="720">
+<img src="docs/screenshots/06-services-health.png" alt="Services health" width="720">
 
 ### Contributing
 

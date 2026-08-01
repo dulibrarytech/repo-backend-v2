@@ -44,7 +44,7 @@ function _strip(s) {
     <ul class="metadata-list">
         <% value.forEach(function (d) { %>
             <li class="metadata-item">
-                <% var label = d.label || d.type; %>
+                <% const label = d.label || d.type; %>
                 <% if (label) { %>
                     <span class="metadata-tag"><%= _human(label) %></span>
                 <% } %>
@@ -84,7 +84,7 @@ function _strip(s) {
     <ul class="metadata-list">
         <% value.forEach(function (n) { %>
             <li class="metadata-item">
-                <% var tag = n.relator || n.role; %>
+                <% const tag = n.relator || n.role; %>
                 <% if (tag) { %>
                     <span class="metadata-tag"><%= _human(tag) %></span>
                 <% } %>
@@ -110,7 +110,7 @@ function _strip(s) {
                 <%/* Kaltura entry id for this part — rendered on its own line
                      BELOW the file name (flex-basis:100% forces the wrap).
                      '0_0' is the ingest "no match" sentinel; skip it. */%>
-                <% var _kid = p.kaltura_id || p.entry_id; %>
+                <% const _kid = p.kaltura_id || p.entry_id; %>
                 <% if (typeof _kid === 'string' && _kid.trim() && _kid.trim() !== '0_0') { %>
                     <span class="metadata-part-kaltura">
                         <span class="metadata-tag">kaltura id</span>

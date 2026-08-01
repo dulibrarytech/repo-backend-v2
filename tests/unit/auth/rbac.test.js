@@ -41,6 +41,14 @@ describe('auth/rbac', () => {
             expect(has_permission('staff', PERMISSIONS.MANAGE_METADATA_REFRESH)).toBe(false);
             expect(has_permission('staff', PERMISSIONS.MANAGE_CONVERT)).toBe(false);
             expect(has_permission('staff', PERMISSIONS.MANAGE_USERS)).toBe(false);
+            /*
+             * Minting runs under the prefix administrator credential and
+             * deleting removes a persistent identifier — admin-only, like
+             * the other Admin Utils write surfaces.
+             */
+            expect(has_permission('staff', PERMISSIONS.MANAGE_HANDLES)).toBe(false);
+            expect(has_permission('admin', PERMISSIONS.MANAGE_HANDLES)).toBe(true);
+            expect(has_permission('viewer', PERMISSIONS.MANAGE_HANDLES)).toBe(false);
         });
 
         it('unknown role / unknown permission / nullish → false', () => {

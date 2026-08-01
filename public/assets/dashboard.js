@@ -67,8 +67,8 @@
      * can opt in with data-busy-message="...".
      */
     document.body.addEventListener('htmx:beforeRequest', function (evt) {
-        var src = evt.detail && evt.detail.elt;
-        var msg = src && src.getAttribute && src.getAttribute('data-busy-message');
+        const src = evt.detail && evt.detail.elt;
+        const msg = src && src.getAttribute && src.getAttribute('data-busy-message');
         if (msg) show_toast({ level: 'info', message: msg });
     });
 
@@ -660,16 +660,78 @@
      * The rail is server-rendered once (not htmx-swapped), so a one-time
      * init on load covers every link; getOrCreateInstance is idempotent.
      */
-    if (window.bootstrap && window.bootstrap.Tooltip) {
-        const nav_links = document.querySelectorAll('.app-sidebar a[title]');
-        nav_links.forEach(function (el) {
-            window.bootstrap.Tooltip.getOrCreateInstance(el, {
-                placement: 'right',
-                delay: { show: 100, hide: 50 },
-                customClass: 'sidebar-tooltip',
-            });
+    function init_tooltips(scope, selector, options) {
+        if (!window.bootstrap || !window.bootstrap.Tooltip) return;
+        (scope || document).querySelectorAll(selector).forEach(function (el) {
+            window.bootstrap.Tooltip.getOrCreateInstance(el, options);
         });
     }
+
+    function dispose_tooltips(scope, selector) {
+        if (!window.bootstrap || !window.bootstrap.Tooltip) return;
+        if (!scope || !scope.querySelectorAll) return;
+        scope.querySelectorAll(selector).forEach(function (el) {
+            const instance = window.bootstrap.Tooltip.getInstance(el);
+            if (instance) instance.dispose();
+        });
+    }
+
+    init_tooltips(document, '.app-sidebar a[title]', {
+        placement: 'right',
+        delay: { show: 100, hide: 50 },
+        customClass: 'sidebar-tooltip',
+    });
+
+    /*
+     * ---- 5b. Handle-link tooltips (Admin > Handles) ----
+     * Same prominent treatment as the rail, but this table IS htmx-swapped
+     * (mint, delete and the status filter all replace #handles-list), so a
+     * one-time init on load is not enough:
+     *
+     *   - re-init after every swap, or rows that arrive later get only the
+     *     slow native tooltip
+     *   - dispose BEFORE the swap, or a tooltip that happens to be showing
+     *     when the row is replaced is orphaned in the body with nothing to
+     *     anchor to — a bubble stranded mid-page. Clicking Delete while
+     *     hovering the handle is exactly that case.
+     */
+    const HANDLE_TOOLTIP = 'a.handle-link[title], a.handle-link[data-bs-original-title]';
+    const HANDLE_TOOLTIP_OPTS = {
+        placement: 'top',
+        delay: { show: 100, hide: 50 },
+        customClass: 'handle-tooltip',
+    };
+
+    init_tooltips(document, HANDLE_TOOLTIP, HANDLE_TOOLTIP_OPTS);
+
+    document.body.addEventListener('htmx:beforeSwap', function (evt) {
+        dispose_tooltips(evt.detail && evt.detail.target, HANDLE_TOOLTIP);
+    });
+
+    document.body.addEventListener('htmx:afterSwap', function (evt) {
+        const root = evt.detail && evt.detail.target;
+        if (root && root.querySelectorAll) {
+            init_tooltips(root, HANDLE_TOOLTIP, HANDLE_TOOLTIP_OPTS);
+        }
+    });
+
+    /*
+     * WCAG 2.1 SC 1.4.13 (Content on Hover or Focus) requires hover/focus
+     * content to be dismissible without moving the pointer or focus.
+     * Bootstrap tooltips do not handle Escape themselves, so do it here —
+     * this covers the rail as well as the handle links.
+     */
+    document.addEventListener('keydown', function (evt) {
+        if (evt.key !== 'Escape') return;
+        if (!window.bootstrap || !window.bootstrap.Tooltip) return;
+        document.querySelectorAll('.tooltip').forEach(function (bubble) {
+            const owner = document.querySelector(
+                '[aria-describedby="' + bubble.id + '"]'
+            );
+            const instance = owner && window.bootstrap.Tooltip.getInstance(owner);
+            if (instance) instance.hide();
+        });
+    });
 
     /*
      * ---- 6. Add-objects picker: persistent multi-select ----
@@ -782,5 +844,250 @@
         });
 
         render();
+    })();
+
+    /*
+     * ---- Admin > Handles: repeatable mint rows ----
+     *
+     * The page renders ONE row; this grows it to at most data-max. Rows are
+     * cloned client-side rather than fetched, so adding one is instant.
+     *
+     * Accessibility is most of the work here:
+     *   - focus moves to the new row's URL field on add, and to the previous
+     *     row on remove — otherwise a keyboard user has no idea the DOM
+     *     changed and has to hunt for where they are
+     *   - every add/remove is announced through a polite live region,
+     *     including how many more are allowed
+     *   - renumber() reassigns ids, label `for`, label text and each Remove
+     *     button's accessible name after ANY change, so "Remove handle 3"
+     *     always names the row it will actually remove
+     *   - Remove is hidden when only one row is left: there is nothing to
+     *     remove, and a dead control is worse than no control
+     */
+    (function handle_mint_rows() {
+        const tbody = document.getElementById('handle-rows');
+        if (!tbody) return;
+
+        const add_btn = document.getElementById('handle-add-row');
+        const status = document.getElementById('handle-rows-status');
+        const submit_btn = document.getElementById('handle-mint-submit');
+        const ready_el = document.getElementById('handle-mint-ready');
+        const max = parseInt(tbody.dataset.max, 10) || 5;
+
+        function rows() {
+            return Array.prototype.slice.call(tbody.querySelectorAll('.handle-row'));
+        }
+
+        function announce(message) {
+            if (status) status.textContent = message;
+        }
+
+        function renumber() {
+            const list = rows();
+            list.forEach(function (row, i) {
+                const n = i + 1;
+                const url = row.querySelector('input[name="target_url"]');
+                const note = row.querySelector('input[name="note"]');
+                const url_label = row.querySelector('label[data-for="target"]');
+                const note_label = row.querySelector('label[data-for="note"]');
+                const remove = row.querySelector('.handle-row-remove');
+
+                url.id = 'target-' + n;
+                note.id = 'note-' + n;
+                url_label.setAttribute('for', url.id);
+                url_label.textContent = 'Target URL ' + n;
+                note_label.setAttribute('for', note.id);
+                note_label.textContent = 'Note ' + n;
+
+                if (remove) {
+                    remove.hidden = list.length === 1;
+                    remove.setAttribute('aria-label', 'Remove handle ' + n);
+                }
+            });
+
+            if (add_btn) {
+                /* Revealed here, not in the markup, so no-JS gets no dead button. */
+                add_btn.hidden = false;
+                add_btn.disabled = list.length >= max;
+            }
+
+            sync_submit();
+        }
+
+        /*
+         * Gate Mint on at least one target URL being filled in, so an empty
+         * form cannot reach the server. The button is rendered ENABLED and
+         * disabled here — the reverse would leave the form dead with JS off.
+         *
+         * Presence only, deliberately: `type="url"` already gives the browser
+         * format checking on submit, and the server re-validates the host
+         * allowlist regardless. A whitespace-only field does not count.
+         *
+         * Never re-enables a button the server disabled (HANDLE_* not
+         * configured): those rows' inputs are disabled too, so nothing can be
+         * typed and the count stays zero.
+         */
+        function sync_submit() {
+            if (!submit_btn) return;
+
+            const filled = rows().filter(function (row) {
+                const input = row.querySelector('input[name="target_url"]');
+                return input && input.value.trim() !== '';
+            }).length;
+
+            submit_btn.disabled = filled === 0;
+            if (ready_el) {
+                ready_el.textContent = filled === 0
+                    ? ''
+                    : filled + ' handle' + (filled === 1 ? '' : 's') + ' ready to mint';
+            }
+        }
+
+        /* Delegated, so cloned rows are covered without rebinding. */
+        tbody.addEventListener('input', sync_submit);
+
+        if (add_btn) {
+            add_btn.addEventListener('click', function () {
+                const list = rows();
+                if (list.length >= max) return;
+
+                const clone = list[0].cloneNode(true);
+                clone.querySelectorAll('input').forEach(function (input) {
+                    input.value = '';
+                });
+                tbody.appendChild(clone);
+                renumber();
+
+                const count = rows().length;
+                clone.querySelector('input[name="target_url"]').focus();
+                announce(
+                    count >= max
+                        ? 'Handle ' + count + ' added. Maximum of ' + max + ' reached.'
+                        : 'Handle ' + count + ' added. ' + (max - count) + ' more can be added.'
+                );
+            });
+        }
+
+        tbody.addEventListener('click', function (evt) {
+            const btn = evt.target.closest && evt.target.closest('.handle-row-remove');
+            if (!btn) return;
+
+            const list = rows();
+            if (list.length <= 1) return;
+
+            const row = btn.closest('.handle-row');
+            const removed_at = list.indexOf(row);
+            row.remove();
+            renumber();
+
+            const remaining = rows();
+            /* Land on the row above the one that vanished. */
+            const focus_row = remaining[Math.max(0, removed_at - 1)];
+            focus_row.querySelector('input[name="target_url"]').focus();
+            announce(
+                'Handle ' + (removed_at + 1) + ' removed. '
+                + remaining.length + ' remaining.'
+            );
+        });
+
+        /*
+         * Emitted by the mint POST via HX-Trigger, but ONLY when every handle
+         * succeeded. Clearing on a partial failure would throw away the URLs
+         * the operator still needs to correct; leaving values after a full
+         * success invites a second click that mints a duplicate.
+         *
+         * Focus is deliberately left on the Mint button — the operator's
+         * attention belongs on the toast and the refreshed list, not back in
+         * an empty field.
+         */
+        document.body.addEventListener('handles-reset', function () {
+            rows().slice(1).forEach(function (row) { row.remove(); });
+            const first = rows()[0];
+            if (first) {
+                first.querySelectorAll('input').forEach(function (input) {
+                    input.value = '';
+                });
+            }
+            renumber();
+            announce('Form cleared.');
+        });
+
+        renumber();
+    })();
+
+    /*
+     * ---- Admin > Handles: copy a handle to the clipboard ----
+     *
+     * Staff paste these into other sites and citations, so the button copies
+     * the RESOLVER url (https://hdl.handle.net/<prefix>/<uuid>) rather than
+     * the bare handle, which is not clickable on its own. The value comes
+     * from data-clipboard-text so this never has to reconstruct it.
+     *
+     * Delegated from document, not bound per button: #handles-list is
+     * replaced by htmx on mint, delete and filter, and delegation means
+     * nothing has to be re-initialised afterwards.
+     *
+     * Feedback is a toast plus a polite live region. An inline "Copied"
+     * label was the first attempt, but the item lives in a kebab menu that
+     * Bootstrap closes on click — the confirmation would flash out of
+     * existence with the menu. (It would also have had to avoid
+     * `textContent`, which would wipe the item's icon.)
+     */
+    (function handle_copy_buttons() {
+        function announce(message) {
+            const status = document.getElementById('handles-copy-status');
+            if (status) status.textContent = message;
+        }
+
+        /*
+         * navigator.clipboard needs a secure context. The dashboard is behind
+         * HTTPS in production, but a plain-http dev host would otherwise fail
+         * silently — hence the execCommand fallback.
+         */
+        function write_clipboard(text) {
+            if (navigator.clipboard && window.isSecureContext) {
+                return navigator.clipboard.writeText(text);
+            }
+            return new Promise(function (resolve, reject) {
+                const scratch = document.createElement('textarea');
+                scratch.value = text;
+                scratch.setAttribute('readonly', '');
+                scratch.setAttribute('aria-hidden', 'true');
+                scratch.style.position = 'fixed';
+                scratch.style.opacity = '0';
+                document.body.appendChild(scratch);
+                scratch.select();
+                let ok = false;
+                try {
+                    ok = document.execCommand('copy');
+                } catch {
+                    ok = false;
+                }
+                scratch.remove();
+                if (ok) resolve();
+                else reject(new Error('copy command was rejected'));
+            });
+        }
+
+        document.addEventListener('click', function (evt) {
+            const btn = evt.target.closest && evt.target.closest('.handle-copy');
+            if (!btn) return;
+
+            const text = btn.getAttribute('data-clipboard-text');
+            if (!text) return;
+
+            write_clipboard(text).then(function () {
+                announce('Copied ' + text + ' to the clipboard.');
+                show_toast({ level: 'success', message: 'Handle link copied.' });
+            }).catch(function (err) {
+                announce('Could not copy the handle.');
+                show_toast({
+                    level: 'error',
+                    message: 'Could not copy to the clipboard - '
+                        + (err && err.message ? err.message : 'permission denied')
+                        + '. Select the handle link and copy it manually.',
+                });
+            });
+        });
     })();
 })();

@@ -93,7 +93,7 @@
      is "are we making progress" — per-batch breakdowns belong in the
      timeline view, which we don't render here. */%>
 <% if (status.total_backfill_rows > 0) { %>
-    <% var pct = Math.min(100, Math.round((status.complete / status.total_backfill_rows) * 100)); %>
+    <% const pct = Math.min(100, Math.round((status.complete / status.total_backfill_rows) * 100)); %>
     <div class="progress" style="height: 12px; margin-bottom: 12px;">
         <div class="progress-bar <%= status.failed > 0 ? 'bg-warning' : '' %>"
              role="progressbar"
@@ -111,8 +111,8 @@
      and pending > 0; cancel_disabled is the inverse plus a guard
      against rendering a Cancel button when there's no batch. */%>
 <%
-    var start_disabled = !aip_store_enabled || status.pending > 0;
-    var cancel_disabled = status.pending === 0 || !status.latest_batch_marker;
+    const start_disabled = !aip_store_enabled || status.pending > 0;
+    const cancel_disabled = status.pending === 0 || !status.latest_batch_marker;
 %>
 <div class="d-flex" style="gap: 8px;">
     <form hx-post="<%= dashboard_base %>/admin/aip-backfill/start"

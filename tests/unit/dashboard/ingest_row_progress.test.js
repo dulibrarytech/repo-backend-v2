@@ -58,6 +58,43 @@ describe('ingest_row upload progress bar', () => {
         expect(html).not.toMatch(/class="progress"/);
     });
 
+    it('renders the AIP-copy bar + heartbeat for AIP_STORE_IN_PROGRESS with totals', async () => {
+        const html = await render({
+            pipeline_state: 'AIP_STORE_IN_PROGRESS',
+            bytes_uploaded: 21_474_836_480,   // 20 GB
+            total_bytes: 70_866_960_384,      // 66 GB
+            micro_service: 'PENDING',
+            last_poll_at: Date.now() - 30_000,
+        });
+        expect(html).toMatch(/class="progress"/);
+        expect(html).toContain('Copying preservation package (AIP) to cloud storage');
+        expect(html).toContain('20.0 GB');
+        expect(html).toContain('66.0 GB');
+        expect(html).toContain('(30%)');
+        expect(html).toMatch(/checked \d+s ago/);
+    });
+
+    it('falls back to suggested_action + heartbeat for AIP_STORE_IN_PROGRESS without totals', async () => {
+        /*
+         * No totals = the curation side predates the copy-progress
+         * endpoint, or the copy hasn't streamed its first byte. The
+         * heartbeat still proves liveness; no stale AM microservice
+         * may leak in (Stage 6 resets it to the PENDING sentinel).
+         */
+        const html = await render({
+            pipeline_state: 'AIP_STORE_IN_PROGRESS',
+            suggested_action: 'Wait — copying AIP to Wasabi S3.',
+            bytes_uploaded: 0,
+            total_bytes: 0,
+            micro_service: 'PENDING',
+            last_poll_at: Date.now() - 45_000,
+        });
+        expect(html).not.toMatch(/class="progress"/);
+        expect(html).toContain('copying AIP to Wasabi');
+        expect(html).not.toContain('PENDING');
+        expect(html).toMatch(/checked \d+s ago/);
+    });
+
     it('shows the AM hand-off explanation for an UPLOAD_COMPLETE row', async () => {
         /*
          * While start_transfer's copy runs, the row rests at

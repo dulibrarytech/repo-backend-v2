@@ -61,7 +61,7 @@
         <div class="content-card sev-warn mb-3">
             <div class="p-3 text-body">
                 <strong>Metadata worker is disabled</strong> (<code>METADATA_WORKER_ENABLED=false</code>).
-                The queue will not drain until it's re-enabled. Restart with the env var unset to resume.
+                The queue will not drain until it's re-enabled. Restart with the env const unset to resume.
             </div>
         </div>
     <% } else if (!worker_health.aspace_configured) { %>
@@ -209,7 +209,7 @@
                     <div class="text-muted small mb-1">Recent activity</div>
                     <ul class="list-unstyled mb-0" style="font-family: var(--font-mono, monospace); font-size: 12px; max-height: 240px; overflow-y: auto;">
                         <% activity.recently_completed.forEach(function(r) {
-                            var icon = row_outcome_icon(r); %>
+                            const icon = row_outcome_icon(r); %>
                             <li class="text-body">
                                 <span class="<%= icon.cls %>"><%= icon.sym %></span>
                                 <%= r.uri %>

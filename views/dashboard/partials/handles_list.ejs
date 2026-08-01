@@ -1,0 +1,198 @@
+<%
+    // Hand-minted handles. Rendered by
+    // dashboard/handles_controller.handles_list_partial, and returned
+    // directly by the mint and delete POSTs so the table refreshes in
+    // place without a second round trip.
+    //
+    // `linked_pid` is resolved LIVE against tbl_objects by the model, not
+    // read from the stored column — a handle can be attached to a record
+    // after it was minted. When it is set the delete control is disabled
+    // here AND the model refuses with a 409, so the reason is visible
+    // rather than arriving as a surprise error.
+    const list_url = dashboard_base + '/admin/handles/list';
+%>
+
+<div class="content-card-header">
+    <h2 style="font-size: 18px; margin: 0;">Minted handles</h2>
+    <div class="control-group">
+        <label for="handles-status" class="visually-hidden">Filter by status</label>
+        <select id="handles-status"
+                name="status"
+                class="form-select form-select-sm"
+                style="width: auto;"
+                hx-get="<%= list_url %>"
+                hx-target="#handles-list"
+                hx-swap="innerHTML">
+            <option value=""<%= status_filter === '' ? ' selected' : '' %>>All statuses</option>
+            <% statuses.forEach(function (s) { %>
+                <option value="<%= s %>"<%= status_filter === s ? ' selected' : '' %>><%= s %></option>
+            <% }); %>
+        </select>
+        <span class="htmx-indicator">
+            <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+        </span>
+    </div>
+</div>
+
+<% if (rows.length === 0) { %>
+    <p style="padding: 16px; margin: 0; color: var(--text-muted, #6c757d);">
+        <% if (status_filter) { %>
+            No handles with status &ldquo;<%= status_filter %>&rdquo;.
+        <% } else { %>
+            No handles have been minted from this view yet.
+        <% } %>
+    </p>
+<% } else { %>
+<table class="queue-table handles-table">
+    <thead>
+        <tr>
+            <th>Handle</th>
+            <th>Note</th>
+            <th>Status</th>
+            <th>Minted by</th>
+            <th class="actions-cell">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+    <% rows.forEach(function (row) { %>
+        <tr>
+            <%/* Handle over target, in the package-cell shape the objects and
+                 collection tables use: the identifier is the primary line and
+                 what it resolves to is the muted sub-line. Replaces a separate
+                 Target column, which competed with the handle for width and
+                 made both wrap.
+
+                 The handle link's tooltip still carries the full
+                 hdl.handle.net URL — that is the thing staff copy into a
+                 citation, and it is not otherwise on screen. Upgraded to a
+                 Bootstrap tooltip by dashboard.js; the native `title` still
+                 works with JS off. */%>
+            <td class="package-cell">
+                <div class="package-name">
+                    <% if (row.status === 'minted') { %>
+                        <a href="<%= row.resolver_url %>"
+                           class="handle-link"
+                           target="_blank"
+                           rel="noopener noreferrer"
+                           data-bs-toggle="tooltip"
+                           title="<%= row.resolver_url %> — opens in a new tab">
+                            <%= row.handle %>
+                        </a>
+                    <% } else { %>
+                        <code><%= row.handle %></code>
+                    <% } %>
+                </div>
+                <div class="package-sub" style="font-style: normal; line-height: 1.5;">
+                    <span class="text-muted" style="word-break: break-all;">
+                        <%= row.target_url %>
+                    </span>
+                </div>
+            </td>
+            <td><%= row.note || '' %></td>
+            <td>
+                <%= row.status %>
+                <% if (row.message) { %>
+                    <div style="font-size: 12px; color: var(--text-muted, #6c757d);">
+                        <%= row.message %>
+                    </div>
+                <% } %>
+                <% if (row.linked_pid) { %>
+                    <div style="font-size: 12px;">
+                        in use by <code><%= row.linked_pid %></code>
+                    </div>
+                <% } %>
+            </td>
+            <%/* Shows the staff member's name; the du_id stays behind as the
+                 native tooltip, since it is the unambiguous key and the
+                 stored value. Falls back to the du_id when no user record
+                 resolves. */%>
+            <td<% if (row.created_by_label !== row.created_by) { %> title="<%= row.created_by %>"<% } %>><%= row.created_by_label || row.created_by || '' %></td>
+            <td class="actions-cell">
+                <%
+                    /*
+                     * Copy is offered for minted rows only — a pending or
+                     * failed handle does not resolve, and distributing a dead
+                     * identifier is worse than not copying at all. A LINKED
+                     * handle is still copyable; only deleting it is blocked.
+                     *
+                     * Deletable = exists on the handle server and nothing
+                     * references it. The Status column already explains a
+                     * linked row ("in use by <pid>"), so the menu simply
+                     * omits Delete rather than repeating the reason here.
+                     */
+                    const can_copy = row.status === 'minted';
+                    const deletable = (row.status === 'minted' || row.status === 'pending')
+                        && !row.linked_pid;
+                %>
+                <%/* kebab-btn + filled-circle SVG matches collection_row.ejs
+                     and aip_row.ejs so the affordance reads identically
+                     across list pages. Rendered only when there is at least
+                     one action, as in aip_row.ejs. */%>
+                <% if (can_copy || deletable) { %>
+                <div class="dropdown">
+                    <button type="button" class="kebab-btn"
+                            data-bs-toggle="dropdown"
+                            aria-expanded="false"
+                            aria-label="Actions for <%= row.handle %>"
+                            title="Actions">
+                        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                            <circle cx="12" cy="5" r="1.75"/>
+                            <circle cx="12" cy="12" r="1.75"/>
+                            <circle cx="12" cy="19" r="1.75"/>
+                        </svg>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <% if (can_copy) { %>
+                            <li>
+                                <%/* Copies the RESOLVER url, not the bare
+                                     handle: staff paste this into other sites
+                                     and citations, where "10176/<uuid>" on its
+                                     own is not clickable. */%>
+                                <button type="button"
+                                        class="dropdown-item handle-copy"
+                                        data-clipboard-text="<%= row.resolver_url %>">
+                                    <%/* two-sheets icon — copy */%>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                        <rect x="9" y="9" width="13" height="13" rx="2"/>
+                                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                                    </svg>
+                                    Copy link
+                                </button>
+                            </li>
+                        <% } %>
+                        <% if (deletable) { %>
+                            <% if (can_copy) { %><li><hr class="dropdown-divider"></li><% } %>
+                            <li>
+                                <%/* data-confirm, NOT hx-confirm — the latter
+                                     fires the raw window.confirm(). See the
+                                     confirm-modal section of dashboard.js. */%>
+                                <button type="button" class="dropdown-item text-danger"
+                                        hx-post="<%= dashboard_base %>/admin/handles/<%= row.id %>/delete"
+                                        hx-target="#handles-list"
+                                        hx-swap="innerHTML"
+                                        data-confirm="Delete <%= row.handle %>? This removes the persistent identifier from the handle server. Do this only for a handle minted by mistake and never shared &mdash; if it has been published or cited anywhere, deleting it breaks that link permanently."
+                                        data-confirm-title="Delete handle?"
+                                        data-confirm-label="Delete">
+                                    <%/* trash icon — delete */%>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                        <polyline points="3 6 5 6 21 6"/>
+                                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                                        <path d="M10 11v6"/>
+                                        <path d="M14 11v6"/>
+                                        <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>
+                                    </svg>
+                                    Delete
+                                </button>
+                            </li>
+                        <% } %>
+                    </ul>
+                </div>
+                <% } %>
+            </td>
+        </tr>
+    <% }); %>
+    </tbody>
+</table>
+<% } %>

@@ -5,7 +5,7 @@
     //   Job Type (+ Job ID) | Status | Collection Folder | Packages | Job Run By | Date
     function fmt_ts(ts) {
         if (!ts) return '';
-        var d = new Date(ts);
+        let d = new Date(ts);
         if (isNaN(d.getTime())) return String(ts);
         return d.toISOString();
     }
@@ -34,7 +34,7 @@
         </thead>
         <tbody>
             <% rows.forEach(function (row) {
-                var status_class = row.status === 'SUCCESSFUL' ? 'sev-success' : 'sev-error';
+                const status_class = row.status === 'SUCCESSFUL' ? 'sev-success' : 'sev-error';
             %>
                 <tr>
                     <td>
@@ -75,9 +75,9 @@
                                  * so a 95-package run doesn't stretch its
                                  * history row across screens.
                                  */
-                                var pkg_collapse = row.packages.length > 8;
-                                var pkg_visible = pkg_collapse ? row.packages.slice(0, 5) : row.packages;
-                                var pkg_hidden = pkg_collapse ? row.packages.slice(5) : [];
+                                const pkg_collapse = row.packages.length > 8;
+                                const pkg_visible = pkg_collapse ? row.packages.slice(0, 5) : row.packages;
+                                const pkg_hidden = pkg_collapse ? row.packages.slice(5) : [];
                             %>
                             <ul style="margin: 0; padding-left: 18px; list-style: disc;">
                                 <% pkg_visible.forEach(function (pkg) { %>
@@ -123,11 +123,11 @@
     </table>
 
     <%
-        var prev_offset = Math.max(0, offset - limit);
-        var next_offset = offset + limit;
-        var has_more = offset + rows.length < total;
-        var qs = function (off) {
-            var u = new URLSearchParams();
+        const prev_offset = Math.max(0, offset - limit);
+        const next_offset = offset + limit;
+        const has_more = offset + rows.length < total;
+        const qs = function (off) {
+            const u = new URLSearchParams();
             u.set('limit', String(limit));
             u.set('offset', String(off));
             if (filters.q) u.set('q', filters.q);

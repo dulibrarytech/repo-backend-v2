@@ -20,9 +20,9 @@
     // Color treatment comes from the .content-card.sev-* CSS rules
     // in public/assets/styles.css — red for errors, green for success,
     // amber for warnings, grey/blue for info.
-    var ok = !!locals.ok;
-    var sev = (locals.severity || (ok ? 'success' : 'error')).toLowerCase();
-    var sev_class = ({
+    const ok = !!locals.ok;
+    const sev = (locals.severity || (ok ? 'success' : 'error')).toLowerCase();
+    const sev_class = ({
         success: 'sev-success',
         info: 'sev-info',
         warn: 'sev-warn',
@@ -36,7 +36,7 @@
     // cloud for info. Matches the iconography used by the severity-
     // badge partial so the same outcome reads the same way wherever
     // it surfaces.
-    var icon_path;
+    let icon_path;
     if (sev_class === 'sev-success') {
         icon_path =
             '<polyline points="9 13 11 15 15 11"/>' +
@@ -61,9 +61,9 @@
 
     // Only auto-dismiss the SUCCESS variant; staff want to read errors
     // and warnings at their own pace.
-    var auto_dismiss = (sev_class === 'sev-success');
+    const auto_dismiss = (sev_class === 'sev-success');
 
-    var detail_text = '';
+    let detail_text = '';
     if (locals.detail !== undefined && locals.detail !== null) {
         try {
             detail_text = JSON.stringify(locals.detail, null, 2);

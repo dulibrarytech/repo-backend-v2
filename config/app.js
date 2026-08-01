@@ -6,7 +6,32 @@
  * fails at boot rather than at first request.
  */
 
+const path = require('node:path');
+
 const pkg = require('../package.json');
+
+/*
+ * Classpath for the DuHandleTool write helper (libs/handle_writer.js).
+ *
+ * Derived rather than configured. The jar ships inside the checkout, so its
+ * location is known relative to this file and follows the deploy wherever it
+ * lands — only the handle client's lib/ directory varies per host, and that
+ * is the same HANDLE_CLIENT_LIB the build script already takes. Absolute
+ * classpaths in .env were an easy thing to get wrong and a silent runtime
+ * failure when they were.
+ *
+ * HANDLE_HELPER_CLASSPATH still wins if set, for layouts this does not fit.
+ */
+function handle_helper_classpath() {
+    const override = process.env.HANDLE_HELPER_CLASSPATH;
+    if (override) return override;
+
+    const client_lib = process.env.HANDLE_CLIENT_LIB;
+    if (!client_lib) return '';
+
+    const jar = path.join(__dirname, '..', 'java', 'duhandletool.jar');
+    return `${jar}${path.delimiter}${path.join(client_lib, '*')}`;
+}
 
 function required(name) {
     const v = process.env[name];
@@ -609,22 +634,61 @@ function build() {
         },
 
         /*
-         * Handle service — DU's persistent-identifier minting. Every
+         * Handle.net — DU's persistent-identifier minting. Every
          * successfully ingested object gets a handle URL stored in
          * tbl_objects.handle. Update is a refresh (re-points the handle
          * at the current target URL).
-         * 
-         * `service` is the POST/PUT endpoint (e.g. "https://handle.example.com/handles").
-         * `server` + `prefix` together form the public URL the handle
-         * resolves to (e.g. "https://hdl.example.com/" + "20.500.12345"
-         * → "https://hdl.example.com/20.500.12345/<uuid>"). The split
-         * preserves v1's env shape so a legacy .env imports cleanly.
+         *
+         * libs/handles.js talks to the handle server's HTTP JSON API
+         * directly. The standalone Python handles-service on libsftp01
+         * that used to sit in between is retired — see
+         * repo/HANDLES_SERVICE_REMEDIATION_PLAN.md.
+         *
+         * READS go over HTTP from Node; WRITES go through the DuHandleTool
+         * Java helper on the native protocol, because the handle server
+         * exposes no authentication mechanism over HTTP. See
+         * libs/handle_writer.js.
+         *
+         * `admin_url` is the handle server's HTTP interface — used for
+         * resolution only (origin only, no path).
+         * `admin_id` is the prefix administrator, index and handle, in the
+         * form "300:0.NA/10176".
+         * `admin_key_path` is the Handle-format private key (admpriv.bin);
+         * the Java helper reads it directly, so no conversion is needed.
+         * `admin_passphrase` decrypts it.
+         * `client_lib` is the handle client's lib/ directory — the only
+         * host-specific part of the helper's classpath, and the same var
+         * java/build.sh takes. `helper_classpath` is derived from it plus
+         * the jar's in-checkout location; set HANDLE_HELPER_CLASSPATH only
+         * to override that derivation.
+         * `target` is what handles resolve TO — changing it affects future
+         * mints and updates only, never existing handles retroactively.
+         * `server` + `prefix` form the public handle URL stored in the DB
+         * ("https://hdl.handle.net/" + "10176" + "/<uuid>"); that value is
+         * independent of `target`, so a target-domain migration needs no
+         * database change.
          */
         handles: {
-            service: optional('HANDLE_SERVICE', ''),
+            admin_url: optional('HANDLE_ADMIN_URL', ''),
+            admin_id: optional('HANDLE_ADMIN_ID', ''),
+            admin_key_path: optional('HANDLE_ADMIN_KEY_PATH', ''),
+            admin_passphrase: optional('HANDLE_ADMIN_PASSPHRASE', ''),
+            java_bin: optional('HANDLE_JAVA_BIN', 'java'),
+            client_lib: optional('HANDLE_CLIENT_LIB', ''),
+            helper_classpath: handle_helper_classpath(),
+            target: optional('HANDLE_TARGET', ''),
+            /*
+             * Hosts a hand-minted handle is allowed to point at (Admin Utils
+             * handles view). Comma-separated; a value matches if the target
+             * host equals it or is a subdomain of it. Left unset, it falls
+             * back to the host of HANDLE_TARGET — so an unconfigured
+             * deployment fails CLOSED to its own domain rather than letting
+             * a DU persistent identifier point anywhere.
+             */
+            allowed_target_hosts: optional('HANDLE_ALLOWED_TARGET_HOSTS', ''),
             prefix: optional('HANDLE_PREFIX', ''),
             server: optional('HANDLE_SERVER', ''),
-            api_key: optional('HANDLE_API_KEY', ''),
+            ttl: integer('HANDLE_TTL', 86400),
             timeout_ms: integer('HANDLE_TIMEOUT_MS', 30000),
         },
 
@@ -819,12 +883,32 @@ function build() {
              */
             enabled: boolean('AIP_STORE_ENABLED', false),
             /*
+             * One AIP copy at a time (default ON). Stage 6 sits
+             * outside the serial-pipeline gate, so with worker
+             * concurrency 2 two rows could fire /copy-to-wasabi
+             * simultaneously — two concurrent large-AIP downloads
+             * strained AM Storage badly enough to wedge its download
+             * path entirely (2026-07-31, 2×66GB-scale). Same gate
+             * shape as the AM-transfer gate. AIP_STORE_SERIAL=0
+             * restores parallel Stage 6.
+             */
+            serial: boolean('AIP_STORE_SERIAL', true),
+            /*
              * Wall-clock budget for the curation /copy-to-wasabi call.
              * Multi-GB AIPs take many minutes; default 60 min is
              * generous. Stage 6 records AIP_STORE_FAILED on timeout
              * and the row can be retried via the dashboard.
              */
             copy_timeout_ms: integer('AIP_STORE_COPY_TIMEOUT_MS', 60 * 60 * 1000),
+            /*
+             * Cadence for the byte-progress side-poll that runs WHILE
+             * the synchronous /copy-to-wasabi call is in flight. Each
+             * poll GETs /aip/copy-progress/<uuid> (cheap file read on
+             * the curation side) and persists bytes to the queue row
+             * so the dashboard can render a live % for multi-hour
+             * copies. 0 disables the poller entirely.
+             */
+            progress_poll_ms: integer('AIP_STORE_PROGRESS_POLL_MS', 60_000),
             /*
              * Presigned-URL TTL for dashboard downloads. Short by
              * default so a leaked URL has a small blast radius. 15

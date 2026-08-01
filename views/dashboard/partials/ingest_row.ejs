@@ -12,40 +12,49 @@
     //   (resolved upstream by available_actions()).
     function fmt_ts(ts) {
         if (!ts) return '';
-        var d = new Date(ts);
+        let d = new Date(ts);
         if (isNaN(d.getTime())) return String(ts);
-        var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+        const pad = function (n) { return n < 10 ? '0' + n : '' + n; };
         return pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + '/' + d.getFullYear() +
             ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
     }
     // Short byte formatter for the upload-progress readout. Inline (like
     // fmt_ts) so the partial stays self-contained and CSP-safe.
     function fmt_bytes(n) {
-        var v = Number(n);
+        let v = Number(n);
         if (!isFinite(v) || v < 0) return '—';
         if (v < 1024) return Math.round(v) + ' B';
-        var units = ['KB', 'MB', 'GB', 'TB', 'PB'];
-        var i = -1;
+        const units = ['KB', 'MB', 'GB', 'TB', 'PB'];
+        let i = -1;
         do { v /= 1024; i += 1; } while (v >= 1024 && i < units.length - 1);
         return v.toFixed(1) + ' ' + units[i];
     }
-    // Live byte-progress for the Archivematica SFTP upload (Stage 2). The
-    // worker persists bytes_uploaded + total_bytes each poll; the queue
-    // table's 5s refresh makes the bar climb. Only shown while UPLOADING
-    // and once we have a total (else fall back to the suggested_action).
-    var up_bytes = Number(row.bytes_uploaded) || 0;
-    var tot_bytes = Number(row.total_bytes) || 0;
-    var show_upload_progress = row.pipeline_state === 'UPLOADING' && tot_bytes > 0;
-    var up_pct = show_upload_progress ? Math.min(100, Math.round((up_bytes / tot_bytes) * 100)) : 0;
+    // Live byte-progress bars. Two stages persist bytes_uploaded +
+    // total_bytes on the row (Stage 6 zeroes them on entry so Stage 2's
+    // values can't leak through):
+    //   - UPLOADING (Stage 2): SFTP push to Archivematica, polled bytes.
+    //   - AIP_STORE_IN_PROGRESS (Stage 6): AIP copy to Wasabi, side-poll
+    //     of the curation copy-progress endpoint.
+    // The queue table's 5s refresh makes the bar climb. Only shown once
+    // we have a total (else fall back to the suggested_action).
+    const up_bytes = Number(row.bytes_uploaded) || 0;
+    const tot_bytes = Number(row.total_bytes) || 0;
+    const show_upload_progress = row.pipeline_state === 'UPLOADING' && tot_bytes > 0;
+    const show_aip_copy_progress = row.pipeline_state === 'AIP_STORE_IN_PROGRESS' && tot_bytes > 0;
+    const show_byte_bar = show_upload_progress || show_aip_copy_progress;
+    const byte_bar_label = show_aip_copy_progress
+        ? 'Copying preservation package (AIP) to cloud storage'
+        : 'Uploading to Archivematica';
+    const up_pct = show_byte_bar ? Math.min(100, Math.round((up_bytes / tot_bytes) * 100)) : 0;
 
     // Relative "ago" for the Archivematica/DuraCloud heartbeat (last_poll_at,
     // epoch ms). Lets staff see a slow stage is still alive vs stalled.
     function fmt_ago(ms) {
-        var t = Number(ms);
+        const t = Number(ms);
         if (!isFinite(t) || t <= 0) return null;
-        var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+        const s = Math.max(0, Math.round((Date.now() - t) / 1000));
         if (s < 60) return s + 's ago';
-        var m = Math.round(s / 60);
+        const m = Math.round(s / 60);
         if (m < 60) return m + 'm ago';
         return Math.round(m / 60) + 'h ago';
     }
@@ -53,20 +62,25 @@
     // wait states: show the current AM microservice ("where it is") and a
     // heartbeat ("checked Ns ago"). AM exposes the current step name, not a %
     // within it — so this is the meaningful "it's alive and here" signal.
-    var AM_PROGRESS_STATES = ['TRANSFER_STARTED', 'TRANSFER_IN_PROGRESS',
-        'INGEST_IN_PROGRESS', 'WAITING_FOR_DURACLOUD'];
-    var show_am_progress = !show_upload_progress
+    // AIP_STORE_IN_PROGRESS is included for its no-bytes fallback: when
+    // the curation side predates the copy-progress endpoint (or the copy
+    // hasn't streamed its first byte yet) there's no total, so the row
+    // shows suggested_action + the heartbeat instead of a bar. Stage 6
+    // resets micro_service on entry, so no stale AM step name leaks in.
+    const AM_PROGRESS_STATES = ['TRANSFER_STARTED', 'TRANSFER_IN_PROGRESS',
+        'INGEST_IN_PROGRESS', 'WAITING_FOR_DURACLOUD', 'AIP_STORE_IN_PROGRESS'];
+    const show_am_progress = !show_byte_bar
         && AM_PROGRESS_STATES.indexOf(row.pipeline_state) !== -1;
-    var micro = (row.micro_service && row.micro_service !== 'PENDING') ? row.micro_service : null;
-    var checked_ago = fmt_ago(row.last_poll_at);
+    const micro = (row.micro_service && row.micro_service !== 'PENDING') ? row.micro_service : null;
+    const checked_ago = fmt_ago(row.last_poll_at);
 
-    var actions = (row && Array.isArray(row.actions)) ? row.actions : [];
-    var has_rollback = actions.indexOf('rollback_pre_ingest') !== -1
+    const actions = (row && Array.isArray(row.actions)) ? row.actions : [];
+    const has_rollback = actions.indexOf('rollback_pre_ingest') !== -1
         || actions.indexOf('rollback_archivematica') !== -1
         || actions.indexOf('rollback_to_packaging') !== -1
         || actions.indexOf('reset') !== -1;
-    var has_cancel = actions.indexOf('cancel') !== -1;
-    var has_divider = has_rollback || has_cancel;
+    const has_cancel = actions.indexOf('cancel') !== -1;
+    const has_divider = has_rollback || has_cancel;
 %>
 <tr id="queue-row-<%= row.id %>">
     <td class="package-cell">
@@ -90,12 +104,15 @@
         }) %>
     </td>
     <td>
-        <% if (show_upload_progress) { %>
+        <% if (show_byte_bar) { %>
             <div class="text-muted small mb-1">
-                Uploading to Archivematica — <%= fmt_bytes(up_bytes) %> / <%= fmt_bytes(tot_bytes) %> (<%= up_pct %>%)
+                <%= byte_bar_label %> — <%= fmt_bytes(up_bytes) %> / <%= fmt_bytes(tot_bytes) %> (<%= up_pct %>%)
+                <% if (show_aip_copy_progress && checked_ago) { %>
+                    <span class="text-muted"> · checked <%= checked_ago %></span>
+                <% } %>
             </div>
             <div class="progress" role="progressbar"
-                 aria-label="Upload progress"
+                 aria-label="<%= byte_bar_label %> progress"
                  aria-valuenow="<%= up_pct %>" aria-valuemin="0" aria-valuemax="100"
                  style="height: 6px; max-width: 280px;">
                 <div class="progress-bar" style="width: <%= up_pct %>%; background-color: var(--du-crimson);"></div>

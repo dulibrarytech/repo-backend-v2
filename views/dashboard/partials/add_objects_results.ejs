@@ -88,15 +88,15 @@
             </div>
             <nav class="page-controls" aria-label="Pagination">
                 <%
-                    var prev = Math.max(1, page - 1);
-                    var next = page * page_size < total ? page + 1 : page;
-                    var qs = function (p) {
-                        var u = new URLSearchParams();
+                    const prev = Math.max(1, page - 1);
+                    const next = page * page_size < total ? page + 1 : page;
+                    const qs = function (p) {
+                        const u = new URLSearchParams();
                         u.set('page', String(p));
                         if (q) u.set('q', q);
                         return u.toString();
                     };
-                    var list_url = dashboard_base + '/collections/' + collection.pid + '/add-objects/list';
+                    const list_url = dashboard_base + '/collections/' + collection.pid + '/add-objects/list';
                 %>
                 <button type="button"
                         <%= page === 1 ? 'disabled' : '' %>

@@ -402,7 +402,8 @@ h1 {
  * theming via the --bs-tooltip-* custom properties — --bs-tooltip-bg also
  * colors the arrow, so the whole tooltip stays consistent.
  */
-.sidebar-tooltip {
+.sidebar-tooltip,
+.handle-tooltip {
     --bs-tooltip-bg: var(--text-strong);
     --bs-tooltip-color: #ffffff;
     --bs-tooltip-font-size: 0.875rem;
@@ -412,11 +413,25 @@ h1 {
     --bs-tooltip-opacity: 1;
 }
 
-.sidebar-tooltip .tooltip-inner {
+.sidebar-tooltip .tooltip-inner,
+.handle-tooltip .tooltip-inner {
     font-weight: 600;
     letter-spacing: 0.01em;
     max-width: 240px;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+/*
+ * Handle links (Admin > Handles) carry a full resolver URL rather than a
+ * short nav label, so they need room to breathe: wider, and normal weight
+ * with a break so a long URL wraps instead of overflowing. Everything else
+ * is inherited from the shared prominent treatment above.
+ */
+.handle-tooltip .tooltip-inner {
+    max-width: 420px;
+    font-weight: 500;
+    word-break: break-all;
+    text-align: left;
 }
 
 /* --- Main content --------------------------------------------------------- */
@@ -572,6 +587,23 @@ h1 {
     font-size: 13px;
     color: var(--text-muted);
     white-space: nowrap;
+}
+
+/*
+ * Admin > Handles.
+ *
+ * Every column here carries long secondary data — a prefixed identifier, a
+ * full target URL, a note, an actor id — with no short primary name to
+ * anchor on. At the 14px `tbody td` default the whole table reads heavier
+ * than the objects and collection tables, where only `.package-name` sits at
+ * 14px and everything supporting it drops to 12-13px. Matching that density
+ * keeps the admin tables consistent.
+ *
+ * The nested 12px detail lines (failure message, "in use by") are left as
+ * they are — they already match `.package-sub`.
+ */
+.handles-table tbody td {
+    font-size: 13px;
 }
 
 .queue-table .actions-cell {

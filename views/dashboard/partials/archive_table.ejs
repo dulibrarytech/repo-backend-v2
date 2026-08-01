@@ -10,13 +10,13 @@
     //
     // Hidden inputs carry the current level so the page-shell filter
     // box can hx-include them and stay on this level while filtering.
-    var list_url = dashboard_base + '/admin/archive/list';
+    const list_url = dashboard_base + '/admin/archive/list';
 
     function fmt_bytes(n) {
         if (n === 0) return '0 B';
         if (!n) return '';
-        var units = ['B', 'KB', 'MB', 'GB', 'TB'];
-        var i = 0;
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let i = 0;
         while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
         return (i === 0 ? n : n.toFixed(1)) + ' ' + units[i];
     }

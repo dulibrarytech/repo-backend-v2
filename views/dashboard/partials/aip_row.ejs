@@ -18,7 +18,7 @@
              - package-sub stacks the PID and AIP filename as
                monospace muted lines, same shape as the
                handle / uri / pid subtitle on collection rows */%>
-        <% var aip_filename =
+        <% const aip_filename =
             item.aip ||
             (item.wasabi_key ? item.wasabi_key.split('/').pop() : ''); %>
         <div class="package-name">
@@ -119,7 +119,7 @@
             (item.display_status === 'failed' || item.display_status === 'orphan')
             && (item.error || item.message)
         ) { %>
-            <% var err_text = item.error || item.message; %>
+            <% const err_text = item.error || item.message; %>
             <%/* Wrap inside the column instead of truncating to a
                  single line. With table-layout: fixed in aips_table.ejs,
                  the Status column stays at its colgroup-defined 20%
@@ -161,7 +161,7 @@
 
              kebab-btn + filled-circle SVG matches collection_row.ejs
              so the affordance reads identically across list pages. */%>
-        <% var has_action = item.display_status === 'copied' || item.display_status === 'failed' || item.display_status === 'orphan'; %>
+        <% const has_action = item.display_status === 'copied' || item.display_status === 'failed' || item.display_status === 'orphan'; %>
         <% if (has_action) { %>
         <div class="dropdown">
             <button type="button" class="kebab-btn"

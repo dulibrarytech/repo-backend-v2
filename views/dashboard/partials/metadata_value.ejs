@@ -28,7 +28,7 @@
     <span class="font-monospace"><%= value %></span>
 
 <% } else if (typeof value === 'string') { %>
-    <% var s = value.trim(); %>
+    <% const s = value.trim(); %>
     <% if (/^https?:\/\//.test(s)) { %>
         <a href="<%= s %>" target="_blank" rel="noopener"
            class="font-monospace small" style="word-break: break-all;">
@@ -45,7 +45,7 @@
     <% } %>
 
 <% } else if (Array.isArray(value)) { %>
-    <% var filtered = value.filter(function (v) { return v !== null && v !== undefined && v !== ''; }); %>
+    <% const filtered = value.filter(function (v) { return v !== null && v !== undefined && v !== ''; }); %>
     <% if (filtered.length === 0) { %>
         <span class="text-muted">[]</span>
     <% } else if (filtered.every(function (v) { return typeof v === 'string'; })) { %>
@@ -63,8 +63,8 @@
     <% } %>
 
 <% } else if (typeof value === 'object') { %>
-    <% var entries = Object.keys(value).filter(function (k) {
-           var v = value[k];
+    <% const entries = Object.keys(value).filter(function (k) {
+           const v = value[k];
            return !(v === null || v === undefined || v === '');
        }); %>
     <% if (entries.length === 0) { %>
