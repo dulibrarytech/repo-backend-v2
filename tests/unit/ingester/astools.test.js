@@ -110,27 +110,27 @@ describe('ingester/libs/astools', () => {
              * without normalization the client would double-append.
              */
             delete process.env.CURATION_API;
-            process.env.CURATION_API = 'http://libsftp01-vlp.du.edu:8185/api/v1/astools/';
+            process.env.CURATION_API = 'http://curation.example.com:8185/api/v1/astools/';
             app_config._reset();
             const http = make_fake_http();
             http.set_response({ status: 200, data: {} });
             const client = astools_module.create_client(http);
             await client.list_workspace();
             expect(http.calls.get[0].url).toBe(
-                'http://libsftp01-vlp.du.edu:8185/api/v1/astools/workspace'
+                'http://curation.example.com:8185/api/v1/astools/workspace'
             );
         });
 
         it('also tolerates the base URL without the path tail', async () => {
             delete process.env.CURATION_API;
-            process.env.CURATION_API = 'http://libsftp01-vlp.du.edu:8185';
+            process.env.CURATION_API = 'http://curation.example.com:8185';
             app_config._reset();
             const http = make_fake_http();
             http.set_response({ status: 200, data: {} });
             const client = astools_module.create_client(http);
             await client.list_workspace();
             expect(http.calls.get[0].url).toBe(
-                'http://libsftp01-vlp.du.edu:8185/api/v1/astools/workspace'
+                'http://curation.example.com:8185/api/v1/astools/workspace'
             );
         });
     });

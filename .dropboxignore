@@ -1,0 +1,22 @@
+# .dropboxignore  (repo-backend-v2)
+#
+# Project-scoped additions on top of workspace/.dropboxignore, which already
+# covers node_modules, logs, tmp, coverage, .DS_Store and .idea for every
+# project under the workspace folder. Only put rules here that should NOT
+# apply workspace-wide.
+#
+# Patterns are matched relative to this file's folder.
+
+# ---- Live credentials: keep local, never replicate to a third party --------
+# .env holds production secrets for services this app talks to: TOKEN_SECRET,
+# ARCHIVESPACE_PASSWORD, DURACLOUD_PWD, ARCHIVEMATICA_API_KEY,
+# ARCHIVEMATICA_STORAGE_API_KEY, TN_SERVICE_API_KEY, CONVERT_SERVICE_API_KEY,
+# HANDLE_API_KEY, CURATION_API_KEY and the DB credentials. Git already ignores
+# it; this stops Dropbox from syncing it as well.
+#
+# WARNING — this is not like node_modules: .env is NOT regenerable. Once
+# Dropbox applies this rule the file is removed from the cloud and from your
+# OTHER devices, and survives only on machines that already hold a copy.
+# Before adding a new machine, copy .env there out-of-band (or rebuild it from
+# .env-example plus the secret store) — it will not arrive via sync.
+.env
