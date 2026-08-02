@@ -157,7 +157,7 @@ Package ingest is a two-service effort with [digitaldu-backend-curation-service]
 
 Admin-initiated, queue-paced re-fetch of every active object's ASpace metadata. Hardening levers (all env-configurable): per-request timeout, worker concurrency, tick cadence, retry budget with exponential backoff, and periodic ASpace session-token rotation. The admin page exposes a **Resume from last cancelled batch** opt-in so a new batch inherits the prior cancelled batch's cursor instead of restarting from the beginning.
 
-### Preservation tier (AIP store)
+### Storage tier (AIP store)
 
 AIPs produced by Archivematica land in DuraCloud as part of standard AM operation, then get a second copy in **Wasabi S3** for long-term storage:
 
