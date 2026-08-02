@@ -132,7 +132,7 @@ An Express 5 application (CommonJS, EJS + HTMX partials, Bootstrap 5) serving th
 | **[Handle.net](https://www.handle.net/) server** | Mints persistent identifiers per object under the DU prefix. Reads over the handle HTTP JSON API; writes over the native protocol via the [official client library](https://www.handle.net/download_hnr.html). |
 | **TN service**                | Generates fresh thumbnails from source files.                                                     |
 | **Kaltura**                   | Streaming media for AV-bearing objects.                                                           |
-| **DU SSO**         | Single sign-on (layered defense: IP allowlist + timestamp + HMAC).                                |
+| **DU SSO**         | Single sign-on (layered defense: IP allowlist + timestamp).                                |
 
 ### Ingest pipeline
 
