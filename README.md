@@ -96,7 +96,7 @@ npm run dev                   # same, with --watch auto-reload
 # → http://localhost:8765/repo/dashboard/
 ```
 
-Staff log in via DU SSO in production; local development uses the direct login endpoint (`POST /repo/auth/login` with an active `du_id` from `tbl_users`).
+Staff log in via DU SSO in production
 
 **Tests**
 
@@ -127,7 +127,7 @@ An Express 5 application (CommonJS, EJS + HTMX partials, Bootstrap 5) serving th
 | **Archivematica + AM Storage Service** | Ingest pipeline target. Stage 3 starts transfers; Stage 4 polls ingest; AIP retrieved via Storage Service API for the preservation copy. |
 | **ArchivesSpace**             | Source of truth for descriptive metadata. On-demand + system-wide refresh both fetch from here.   |
 | **DuraCloud**                 | Active storage tier for AIPs (post-AM). Thumbnail proxy reads legacy thumbnails from here.        |
-| **Wasabi S3**  | Preservation tier. Stage 6 + backfill copy AIPs here via the curation API.            |
+| **Wasabi S3**  | Storage tier. Stage 6 + backfill copy AIPs here via the curation API.            |
 | **[Curation API](https://github.com/dulibrarytech/digitaldu-backend-curation-service)** (Python) | Wasabi gatekeeper. Holds the boto3 credentials; v2 talks HTTP to it for both SFTP-staging and AIP copies. Also owns AM-folder QA. |
 | **[Handle.net](https://www.handle.net/) server** | Mints persistent identifiers per object under the DU prefix. Reads over the handle HTTP JSON API; writes over the native protocol via the [official client library](https://www.handle.net/download_hnr.html). |
 | **TN service**                | Generates fresh thumbnails from source files.                                                     |
