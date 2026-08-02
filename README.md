@@ -159,7 +159,7 @@ Admin-initiated, queue-paced re-fetch of every active object's ASpace metadata. 
 
 ### Preservation tier (AIP store)
 
-AIPs produced by Archivematica land in DuraCloud as part of standard AM operation, then get a second copy in **Wasabi S3** for long-term preservation:
+AIPs produced by Archivematica land in DuraCloud as part of standard AM operation, then get a second copy in **Wasabi S3** for long-term storage:
 
 - **Live ingest:** Stage 6 fires automatically when `AIP_STORE_ENABLED=true`.
 - **Backfill:** `/dashboard/admin/aip-backfill` chews through objects that pre-date the flag, in operator-controlled chunks.
@@ -170,7 +170,7 @@ Wasabi credentials live in the curation service's env, not v2's — v2 carries o
 
 ### Persistent identifiers (Handle.net)
 
-Every ingested object gets a persistent identifier from a [Handle.net](https://www.handle.net/) server running under the DU prefix — minted in Stage 5, and by hand from **Admin Utils → Handles**. This replaces the standalone Python handles-service, which was merged into this codebase.
+Every ingested object gets a persistent identifier from a [Handle.net](https://www.handle.net/) server running under the DU prefix — minted in Stage 5, and by hand from **Admin Utils → Handles**. 
 
 **Transport is split**, because the handle server offers no authentication over HTTP:
 
@@ -184,7 +184,7 @@ Writes shell out to **`DuHandleTool`**, a small Java helper built against the of
 **Client library** — download the Handle.net server/client distribution from <https://www.handle.net/download_hnr.html> and point `HANDLE_CLIENT_LIB` at its `lib/` directory (DU runs 9.3.1):
 
 ```
-HANDLE_CLIENT_LIB=/opt/library_applications/handle-client-9.3.1/lib
+HANDLE_CLIENT_LIB=/path/to/handle-client-9.3.1/lib
 ```
 
 **Building the helper** — `java/duhandletool.jar` is committed and travels with the checkout, so a deploy needs a JRE only. Rebuild on a development machine when `DuHandleTool.java` changes:
