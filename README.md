@@ -65,6 +65,7 @@ All other content is released under [CC-BY-4.0](https://creativecommons.org/lice
 
 * Node.js **20+** — pinned via `.nvmrc`.
 * MySQL **8+** or MariaDB **10.6+** — two databases: `repo` and `repo_queue`.
+* Java **11+ runtime** — only for handle minting. The [Handle.net client library](https://www.handle.net/download_hnr.html) supplies the jars; see [Persistent identifiers (Handle.net)](#persistent-identifiers-handlenet).
 * Optional (full functionality): Elasticsearch 8, ArchivesSpace, Archivematica, DuraCloud, the curation API, Kaltura, and the Handle/TN services are DU-internal — ingest, metadata refresh, indexing, and preservation flows need DU network/VPN. Core dashboard CRUD works without them.
 
 **Install and configure**
@@ -128,7 +129,7 @@ An Express 5 application (CommonJS, EJS + HTMX partials, Bootstrap 5) serving th
 | **DuraCloud**                 | Active storage tier for AIPs (post-AM). Thumbnail proxy reads legacy thumbnails from here.        |
 | **Wasabi S3**  | Preservation tier. Stage 6 + backfill copy AIPs here via the curation API.            |
 | **[Curation API](https://github.com/dulibrarytech/digitaldu-backend-curation-service)** (Python) | Wasabi gatekeeper. Holds the boto3 credentials; v2 talks HTTP to it for both SFTP-staging and AIP copies. Also owns AM-folder QA. |
-| **Handle service**            | Mints persistent identifiers per object.                                                          |
+| **[Handle.net](https://www.handle.net/) server** | Mints persistent identifiers per object under the DU prefix. Reads over the handle HTTP JSON API; writes over the native protocol via the [official client library](https://www.handle.net/download_hnr.html). |
 | **TN service**                | Generates fresh thumbnails from source files.                                                     |
 | **Kaltura**                   | Streaming media for AV-bearing objects.                                                           |
 | **DU SSO**         | Single sign-on (layered defense: IP allowlist + timestamp + HMAC).                                |
@@ -166,6 +167,37 @@ AIPs produced by Archivematica land in DuraCloud as part of standard AM operatio
 - **Downloads:** Dashboard renders a presigned Wasabi URL via the curation API; bytes never transit v2.
 
 Wasabi credentials live in the curation service's env, not v2's — v2 carries only the `CURATION_API` URL + `CURATION_API_KEY`.
+
+### Persistent identifiers (Handle.net)
+
+Every ingested object gets a persistent identifier from a [Handle.net](https://www.handle.net/) server running under the DU prefix — minted in Stage 5, and by hand from **Admin Utils → Handles**. This replaces the standalone Python handles-service, which was merged into this codebase.
+
+**Transport is split**, because the handle server offers no authentication over HTTP:
+
+| Direction | Path | Implementation |
+| --------- | ---- | -------------- |
+| **Reads** (resolution, existence checks) | Handle HTTP JSON API (`/api/handles/…`) | `libs/handles.js` |
+| **Writes** (create, modify, delete) | Native handle protocol, authenticated with the prefix administrator's private key | `libs/handle_writer.js` → `java/DuHandleTool.java` |
+
+Writes shell out to **`DuHandleTool`**, a small Java helper built against the official Handle.net client library. It speaks newline-delimited JSON on stdin/stdout and supports a batch mode that pays the JVM start, resolver site-cache warm-up, and key decryption once per run rather than per handle.
+
+**Client library** — download the Handle.net server/client distribution from <https://www.handle.net/download_hnr.html> and point `HANDLE_CLIENT_LIB` at its `lib/` directory (DU runs 9.3.1):
+
+```
+HANDLE_CLIENT_LIB=/opt/library_applications/handle-client-9.3.1/lib
+```
+
+**Building the helper** — `java/duhandletool.jar` is committed and travels with the checkout, so a deploy needs a JRE only. Rebuild on a development machine when `DuHandleTool.java` changes:
+
+```
+HANDLE_CLIENT_LIB=/path/to/handle-client-9.3.1/lib npm run build:handle-helper
+```
+
+It compiles with `--release 11`, so the bytecode runs unchanged on the production JRE. Do not install a JDK on the server for this.
+
+**Guardrails** — minting requires the `manage_handles` permission (admin-only): it runs under the prefix administrator credential, the highest-privilege action the application can take. Hand-minted targets are restricted to the hosts in `HANDLE_ALLOWED_TARGET_HOSTS` (falling back to the `HANDLE_TARGET` host, so an unconfigured deployment is closed rather than open), suffixes are server-generated, and only handles minted through the view can be deleted from it. A collection folder whose name carries a token from `HANDLE_SKIP_BATCH_TOKENS` (default `test`) mints no handle at all, so test ingests against production never consume real identifiers.
+
+Reference: [Handle.net technical manual](https://www.handle.net/tech_manual/HN_Tech_Manual_9.pdf) · [handle.net documentation](https://www.handle.net/documentation.html). All `HANDLE_*` settings are documented inline in `.env-example`.
 
 ## Releases
 
