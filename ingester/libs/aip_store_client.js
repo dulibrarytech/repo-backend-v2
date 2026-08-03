@@ -127,6 +127,45 @@ function create_client(http = http_default) {
         },
 
         /*
+         * Failover twin of copy_to_wasabi: same wire contract (same
+         * body, same response envelope + source='duracloud'), but the
+         * curation service pulls the AIP bytes from DuraCloud's
+         * aip-store replica — chunk-reassembled and MD5-verified
+         * against the .dura-manifest — instead of AM Storage Service.
+         * Used when AM's download path can't serve large AIPs
+         * (2026-07-31: silent hangs, then 502s at 66-75 GB).
+         */
+        async copy_from_duracloud(aip_uuid, repo_uuid, { timeout_ms, signal } = {}) {
+            const cfg = app_config().curation_api;
+            const effective_timeout =
+                timeout_ms || app_config().aip_store.copy_timeout_ms || cfg.timeout_ms;
+            const url = build_url('copy-from-duracloud');
+            try {
+                const res = await http.post(
+                    url,
+                    { aip_uuid, repo_uuid },
+                    {
+                        timeout: effective_timeout,
+                        signal,
+                        headers: default_headers(),
+                        validateStatus: () => true,
+                    }
+                );
+                return { status: res.status, data: res.data };
+            } catch (err) {
+                log.warn({
+                    event: 'aip_copy_from_duracloud_failed',
+                    aip_uuid,
+                    repo_uuid,
+                    err: err.message,
+                });
+                throw new UpstreamError(
+                    `curation /aip/copy-from-duracloud failed: ${err.message}`
+                );
+            }
+        },
+
+        /*
          * Read live byte progress for an in-flight copy. The curation
          * side persists {bytes_sent, total_bytes, updated_at} to a
          * per-AIP progress file while its upload streams; this GET is

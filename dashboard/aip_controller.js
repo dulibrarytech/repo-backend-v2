@@ -30,7 +30,7 @@ const aip_store_model = require('../repository/aip_store_model');
 const repository_model = require('../repository/model');
 const aip_store_client = require('../ingester/libs/aip_store_client');
 const ingest_model = require('../ingester/model');
-const { ForbiddenError, NotFoundError, ValidationError } = require('../libs/errors');
+const { ValidationError } = require('../libs/errors');
 
 function render_page(req, res, view, locals = {}) {
     const cfg = app_config();
@@ -347,12 +347,32 @@ async function aip_download(req, res) {
  * staff knows the retry won't auto-execute.
  */
 async function aip_retry(req, res) {
+    return _aip_retry_impl(req, res, { from_duracloud: false });
+}
+
+/*
+ * "Retry from DuraCloud" — same reset + queue re-enqueue as aip_retry,
+ * but stamps the store row with message=RETRY_FROM_DURACLOUD so Stage 6
+ * copies from DuraCloud's aip-store replica instead of AM Storage.
+ * Built for the 2026-07-31 incident class: AM's download path cannot
+ * serve 66-75 GB AIPs (hangs, then 502s) while the DuraCloud replica
+ * is intact, chunked, and MD5-verifiable.
+ */
+async function aip_retry_duracloud(req, res) {
+    return _aip_retry_impl(req, res, { from_duracloud: true });
+}
+
+async function _aip_retry_impl(req, res, { from_duracloud }) {
     const id = Number.parseInt(req.params.id, 10);
     if (!Number.isInteger(id) || id <= 0) {
         throw new ValidationError('id must be a positive integer');
     }
-    const row = await aip_store_model.get(id);
-    const reset = await aip_store_model.reset_for_retry(id);
+    let reset = await aip_store_model.reset_for_retry(id);
+    if (from_duracloud) {
+        reset = await aip_store_model.update(id, {
+            message: 'RETRY_FROM_DURACLOUD',
+        });
+    }
 
     let queue_retry_ok = false;
     try {
@@ -414,7 +434,9 @@ async function aip_retry(req, res) {
         res,
         queue_retry_ok ? 'success' : 'warn',
         queue_retry_ok
-            ? `Retry queued - the AIP copy will re-run on the next worker tick.`
+            ? from_duracloud
+                ? `Retry queued - the AIP copy will re-run from DuraCloud on the next worker tick.`
+                : `Retry queued - the AIP copy will re-run on the next worker tick.`
             : `AIP row reset, but no matching ingest queue row was found. ` +
                   `Legacy rows can be re-copied via a separate admin tool.`
     );
@@ -445,6 +467,7 @@ module.exports = {
     aips_table_partial,
     aip_download,
     aip_retry,
+    aip_retry_duracloud,
     aip_row_partial,
     // Test helpers
     _format_bytes: format_bytes,

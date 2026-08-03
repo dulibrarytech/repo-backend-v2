@@ -252,13 +252,31 @@ async function run(row, deps = {}) {
         aip_uuid: row.sip_uuid,
     });
 
+    /*
+     * Source selection (2026-08-01). Default source is AM Storage; the
+     * AIPs dashboard's "Retry from DuraCloud" stamps the tbl_aip_store
+     * row with message=RETRY_FROM_DURACLOUD, and every attempt in that
+     * retry budget then copies from DuraCloud's aip-store replica
+     * instead (AM's download path can't serve 66-75 GB AIPs — hangs,
+     * then 502s). _record_failure preserves the flag while attempts
+     * remain, so the whole budget stays on the chosen source.
+     */
+    const use_duracloud = Boolean(
+        existing &&
+            existing.message === 'RETRY_FROM_DURACLOUD' &&
+            typeof client.copy_from_duracloud === 'function'
+    );
+
     let res;
     try {
-        res = await client.copy_to_wasabi(row.sip_uuid, pid, {
+        const copy_opts = {
             timeout_ms: cfg.copy_timeout_ms,
             // Rides into the HTTP request, so a Stop tears the call down at once.
             signal,
-        });
+        };
+        res = use_duracloud
+            ? await client.copy_from_duracloud(row.sip_uuid, pid, copy_opts)
+            : await client.copy_to_wasabi(row.sip_uuid, pid, copy_opts);
     } catch (err) {
         if (signal && signal.aborted) {
             /*
@@ -277,6 +295,7 @@ async function run(row, deps = {}) {
             pid,
             error_text: err instanceof UpstreamError ? err.message : String(err),
             wire_status: null,
+            use_duracloud,
         });
     } finally {
         // Must run on every exit path, or the interval keeps writing to the row.
@@ -295,7 +314,8 @@ async function run(row, deps = {}) {
     const data = res.data && typeof res.data === 'object' ? res.data : {};
     if (res.status < 200 || res.status >= 300 || data.ok !== true) {
         const error_text =
-            data.error || `curation /copy-to-wasabi returned HTTP ${res.status}`;
+            data.error ||
+            `curation ${use_duracloud ? '/copy-from-duracloud' : '/copy-to-wasabi'} returned HTTP ${res.status}`;
         return await _record_failure({
             aip_store_model,
             model,
@@ -304,6 +324,7 @@ async function run(row, deps = {}) {
             pid,
             error_text,
             wire_status: res.status,
+            use_duracloud,
         });
     }
 
@@ -326,7 +347,8 @@ async function run(row, deps = {}) {
         attempts: 0,
         next_attempt_at: null,
         error: null,
-        message: null,
+        // Provenance: which source served the bytes (null = AM, the default).
+        message: use_duracloud ? 'COPIED_FROM_DURACLOUD' : null,
     });
 
     await model.update_queue(
@@ -461,6 +483,7 @@ async function _record_failure({
     pid,
     error_text,
     wire_status,
+    use_duracloud = false,
 }) {
     // 1000 chars matches the column width and caps a giant HTML error page.
     const truncated = String(error_text || 'unknown error').slice(0, 1000);
@@ -571,7 +594,21 @@ async function _record_failure({
      * retry-eligible INGEST_COPY_FAILED status, never orphan, so the entry
      * short-circuit lets the next attempt through.
      */
-    const failure_message = is_not_found ? 'AM_NOT_FOUND_RETRY' : 'COPY_FAILED';
+    /*
+     * Preserve the DuraCloud-source flag while attempts remain so the
+     * WHOLE retry budget stays on the source staff chose; only a
+     * terminal failure records the descriptive message. (Without this,
+     * the first DC failure overwrote the flag and the next auto-retry
+     * silently fell back to the broken AM path.)
+     */
+    const retrying = next_attempts < max_attempts;
+    const failure_message = use_duracloud
+        ? retrying
+            ? 'RETRY_FROM_DURACLOUD'
+            : 'DURACLOUD_COPY_FAILED'
+        : is_not_found
+          ? 'AM_NOT_FOUND_RETRY'
+          : 'COPY_FAILED';
     const failure_step = is_not_found ? 'am_not_found_retry' : 'failed';
 
     try {

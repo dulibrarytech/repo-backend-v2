@@ -215,6 +215,27 @@
                             Retry copy
                         </button>
                     </li>
+                    <li>
+                        <%/* Failover: pull the AIP from DuraCloud's replica
+                             instead of Archivematica. For large AIPs whose
+                             AM download hangs or 502s — the DuraCloud copy
+                             is chunk-reassembled and checksum-verified. */%>
+                        <button type="button" class="dropdown-item"
+                                hx-post="<%= dashboard_base %>/aips/<%= item.id %>/retry-duracloud"
+                                hx-target="#aip-row-<%= item.id %>"
+                                hx-swap="outerHTML"
+                                data-confirm="Retry the AIP preservation copy using DuraCloud as the source instead of Archivematica? Use this when Archivematica cannot serve the download (large files). The copy is checksum-verified against DuraCloud's manifest."
+                                data-confirm-title="Retry from DuraCloud?"
+                                data-confirm-label="Retry from DuraCloud">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M17.5 19H7a5 5 0 1 1 .9-9.92A6 6 0 0 1 19.5 12a4 4 0 0 1-2 7"/>
+                                <polyline points="12 17 12 12"/>
+                                <polyline points="9.5 14.5 12 12 14.5 14.5"/>
+                            </svg>
+                            Retry from DuraCloud
+                        </button>
+                    </li>
                 <% } %>
                 <% if (item.display_status === 'orphan') { %>
                     <li>

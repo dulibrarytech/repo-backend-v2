@@ -65,6 +65,9 @@ function mock_res() {
             out.headers[k] = v;
             return this;
         },
+        get(k) {
+            return out.headers[k];
+        },
         render(view, locals) {
             out.rendered = { view, locals };
         },
@@ -174,6 +177,39 @@ describe('ingester/dashboard — Stage 6 row actions + gate counts', () => {
             const after = await db_queue()(QUEUE).where({ id: row.id }).first();
             expect(after.pipeline_state).toBe('AIP_STORE_PENDING');
             expect(after.is_complete).toBe(0);
+        });
+    });
+
+    describe('aip_retry_duracloud (AIPs dashboard)', () => {
+        it('stamps RETRY_FROM_DURACLOUD and re-enqueues the queue row', async () => {
+            const aip_controller = require('../../../dashboard/aip_controller');
+            const store_row = await db_helper.seed_aip_store({
+                is_migrated: 7,
+                aip_uuid: 'aip-uuid-dc',
+                error: 'am download returned HTTP 502',
+                message: 'COPY_FAILED',
+                attempts: 5,
+            });
+            const queue_row = await seed_queue('AIP_STORE_FAILED', {
+                sip_uuid: 'aip-uuid-dc',
+            });
+            const res = mock_res();
+            await aip_controller.aip_retry_duracloud(
+                mock_req(store_row.id), res
+            );
+
+            const aip_store_model = require('../../../repository/aip_store_model');
+            const fresh = await aip_store_model.get(store_row.id);
+            expect(fresh.message).toBe('RETRY_FROM_DURACLOUD');
+            expect(fresh.attempts).toBe(0);
+            expect(fresh.next_attempt_at).toBeNull();
+
+            const queue_after = await db_queue()(QUEUE)
+                .where({ id: queue_row.id })
+                .first();
+            expect(queue_after.pipeline_state).toBe('AIP_STORE_PENDING');
+            expect(queue_after.is_complete).toBe(0);
+            expect(res.out.rendered.view).toBe('dashboard/partials/aip_row');
         });
     });
 

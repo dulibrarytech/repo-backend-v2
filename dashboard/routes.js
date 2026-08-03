@@ -376,6 +376,18 @@ module.exports = function mount(app) {
         write_limiter(),
         aip_controller.aip_retry
     );
+    /*
+     * Failover retry: same reset + re-enqueue, but Stage 6 copies from
+     * DuraCloud's aip-store replica instead of AM Storage. For AIPs
+     * whose AM download path is broken (large-media hangs/502s).
+     */
+    app.post(
+        `${base}/aips/:id/retry-duracloud`,
+        require_dashboard_auth,
+        can_ingest,
+        write_limiter(),
+        aip_controller.aip_retry_duracloud
+    );
 
     /*
      * AIP backfill — admin-initiated catch-up for AIPs that ingested

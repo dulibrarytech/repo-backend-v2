@@ -212,6 +212,97 @@ describe('ingester/stages/aip_store — Stage 6', () => {
         expect(Number(after2.last_poll_at)).toBeGreaterThan(0);
     });
 
+    it('copies from DuraCloud when the store row carries RETRY_FROM_DURACLOUD', async () => {
+        /*
+         * "Retry from DuraCloud" stamps the flag; Stage 6 must then
+         * call copy_from_duracloud (not copy_to_wasabi) and record the
+         * source on success.
+         */
+        const { queue_id, pid } = await seed_pipeline_at_stage_6();
+        await aip_store_model.upsert_by_uuid(pid, {
+            aip_uuid: 'aip-uuid-abc',
+            source: aip_store_model.SOURCE.INGEST_V2,
+            is_migrated: aip_store_model.STATUS.INITIAL,
+            message: 'RETRY_FROM_DURACLOUD',
+        });
+        const row = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        const calls = { am: 0, dc: 0 };
+        const client = make_fake_client({
+            copy_to_wasabi: async () => {
+                calls.am += 1;
+                return { status: 200, data: { ok: true } };
+            },
+        });
+        client.copy_from_duracloud = async () => {
+            calls.dc += 1;
+            return {
+                status: 200,
+                data: {
+                    ok: true,
+                    bucket: 'library-repository',
+                    key: 'aip-store/pkg-abc.7z',
+                    bytes: 4096,
+                    elapsed_ms: 90,
+                    source: 'duracloud',
+                },
+            };
+        };
+
+        const result = await aip_store_stage.run(row, { client });
+        expect(result.ok).toBe(true);
+        expect(calls).toEqual({ am: 0, dc: 1 });
+        const stored = await aip_store_model.get_by_uuid(pid);
+        expect(stored.is_migrated).toBe(aip_store_model.STATUS.INGEST_COPIED_OK);
+        expect(stored.message).toBe('COPIED_FROM_DURACLOUD');
+        const after = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        expect(after.pipeline_state).toBe('AIP_STORE_COMPLETE');
+    });
+
+    it('a failed DuraCloud attempt keeps the flag so the retry budget stays on DuraCloud', async () => {
+        const { queue_id, pid } = await seed_pipeline_at_stage_6();
+        await aip_store_model.upsert_by_uuid(pid, {
+            aip_uuid: 'aip-uuid-abc',
+            source: aip_store_model.SOURCE.INGEST_V2,
+            is_migrated: aip_store_model.STATUS.INITIAL,
+            message: 'RETRY_FROM_DURACLOUD',
+        });
+        const row = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        const client = make_fake_client();
+        client.copy_from_duracloud = async () => ({
+            status: 200,
+            data: { ok: false, error: 'duracloud download failed: blip' },
+        });
+
+        const result = await aip_store_stage.run(row, { client });
+        expect(result.ok).toBe(false);
+        const stored = await aip_store_model.get_by_uuid(pid);
+        /* Attempts remain → flag preserved for the next attempt. */
+        expect(stored.message).toBe('RETRY_FROM_DURACLOUD');
+        expect(stored.attempts).toBe(1);
+        const after = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        expect(after.pipeline_state).toBe('AIP_STORE_PENDING');
+    });
+
+    it('falls back to the AM path when the client lacks copy_from_duracloud', async () => {
+        /*
+         * Older client double / partial deploy: flag present but no
+         * method — must degrade to copy_to_wasabi, not crash. 
+         */
+        const { queue_id, pid } = await seed_pipeline_at_stage_6();
+        await aip_store_model.upsert_by_uuid(pid, {
+            aip_uuid: 'aip-uuid-abc',
+            source: aip_store_model.SOURCE.INGEST_V2,
+            is_migrated: aip_store_model.STATUS.INITIAL,
+            message: 'RETRY_FROM_DURACLOUD',
+        });
+        const row = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        const client = make_fake_client();
+        const result = await aip_store_stage.run(row, { client });
+        expect(result.ok).toBe(true);
+        const after = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        expect(after.pipeline_state).toBe('AIP_STORE_COMPLETE');
+    });
+
     it('abort mid-copy returns aborted WITHOUT recording a failure (staff Stop / shutdown)', async () => {
         /*
          * The row's AbortSignal now rides into the copy HTTP call. On

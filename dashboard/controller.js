@@ -595,7 +595,17 @@ async function objects_row_action(req, res, action) {
     else throw new ValidationError(`Unknown action: ${action}`);
     // HTTP headers must be ASCII — no Unicode ellipsis in toast messages.
     trigger_toast(res, 'success', `Object ${updated.pid.slice(0, 8)}... ${action}ed.`);
-    render_partial(req, res, 'dashboard/partials/object_row', { item: updated });
+    /*
+     * The model returns a raw DB row — title, identifier, thumbnail and
+     * media_category all live inside the display_record JSON blob and only
+     * exist once projection.enrich has run. object_row.ejs reads those keys
+     * directly, so skipping the enrich here swaps in a row that renders
+     * "(untitled)" with a generic placeholder icon until the operator
+     * reloads the page and the list path re-enriches it.
+     */
+    render_partial(req, res, 'dashboard/partials/object_row', {
+        item: projection.enrich(updated),
+    });
 }
 
 async function objects_publish(req, res) {

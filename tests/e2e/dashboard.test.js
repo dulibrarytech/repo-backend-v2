@@ -1130,6 +1130,49 @@ describe('dashboard — e2e', () => {
             expect(decoded.toast.message).toMatch(/publish/i);
         });
 
+        /*
+         * Regression: the publish/suppress swap used to render the raw
+         * model row, whose title/identifier/thumbnail live inside the
+         * display_record JSON. The swapped-in row read "(untitled)" with
+         * a placeholder icon until the operator reloaded the page. Both
+         * actions must enrich before rendering.
+         */
+        it.each([
+            ['publish', 0],
+            ['suppress', 1],
+        ])('%s swaps in an ENRICHED row, not "(untitled)"', async (action, seeded_published) => {
+            const cookie = await cookie_for(`o-enrich-${action}`);
+            const o = await db_helper.seed_object({
+                is_published: seeded_published,
+                mime_type: 'video/mp4',
+                thumbnail: null,
+                display_record: JSON.stringify({
+                    title: 'Nancy McElroy Oral History, 2024',
+                    display_record: {
+                        title: 'Nancy McElroy Oral History, 2024',
+                        identifiers: [{ type: 'local', identifier: 'D009.23.0007.0044.00001' }],
+                    },
+                }),
+            });
+            const res = await supertest(app)
+                .post(`/repo/dashboard/objects/${o.pid}/${action}`)
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            // The swapped row is the one we asked for.
+            expect(res.text).toMatch(new RegExp(`id="object-${o.pid}"`));
+            // Title comes from display_record — only present after enrich.
+            expect(res.text).toContain('Nancy McElroy Oral History, 2024');
+            expect(res.text).not.toContain('(untitled)');
+            // Same for the ASpace identifier line.
+            expect(res.text).toContain('D009.23.0007.0044.00001');
+            /*
+             * media_category is derived from mime_type by the projection;
+             * without it the placeholder falls back to the generic 'file'
+             * icon instead of the video one.
+             */
+            expect(res.text).toMatch(/class="thumb-placeholder" data-media="video"/);
+        });
+
         it('delete action returns empty body + toast trigger', async () => {
             const cookie = await cookie_for('o-del');
             // Must be unpublished — published objects are 409-blocked.
