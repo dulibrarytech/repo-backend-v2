@@ -7,6 +7,9 @@
  *     same query the legacy post_tiff_convert.py ran: rows in a
  *     collection (or one sip_uuid / pid) that have a non-empty
  *     file_name.
+ *   - Expands each object to per-FILE work entries: compounds queue one
+ *     conversion per TIFF part from the parts manifest (the legacy
+ *     process_tiffs.js behavior), simple objects queue one.
  *   - Writes the work + batch rollup into the `repo_queue` DB
  *     (tbl_convert_queue / tbl_convert_batches).
  * 
@@ -25,8 +28,16 @@ const OBJECTS = tables.objects;
 const QUEUE = tables.convert_queue;
 const BATCHES = tables.convert_batches;
 
-// Columns we need from tbl_objects to build a payload + store the row.
-const OBJECT_FIELDS = ['pid', 'sip_uuid', 'file_name', 'mime_type', 'is_member_of_collection'];
+// Columns we need from tbl_objects to build payloads + store the rows.
+const OBJECT_FIELDS = [
+    'pid',
+    'sip_uuid',
+    'file_name',
+    'mime_type',
+    'is_member_of_collection',
+    'compound_parts',
+    'display_record',
+];
 
 const STATUS = Object.freeze({
     PENDING: 'PENDING',
@@ -36,9 +47,9 @@ const STATUS = Object.freeze({
 });
 
 /*
- * Build the convert-API payload for one object row. Mirrors
- * post_tiff_convert.py build_object(): full_path is the stored
- * file_name, object_name is its basename.
+ * Build the convert-API payload for one queue row (or expanded work
+ * entry). Mirrors post_tiff_convert.py build_object(): full_path is the
+ * stored file path, object_name is its basename.
  */
 function build_payload(row) {
     const full_path = row.file_name || '';
@@ -48,6 +59,77 @@ function build_payload(row) {
         object_name: basename(full_path),
         mime_type: row.mime_type || '',
     };
+}
+
+/*
+ * Mime eligibility: TIFFs convert; a missing/blank mime passes through
+ * for the service to judge (sparse legacy metadata); anything else —
+ * A/V parts, PDFs, already-JPG derivatives — is skipped rather than
+ * wasting a 20s paced POST the service will reject.
+ */
+const TIFF_RE = /^image\/tiff?$/i;
+function eligible_mime(m) {
+    if (m === null || m === undefined || String(m).trim() === '') return true;
+    return TIFF_RE.test(String(m).trim());
+}
+
+/*
+ * The row's parts manifest: compound_parts column first (v1's source
+ * for per-part conversion), display_record's merged manifest as fallback.
+ */
+function parts_of(row) {
+    for (const raw of [row.compound_parts, row.display_record]) {
+        if (!raw) continue;
+        try {
+            const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+            const inner =
+                parsed && parsed.display_record && Array.isArray(parsed.display_record.parts)
+                    ? parsed.display_record.parts
+                    : null;
+            if (inner && inner.length > 0) return inner;
+        } catch {
+            /* Unparsable JSON — try the next source. */
+        }
+    }
+    return [];
+}
+
+/*
+ * Expand one tbl_objects row into per-FILE work entries. A compound
+ * object yields one entry per part (the legacy process_tiffs.js
+ * behavior the single-row port dropped — converting only the master
+ * left every other page of a compound without a derivative); a simple
+ * object yields one. Rows without a usable parts manifest (sparse
+ * legacy data) fall back to the master file_name, preserving the old
+ * behavior for them. Duplicate paths within a row are collapsed.
+ */
+function expand_row(row) {
+    const seen = new Set();
+    const entries = [];
+    const push = (file_name, mime_type) => {
+        if (!file_name || seen.has(file_name)) return;
+        seen.add(file_name);
+        entries.push({
+            pid: row.pid || null,
+            sip_uuid: row.sip_uuid || null,
+            collection: row.is_member_of_collection || null,
+            file_name,
+            mime_type: mime_type || null,
+        });
+    };
+
+    const parts = parts_of(row).filter((p) => p && p.object);
+    if (parts.length === 0) {
+        if (row.file_name && eligible_mime(row.mime_type)) push(row.file_name, row.mime_type);
+        return entries;
+    }
+    for (const p of parts) {
+        // Merged-manifest parts carry MIME in `type` (v1 contract).
+        const mime = p.type || p.mime_type || null;
+        if (eligible_mime(mime)) push(p.object, mime);
+    }
+    return entries;
 }
 
 /*
@@ -88,17 +170,20 @@ function guard_single(rows, { sip_uuid, pid }) {
 }
 
 /*
- * Dry-run: resolve + build payloads without enqueuing. Returns the
- * exact count plus a capped sample for display.
+ * Dry-run: resolve + expand to per-file entries + build payloads
+ * without enqueuing. Returns the exact FILE count plus a capped sample
+ * for display.
  */
 async function preview({ collection, sip_uuid, pid, limit } = {}) {
     const rows = await resolve_rows({ collection, sip_uuid, pid, limit });
     guard_single(rows, { sip_uuid, pid });
+    const entries = rows.flatMap(expand_row);
     const sample_size = app_config().convert_service.preview_sample;
     return {
-        count: rows.length,
-        sample: rows.slice(0, sample_size).map(build_payload),
-        truncated: rows.length > sample_size,
+        count: entries.length,
+        objects: rows.length,
+        sample: entries.slice(0, sample_size).map(build_payload),
+        truncated: entries.length > sample_size,
     };
 }
 
@@ -111,12 +196,22 @@ async function enqueue({ collection, sip_uuid, pid, limit, actor, actor_name } =
     const rows = await resolve_rows({ collection, sip_uuid, pid, limit });
     guard_single(rows, { sip_uuid, pid });
 
-    if (rows.length === 0) {
-        throw new ValidationError('No matching objects with a file to convert.');
-    }
-    if (rows.length > cfg.max_batch) {
+    /*
+     * One queue row per FILE: compounds expand to every convertible
+     * part (non-TIFF parts are filtered out; see eligible_mime). The
+     * per-batch cap counts files — that's what paces the service.
+     */
+    const entries = rows.flatMap(expand_row);
+
+    if (entries.length === 0) {
         throw new ValidationError(
-            `Scope resolves to ${rows.length} objects, over the ${cfg.max_batch} per-batch cap ` +
+            'No convertible TIFF files in the selected scope ' +
+                '(non-TIFF parts are skipped automatically).'
+        );
+    }
+    if (entries.length > cfg.max_batch) {
+        throw new ValidationError(
+            `Scope resolves to ${entries.length} files, over the ${cfg.max_batch} per-batch cap ` +
                 `(CONVERT_MAX_BATCH). Narrow the scope or raise the cap.`
         );
     }
@@ -132,19 +227,19 @@ async function enqueue({ collection, sip_uuid, pid, limit, actor, actor_name } =
             scope_type,
             collection: collection || null,
             sip_uuid: sip_uuid || null,
-            total: rows.length,
+            total: entries.length,
             actor: actor || '',
             actor_name: actor_name || '',
         });
 
-        const queue_rows = rows.map((r) => ({
+        const queue_rows = entries.map((e) => ({
             batch_id,
-            pid: r.pid || null,
-            sip_uuid: r.sip_uuid || null,
-            collection: r.is_member_of_collection || null,
-            file_name: r.file_name || null,
-            object_name: basename(r.file_name || ''),
-            mime_type: r.mime_type || null,
+            pid: e.pid,
+            sip_uuid: e.sip_uuid,
+            collection: e.collection,
+            file_name: e.file_name,
+            object_name: basename(e.file_name || ''),
+            mime_type: e.mime_type,
             status: STATUS.PENDING,
         }));
 
@@ -349,6 +444,8 @@ async function status_summary() {
 module.exports = {
     STATUS,
     build_payload,
+    eligible_mime,
+    expand_row,
     resolve_rows,
     preview,
     enqueue,

@@ -158,8 +158,8 @@ async function convert_start(req, res) {
     trigger_toast(
         res,
         'success',
-        `Queued ${result.count} object${result.count === 1 ? '' : 's'} for conversion. ` +
-            `The worker posts one every ${secs}s.`
+        `Queued ${result.count} file${result.count === 1 ? '' : 's'} for conversion ` +
+            `(compound objects expand to one per part). The worker posts one every ${secs}s.`
     );
     return status_partial(req, res);
 }
@@ -173,16 +173,22 @@ async function convert_object(req, res) {
     if (!validator.isUUID(pid)) {
         throw new ValidationError('pid must be a UUID');
     }
-    await model.enqueue({
+    const result = await model.enqueue({
         pid,
         actor: actor_of(req),
         actor_name: actor_name_of(req),
     });
     /*
      * ASCII-only header value — no Unicode ellipsis (same gotcha the
-     * indexer publish toast hit).
+     * indexer publish toast hit). Count is FILES — a compound queues
+     * one conversion per TIFF part.
      */
-    trigger_toast(res, 'success', `Queued JPG conversion for ${pid.slice(0, 8)}... (1 object).`);
+    trigger_toast(
+        res,
+        'success',
+        `Queued JPG conversion for ${pid.slice(0, 8)}... ` +
+            `(${result.count} file${result.count === 1 ? '' : 's'}).`
+    );
     res.set('Content-Type', 'text/html').send('');
 }
 

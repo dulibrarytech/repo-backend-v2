@@ -57,6 +57,162 @@ describe('convert/model build_payload', () => {
     });
 });
 
+describe('convert/model eligible_mime', () => {
+    it('accepts TIFF variants and unknown mimes, rejects everything else', () => {
+        expect(model.eligible_mime('image/tiff')).toBe(true);
+        expect(model.eligible_mime('image/tif')).toBe(true);
+        expect(model.eligible_mime('IMAGE/TIFF')).toBe(true);
+        expect(model.eligible_mime(null)).toBe(true);
+        expect(model.eligible_mime('')).toBe(true);
+        expect(model.eligible_mime('video/quicktime')).toBe(false);
+        expect(model.eligible_mime('application/pdf')).toBe(false);
+        expect(model.eligible_mime('image/jpeg')).toBe(false);
+    });
+});
+
+describe('convert/model expand_row', () => {
+    /* A compound row shaped like prod post-repair: merged manifest in
+       both compound_parts and display_record. */
+    function compound_row(overrides = {}) {
+        const parts = [
+            {
+                order: '1',
+                title: 'B463.0001.tif',
+                type: 'image/tiff',
+                caption: null,
+                object: 'dip/objects/u1-B463.0001.tif',
+                thumbnail: 'dip/thumbnails/u1.jpg',
+            },
+            {
+                order: '2',
+                title: 'B463.0002.tif',
+                type: 'image/tiff',
+                caption: null,
+                object: 'dip/objects/u2-B463.0002.tif',
+                thumbnail: 'dip/thumbnails/u2.jpg',
+            },
+        ];
+        return {
+            pid: 'pid-1',
+            sip_uuid: 'pid-1',
+            is_member_of_collection: 'col-1',
+            file_name: 'dip/objects/u1-B463.0001.tif',
+            mime_type: 'image/tiff',
+            compound_parts: JSON.stringify(parts),
+            display_record: JSON.stringify({
+                pid: 'pid-1',
+                display_record: { parts },
+            }),
+            ...overrides,
+        };
+    }
+
+    it('expands a compound to one entry per part (the master alone is not enough)', () => {
+        const entries = model.expand_row(compound_row());
+        expect(entries).toHaveLength(2);
+        expect(entries[0]).toEqual({
+            pid: 'pid-1',
+            sip_uuid: 'pid-1',
+            collection: 'col-1',
+            file_name: 'dip/objects/u1-B463.0001.tif',
+            mime_type: 'image/tiff',
+        });
+        expect(entries[1].file_name).toBe('dip/objects/u2-B463.0002.tif');
+    });
+
+    it('falls back to display_record parts when compound_parts is empty', () => {
+        const entries = model.expand_row(compound_row({ compound_parts: '[]' }));
+        expect(entries).toHaveLength(2);
+    });
+
+    it('skips non-TIFF parts (A/V, PDFs) instead of wasting paced POSTs', () => {
+        const parts = [
+            { order: '1', title: 'a.tif', type: 'image/tiff', object: 'dip/objects/u1-a.tif' },
+            { order: '2', title: 'b.mov', type: 'video/quicktime', object: 'dip/objects/u2-b.mov' },
+        ];
+        const entries = model.expand_row(
+            compound_row({
+                compound_parts: JSON.stringify(parts),
+                display_record: null,
+            })
+        );
+        expect(entries).toHaveLength(1);
+        expect(entries[0].file_name).toBe('dip/objects/u1-a.tif');
+    });
+
+    it('keeps parts with an unknown mime (sparse legacy metadata)', () => {
+        const parts = [{ order: '1', title: 'a.tif', object: 'dip/objects/u1-a.tif' }];
+        const entries = model.expand_row(
+            compound_row({ compound_parts: JSON.stringify(parts), display_record: null })
+        );
+        expect(entries).toHaveLength(1);
+        expect(entries[0].mime_type).toBeNull();
+    });
+
+    it('collapses duplicate paths within a row', () => {
+        const parts = [
+            { order: '1', title: 'a.tif', type: 'image/tiff', object: 'dip/objects/u1-a.tif' },
+            { order: '2', title: 'a.tif', type: 'image/tiff', object: 'dip/objects/u1-a.tif' },
+        ];
+        const entries = model.expand_row(
+            compound_row({ compound_parts: JSON.stringify(parts), display_record: null })
+        );
+        expect(entries).toHaveLength(1);
+    });
+
+    it('falls back to file_name when no parts manifest exists (legacy rows)', () => {
+        const entries = model.expand_row({
+            pid: 'p',
+            sip_uuid: 'p',
+            is_member_of_collection: 'c',
+            file_name: 'dip/objects/u-x.tif',
+            mime_type: 'image/tiff',
+            compound_parts: null,
+            display_record: null,
+        });
+        expect(entries).toHaveLength(1);
+        expect(entries[0].file_name).toBe('dip/objects/u-x.tif');
+    });
+
+    it('legacy parts without object paths fall back to file_name too', () => {
+        /* v1 simple objects: parts carry order/title/type but no paths. */
+        const entries = model.expand_row({
+            pid: 'p',
+            sip_uuid: 'p',
+            is_member_of_collection: 'c',
+            file_name: 'dip/objects/u-x.tif',
+            mime_type: 'image/tiff',
+            compound_parts: '[]',
+            display_record: JSON.stringify({
+                pid: 'p',
+                display_record: {
+                    parts: [{ order: '1', title: 'x.tif', type: 'image/tiff', caption: null }],
+                },
+            }),
+        });
+        expect(entries).toHaveLength(1);
+        expect(entries[0].file_name).toBe('dip/objects/u-x.tif');
+    });
+
+    it('returns nothing for a non-TIFF simple object (e.g. a video master)', () => {
+        const entries = model.expand_row({
+            pid: 'p',
+            file_name: 'dip/objects/u-x.mov',
+            mime_type: 'video/quicktime',
+            compound_parts: null,
+            display_record: null,
+        });
+        expect(entries).toEqual([]);
+    });
+
+    it('survives unparsable JSON in either source column', () => {
+        const entries = model.expand_row(
+            compound_row({ compound_parts: '{nope', display_record: '{nope' })
+        );
+        expect(entries).toHaveLength(1); // file_name fallback
+    });
+});
+
 describe('convert/model STATUS enum', () => {
     it('exposes the four queue states', () => {
         expect(model.STATUS).toEqual({

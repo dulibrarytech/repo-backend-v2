@@ -9,11 +9,13 @@
      sent without enqueuing anything. */%>
 <h1 class="page-title">TIFF → JPG Conversion</h1>
 <p class="page-subtitle">
-    Generate JPG derivatives for archival TIFFs by submitting objects to
-    the convert service. Work runs in the background, <strong>one object
-    at a time, paced ~20 seconds apart</strong> — the service doesn't
-    tolerate heavy load — so a full collection can take a while. Use
-    <strong>Preview</strong> first to see exactly what will be sent.
+    Generate JPG derivatives for archival TIFFs by submitting files to
+    the convert service. Compound objects queue <strong>one conversion per
+    TIFF part</strong> (non-TIFF parts are skipped). Work runs in the
+    background, <strong>one file at a time, paced ~20 seconds
+    apart</strong> — the service doesn't tolerate heavy load — so a full
+    collection can take a while. Use <strong>Preview</strong> first to
+    see exactly what will be sent.
 </p>
 
 <div class="content-card mb-3">
@@ -50,7 +52,7 @@
                     <input id="convert-limit" name="limit" type="number" min="1"
                            class="form-control form-control-sm"
                            placeholder="all">
-                    <div class="form-text">Cap the object count — handy for a test run.</div>
+                    <div class="form-text">Cap the object count (before per-part expansion) — handy for a test run.</div>
                 </div>
             </div>
 
@@ -67,7 +69,7 @@
                         hx-post="<%= dashboard_base %>/admin/convert/start"
                         hx-target="#convert-status"
                         hx-swap="innerHTML"
-                        data-confirm="Queue these objects for conversion? They'll be posted to the convert service one at a time in the background."
+                        data-confirm="Queue these files for conversion? Compound objects queue one conversion per TIFF part; files are posted to the convert service one at a time in the background."
                         data-confirm-title="Start conversion?"
                         data-confirm-label="Start">
                     Start conversion
