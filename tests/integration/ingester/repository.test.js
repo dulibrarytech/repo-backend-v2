@@ -171,6 +171,79 @@ describe('ingester/stages/repository', () => {
         expect(obj.is_published).toBe(0);
     });
 
+    /*
+     * --- Step 4b: ingest-time TIFF→JPG auto-enqueue --------------------
+     *
+     * v1 converted derivatives as an ingest step; the v2 port dropped
+     * that, leaving fresh images derivative-less until staff queued
+     * them by hand. The stage now enqueues the object's TIFF parts
+     * into tbl_convert_queue right after the tbl_objects insert.
+     */
+    it('auto-enqueues TIFF conversion for the ingested object', async () => {
+        const row = await seed_row();
+        const out = await stage.run(row, {
+            duracloud: make_duracloud({ mets_xml: happy_mets() }),
+            handles: make_handles(),
+            model,
+        });
+        expect(out.ok).toBe(true);
+
+        const queued = await db_queue()(tables.convert_queue).where({ sip_uuid: row.sip_uuid });
+        expect(queued).toHaveLength(1);
+        expect(queued[0].status).toBe('PENDING');
+        expect(queued[0].file_name).toBe('aabb/folder-A/objects/aaa-111-thing.tif');
+        expect(queued[0].mime_type).toBe('image/tiff');
+
+        const batch = await db_queue()(tables.convert_batches)
+            .where({ id: queued[0].batch_id })
+            .first();
+        expect(batch.actor_name).toBe('Ingest (auto)');
+        expect(batch.total).toBe(1);
+    });
+
+    it('skips convert auto-enqueue for non-TIFF objects without failing the ingest', async () => {
+        /*
+         * A video object: the convert model's TIFF filter leaves no
+         * eligible files, its ValidationError is a benign skip, and
+         * the ingest still completes.
+         */
+        const row = await seed_row({
+            metadata: JSON.stringify({
+                title: 'A Video',
+                notes: [],
+                parts: [{ type: 'video/quicktime', title: 'thing.mov' }],
+            }),
+        });
+        const mov_mets = happy_mets()
+            .replace('image/tiff', 'video/quicktime')
+            .replace('objects/thing.tif', 'objects/thing.mov');
+        const out = await stage.run(row, {
+            duracloud: make_duracloud({ mets_xml: mov_mets }),
+            handles: make_handles(),
+            model,
+        });
+        expect(out.ok).toBe(true);
+        const queued = await db_queue()(tables.convert_queue).where({ sip_uuid: row.sip_uuid });
+        expect(queued).toHaveLength(0);
+    });
+
+    it('a convert-queue failure never unwinds the completed ingest', async () => {
+        const row = await seed_row();
+        const out = await stage.run(row, {
+            duracloud: make_duracloud({ mets_xml: happy_mets() }),
+            handles: make_handles(),
+            model,
+            convert_model: {
+                enqueue: async () => {
+                    throw new Error('convert DB is down');
+                },
+            },
+        });
+        expect(out.ok).toBe(true);
+        const fresh = await db_queue()(tables.ingest_queue).where({ id: row.id }).first();
+        expect(fresh.pipeline_state).toBe('COMPLETE');
+    });
+
     it('writes a CREATING_REPOSITORY_RECORD audit event before the build', async () => {
         const row = await seed_row();
         const out = await stage.run(row, {

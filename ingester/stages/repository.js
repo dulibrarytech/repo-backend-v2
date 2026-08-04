@@ -45,6 +45,8 @@ const repository_model = require('../../repository/model');
 const model_default = require('../model');
 const jobs_default = require('../jobs');
 const kaltura_model_default = require('../../kaltura/model');
+const convert_model_default = require('../../convert/model');
+const { ValidationError } = require('../../libs/errors');
 const app_config = require('../../config/app');
 const { sleep_or_abort } = require('../lib/polling');
 const log = require('../../libs/log');
@@ -58,6 +60,7 @@ async function run(row, deps = {}) {
     const model = deps.model || model_default;
     const jobs = deps.jobs || jobs_default;
     const kaltura_model = deps.kaltura_model || kaltura_model_default;
+    const convert_model = deps.convert_model || convert_model_default;
     const signal = deps.signal;
 
     if (!row.sip_uuid || row.sip_uuid === 'PENDING') {
@@ -261,6 +264,54 @@ async function run(row, deps = {}) {
             pid: object_row.pid,
         });
         return { ok: false, reason: 'tbl_objects_insert_failed' };
+    }
+
+    /*
+     * --- Step 4b: auto-queue TIFF→JPG derivatives --------------------
+     *
+     * v1 ran conversion as an ingest step (ingest_service.js
+     * create_repo_record → INGEST_TASKS.convert, one POST per
+     * compound_parts entry); the v2 port initially left it to the
+     * dashboard's manual action, so freshly ingested images had no
+     * derivatives until staff remembered to queue them. Restore the
+     * automatic behavior: enqueue the object's TIFF parts (the convert
+     * model expands compounds to one file per part) and let the paced
+     * convert worker drain them in the background.
+     *
+     * Best-effort — a convert-queue hiccup must not unwind a completed
+     * ingest. A scope with no TIFF parts (A/V objects) is the model's
+     * ValidationError, logged as a benign skip.
+     */
+    try {
+        const convert_result = await convert_model.enqueue({
+            sip_uuid: object_row.sip_uuid,
+            actor: 'system',
+            actor_name: 'Ingest (auto)',
+        });
+        log.info({
+            event: 'ingest_convert_autoqueued',
+            queue_id: row.id,
+            pid: object_row.pid,
+            files: convert_result.count,
+            batch_id: convert_result.batch_id,
+        });
+    } catch (err) {
+        if (err instanceof ValidationError) {
+            // No convertible TIFF files in the object — nothing to do.
+            log.info({
+                event: 'ingest_convert_skipped',
+                queue_id: row.id,
+                pid: object_row.pid,
+                reason: err.message,
+            });
+        } else {
+            log.warn({
+                event: 'ingest_convert_autoqueue_failed',
+                queue_id: row.id,
+                pid: object_row.pid,
+                err: err.message,
+            });
+        }
     }
 
     /*

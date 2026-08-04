@@ -51,6 +51,12 @@ async function reset_data() {
     // Kaltura queue tables. No FK; truncate independently.
     await db_queue()(tables.kaltura_ids).del();
     await db_queue()(tables.kaltura_package_queue).del();
+    /*
+     * Convert queue + batches: ingest Stage 4b auto-enqueues TIFF
+     * conversions, so stage tests leave rows behind without this.
+     */
+    await db_queue()(tables.convert_queue).del();
+    await db_queue()(tables.convert_batches).del();
 }
 
 async function teardown() {
