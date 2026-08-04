@@ -129,6 +129,23 @@ function strip_ext(name) {
 }
 
 /*
+ * The DuraCloud DIP stores access copies as `objects/<fileUUID>-<original
+ * name>` (the same fileUUID names the `thumbnails/<uuid>.jpg` derivative),
+ * but the METS FLocat href carries only the original name — so paths built
+ * from it 404 against the dip-store. When the DIP entry's uuid is known,
+ * normalize the object path to the real on-store name; already-prefixed
+ * paths pass through untouched.
+ */
+function dip_object_path(p) {
+    if (!p || !p.object || !p.uuid) return (p && p.object) || null;
+    const cut = p.object.lastIndexOf('/');
+    const dir = cut >= 0 ? p.object.slice(0, cut + 1) : '';
+    const base = p.object.slice(cut + 1);
+    if (base.startsWith(`${p.uuid}-`)) return p.object;
+    return `${dir}${p.uuid}-${base}`;
+}
+
+/*
  * Merge the ASpace parts with the METS/DIP file list into the one
  * canonical manifest. Matching is by file name (ASpace part `title` ↔ DIP
  * `file`, then title-minus-extension ↔ DIP `file_id`).
@@ -182,7 +199,8 @@ function merge_parts(inner_parts, dip_parts) {
         const kaltura_id = p.kaltura_id || p.entry_id || (match && match.kaltura_id) || null;
         if (kaltura_id) entry.kaltura_id = kaltura_id;
         if (match) {
-            if (match.object) entry.object = match.object;
+            const object_path = dip_object_path(match);
+            if (object_path) entry.object = object_path;
             if (match.thumbnail) entry.thumbnail = match.thumbnail;
         }
         out.push(entry);
@@ -197,7 +215,8 @@ function merge_parts(inner_parts, dip_parts) {
             caption: null,
         };
         if (p.kaltura_id || p.entry_id) entry.kaltura_id = p.kaltura_id || p.entry_id;
-        if (p.object) entry.object = p.object;
+        const object_path = dip_object_path(p);
+        if (object_path) entry.object = object_path;
         if (p.thumbnail) entry.thumbnail = p.thumbnail;
         out.push(entry);
     }
@@ -280,7 +299,14 @@ function build_envelope({
         master,
         mime_type,
         thumbnail,
-        file_name: (master && master.title) || null,
+        /*
+         * v1 convention: tbl_objects.file_name is the master's FULL
+         * dip-store path (21,753/21,779 legacy rows), not the bare file
+         * name — the convert (TIFF→JPG) service posts it verbatim as
+         * full_path, and the index projection's master_object fallback
+         * expects a resolvable path.
+         */
+        file_name: object,
         object,
         compound_parts: is_compound ? JSON.stringify(merged) : '[]',
     };
@@ -294,6 +320,7 @@ module.exports = {
     derive_entry_id,
     type_from_mime,
     is_dip_parts,
+    dip_object_path,
     merge_parts,
     pick_master_part,
     build_envelope,

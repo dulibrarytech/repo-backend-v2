@@ -64,10 +64,16 @@ function enrich_parts(files, { dip_path }) {
             mime_type: f.mime_type || null,
             type: f.type || 'object',
             /*
-             * Master file path inside the DIP. The dashboard's
-             * thumbnail proxy resolves these via libs/duracloud.
+             * Master file path inside the DIP. AM names the stored
+             * access copy `<fileUUID>-<original name>` — the METS
+             * FLocat href carries only the original name, so the
+             * bare `objects/<file>` path 404s against the dip-store
+             * (that broke every published v2 image until 2026-08-04;
+             * see repo/REPOV2_DISPLAY_RECORD_FINDINGS.md). The
+             * dashboard's thumbnail proxy resolves these via
+             * libs/duracloud.
              */
-            object: `${dip_path}/objects/${f.file}`,
+            object: `${dip_path}/objects/${f.uuid}-${f.file}`,
             /*
              * Thumbnail derivative AM auto-generated. Note .jpg —
              * AM normalizes all preview thumbnails to JPEG regardless

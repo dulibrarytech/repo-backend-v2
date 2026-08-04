@@ -127,7 +127,8 @@ describe('metadata/worker — build_payload', () => {
         const dr = JSON.parse(payload.display_record);
         expect(dr.pid).toBe('p');
         expect(dr.display_record.parts[0].kaltura_id).toBe('1_abc');
-        expect(dr.display_record.parts[0].object).toBe('dip/objects/thing.tif');
+        // Thin envelopes carry the DIP uuid, so the path is normalized too.
+        expect(dr.display_record.parts[0].object).toBe('dip/objects/u1-thing.tif');
         expect(dr.entry_id).toBe('1_abc');
     });
 

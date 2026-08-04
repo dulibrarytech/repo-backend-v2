@@ -50,7 +50,8 @@ describe('libs/display_envelope — merge_parts', () => {
             type: 'video/quicktime',
             caption: null,
             kaltura_id: '1_abc',
-            object: 'dip/objects/D009.mov',
+            // uuid-prefixed to AM's real on-store DIP name
+            object: 'dip/objects/u-mov-D009.mov',
             thumbnail: 'dip/thumbnails/u-mov.jpg',
         });
     });
@@ -76,7 +77,7 @@ describe('libs/display_envelope — merge_parts', () => {
             [{ order: '1', title: 'Thing.TIF', caption: null }],
             [{ uuid: 'u', file: 'thing.tif', mime_type: 'image/tiff', type: 'object', object: 'o' }]
         );
-        expect(merged[0].object).toBe('o');
+        expect(merged[0].object).toBe('u-o');
     });
 
     it('keeps unmatched ASpace parts (no paths) and appends unmatched DIP files', () => {
@@ -87,7 +88,7 @@ describe('libs/display_envelope — merge_parts', () => {
         expect(merged).toHaveLength(2);
         expect(merged[0].title).toBe('gone.tif');
         expect(merged[0].object).toBeUndefined();
-        expect(merged[1]).toMatchObject({ order: '2', title: 'extra.tif', object: 'o' });
+        expect(merged[1]).toMatchObject({ order: '2', title: 'extra.tif', object: 'u-o' });
     });
 
     it('synthesizes parts from the DIP list when ASpace has none', () => {
@@ -96,7 +97,7 @@ describe('libs/display_envelope — merge_parts', () => {
         expect(merged[0]).toMatchObject({
             order: '1',
             title: 'D009.mov',
-            object: 'dip/objects/D009.mov',
+            object: 'dip/objects/u-mov-D009.mov',
         });
     });
 
@@ -157,7 +158,7 @@ describe('libs/display_envelope — build_envelope', () => {
             f_subjects: ['Administration', 'McElroy, Nancy'],
             abstract: 'Interview with Nancy McElroy.',
             type: 'moving image',
-            object: 'dip/objects/D009.mov',
+            object: 'dip/objects/u-mov-D009.mov',
             entry_id: '1_abc',
         });
         expect(envelope.display_record.parts).toHaveLength(1);
@@ -172,8 +173,12 @@ describe('libs/display_envelope — build_envelope', () => {
         const built = build();
         expect(built.mime_type).toBe('video/quicktime');
         expect(built.thumbnail).toBe('dip/thumbnails/u-mov.jpg');
-        expect(built.file_name).toBe('D009.mov');
-        expect(built.object).toBe('dip/objects/D009.mov');
+        /*
+         * file_name is the master's FULL dip-store path (v1 convention —
+         * the convert service posts it verbatim as full_path).
+         */
+        expect(built.file_name).toBe('dip/objects/u-mov-D009.mov');
+        expect(built.object).toBe('dip/objects/u-mov-D009.mov');
         expect(built.compound_parts).toBe('[]');
     });
 

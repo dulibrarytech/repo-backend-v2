@@ -31,7 +31,8 @@ describe('ingester/lib/repository_build — enrich_parts', () => {
             file: 'thing.tif',
             mime_type: 'image/tiff',
             type: 'object',
-            object: 'aabb/folder/objects/thing.tif',
+            // AM stores the DIP access copy as <fileUUID>-<original name>
+            object: 'aabb/folder/objects/aaa-thing.tif',
             thumbnail: 'aabb/folder/thumbnails/aaa.jpg',
         });
     });
@@ -153,7 +154,8 @@ describe('ingester/lib/repository_build — build_object_row', () => {
         expect(row.is_complete).toBe(1);
         expect(row.is_updated).toBe(1);
         expect(row.thumbnail).toBe('d/thumbnails/aaa.jpg');
-        expect(row.file_name).toBe('thing.tif');
+        // file_name = the master's FULL dip-store path (v1 convention).
+        expect(row.file_name).toBe('d/objects/aaa-thing.tif');
         expect(row.mime_type).toBe('image/tiff');
         expect(row.compound_parts).toBe('[]');
         // mods + display_record are JSON strings.
@@ -173,7 +175,7 @@ describe('ingester/lib/repository_build — build_object_row', () => {
         expect(envelope.is_compound).toBe(0);
         expect(envelope.mime_type).toBe('image/tiff');
         expect(envelope.thumbnail).toBe('d/thumbnails/aaa.jpg');
-        expect(envelope.object).toBe('d/objects/thing.tif');
+        expect(envelope.object).toBe('d/objects/aaa-thing.tif');
         expect(envelope.title).toBe('A Title');
         expect(envelope.abstract).toBe('an abstract');
         // One merged parts copy inside the inner record; no top-level parts.
@@ -182,7 +184,7 @@ describe('ingester/lib/repository_build — build_object_row', () => {
         expect(envelope.display_record.parts[0]).toMatchObject({
             title: 'thing.tif',
             type: 'image/tiff',
-            object: 'd/objects/thing.tif',
+            object: 'd/objects/aaa-thing.tif',
             thumbnail: 'd/thumbnails/aaa.jpg',
         });
     });
@@ -233,7 +235,7 @@ describe('ingester/lib/repository_build — build_object_row', () => {
             type: 'image/tiff',
             caption: 'A caption',
             kaltura_id: '1_abc',
-            object: 'd/objects/thing.tif',
+            object: 'd/objects/aaa-thing.tif',
             thumbnail: 'd/thumbnails/aaa.jpg',
         });
     });

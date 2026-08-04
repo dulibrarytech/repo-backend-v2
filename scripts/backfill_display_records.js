@@ -35,6 +35,8 @@
  *
  * Rehearsal against a prod snapshot: point the env at the imported copy,
  * e.g. `DB_NAME=repov2_prod_0804 node scripts/backfill_display_records.js`.
+ * No new dependencies — runs on the deployed checkout's existing
+ * node_modules.
  */
 
 const path = require('node:path');

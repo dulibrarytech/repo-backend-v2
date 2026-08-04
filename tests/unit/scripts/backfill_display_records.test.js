@@ -89,14 +89,17 @@ describe('scripts/backfill_display_records — plan_row', () => {
         expect(envelope.title).toBe('Nancy McElroy Oral History, 2024');
         expect(envelope.entry_id).toBe('1_abc');
         expect(envelope.mime_type).toBe('video/quicktime');
-        expect(envelope.object).toBe('dip/objects/D009.mov');
+        // uuid-prefixed to AM's real on-store DIP name
+        expect(envelope.object).toBe('dip/objects/u-mov-D009.mov');
         expect(envelope.parts).toBeUndefined();
         expect(envelope.display_record.parts).toHaveLength(1);
         expect(envelope.display_record.parts[0]).toMatchObject({
             kaltura_id: '1_abc',
             type: 'video/quicktime',
-            object: 'dip/objects/D009.mov',
+            object: 'dip/objects/u-mov-D009.mov',
         });
+        // file_name column repaired to the master's full path.
+        expect(plan.updates.file_name).toBe('dip/objects/u-mov-D009.mov');
         expect(plan.updates.is_updated).toBe(1);
     });
 

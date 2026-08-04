@@ -164,7 +164,8 @@ describe('ingester/stages/repository', () => {
         expect(obj.object_type).toBe('object');
         expect(obj.handle).toBe(`https://hdl.example/${row.sip_uuid}`);
         expect(obj.thumbnail).toBe('aabb/folder-A/thumbnails/aaa-111.jpg');
-        expect(obj.file_name).toBe('thing.tif');
+        // file_name = the master's FULL uuid-prefixed dip-store path (v1 convention).
+        expect(obj.file_name).toBe('aabb/folder-A/objects/aaa-111-thing.tif');
         expect(obj.is_updated).toBe(1);
         expect(obj.is_indexed).toBe(0);
         expect(obj.is_published).toBe(0);
