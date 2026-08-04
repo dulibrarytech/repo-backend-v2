@@ -31,6 +31,25 @@ const { UpstreamError } = require('./errors');
  * queries directly. See project_for_index() for the matching document shape.
  */
 const INDEX_MAPPINGS = require('./es_mappings.json');
+/*
+ * v1-compatible derivation helpers, shared with the ingest-time envelope
+ * build, the metadata-refresh rewrite, and the backfill script (see
+ * libs/display_envelope.js) so the projected document and the stored
+ * envelope cannot drift apart. Every denormalized top-level field is
+ * derived from the INNER ArchivesSpace record, so the output is correct
+ * whether the stored display_record column is a rich legacy envelope or
+ * the sparse one v2's ingester wrote before the consolidation.
+ */
+const {
+    first_string,
+    extract_abstract,
+    derive_creator,
+    derive_f_subjects,
+    derive_entry_id,
+    type_from_mime,
+    is_dip_parts,
+    merge_parts,
+} = require('./display_envelope');
 
 function is_configured() {
     const cfg = app_config().elasticsearch;
@@ -107,65 +126,29 @@ function default_client_factory() {
     }
 }
 
-/*
- * The first useful string from a value that may be a string, an array of
- * strings, or null. Duplicates libs/object_projection's helper to keep this
- * module free of dashboard-domain imports.
- */
-function first_string(v) {
-    if (typeof v === 'string') return v;
-    if (Array.isArray(v) && typeof v[0] === 'string') return v[0];
-    return null;
-}
-
-/*
- * ---- v1-compatible projection helpers --------------------------------
- *
- * Mirror digitaldu-backend/libs/display-record.js create_display_record. Every
- * denormalized top-level field is derived from the INNER ArchivesSpace record,
- * so the output is correct whether the stored display_record column is a rich
- * legacy envelope or the sparse one v2's ingester writes.
- */
-
-// abstract: the `abstract`-type note's content, falling back to a plain field.
-function extract_abstract(inner, dr) {
-    if (inner && Array.isArray(inner.notes)) {
-        const note = inner.notes.find((n) => n && n.type === 'abstract');
-        if (note && note.content !== null && note.content !== undefined) {
-            return first_string(note.content);
-        }
-    }
-    return first_string((inner && inner.abstract) || (dr && dr.abstract));
-}
-
-// creator: the title of the first name whose role is 'creator'.
-function derive_creator(inner, dr) {
-    if (inner && Array.isArray(inner.names)) {
-        const c = inner.names.find((n) => n && n.role === 'creator');
-        if (c && c.title) return c.title;
-    }
-    return (dr && dr.creator) || null;
-}
-
-// f_subjects: flat list of subject titles (the facet/search surface).
-function derive_f_subjects(inner, dr) {
-    if (inner && Array.isArray(inner.subjects)) {
-        const arr = inner.subjects.map((s) => s && s.title).filter((s) => typeof s === 'string');
-        if (arr.length > 0) return arr;
-    }
-    return Array.isArray(dr && dr.f_subjects)
-        ? dr.f_subjects.filter((s) => typeof s === 'string')
-        : [];
-}
 
 /*
  * The single canonical parts manifest, stored once at display_record.parts.
- * Prefers an ENRICHED copy — one carrying object/thumbnail DuraCloud paths —
- * because the inner ASpace record's own parts are un-enriched for simple
- * objects. Checks the envelope's `parts`/`compound` before the inner `parts`.
+ *
+ * Thin pre-consolidation envelopes store TWO partial copies: the ASpace
+ * parts inside the inner record (order/title/MIME/caption/kaltura_id) and
+ * the METS/DIP file list at the envelope's top level (DuraCloud object/
+ * thumbnail paths, plus txt sidecars and positionally mis-assigned mimes).
+ * Picking either alone loses data — most damagingly the kaltura_id, which
+ * killed A/V playback on the 2026-07/08 ingests. When the top-level copy
+ * is DIP-shaped, MERGE the two instead.
+ *
+ * Fat envelopes (v1 legacy + post-consolidation v2) already store the one
+ * merged copy at inner.parts, and v1 compounds may carry an enriched
+ * `compound` array — for those, prefer an ENRICHED copy (one carrying
+ * object/thumbnail paths) as before.
  */
 function pick_parts(inner, dr) {
-    const candidates = [dr && dr.parts, dr && dr.compound, inner && inner.parts];
+    const inner_parts = inner && Array.isArray(inner.parts) ? inner.parts : null;
+    if (is_dip_parts(dr && dr.parts)) {
+        return merge_parts(inner_parts, dr.parts);
+    }
+    const candidates = [dr && dr.parts, dr && dr.compound, inner_parts];
     for (const c of candidates) {
         if (Array.isArray(c) && c.length > 0 && c.some((p) => p && (p.object || p.thumbnail)))
             return c;
@@ -190,35 +173,6 @@ function master_object(inner, dr, parts, row) {
         if (m && m.object) return m.object;
     }
     if (row && typeof row.file_name === 'string' && row.file_name) return row.file_name;
-    return null;
-}
-
-/*
- * Kaltura entry id for A/V objects — a top-level convenience field; the
- * per-part ids stay inside display_record.parts. Single-file legacy A/V objects
- * carry it on the envelope or inner record rather than in a parts entry.
- */
-function derive_entry_id(parts, dr, inner) {
-    if (Array.isArray(parts)) {
-        const p = parts.find((x) => x && (x.entry_id || x.kaltura_id));
-        if (p) return p.entry_id || p.kaltura_id;
-    }
-    if (dr && (dr.entry_id || dr.kaltura_id)) return dr.entry_id || dr.kaltura_id;
-    if (inner && (inner.entry_id || inner.kaltura_id)) return inner.entry_id || inner.kaltura_id;
-    return null;
-}
-
-/*
- * Coarse resource type from the mime type — a last-resort fallback so an object
- * whose metadata never carried resource_type still lands in a Format facet
- * bucket. Values match the frontend's facet normalization.
- */
-function type_from_mime(mime) {
-    if (typeof mime !== 'string' || !mime) return null;
-    if (mime.startsWith('image/')) return 'still image';
-    if (mime === 'application/pdf') return 'text';
-    if (mime.startsWith('video/')) return 'moving image';
-    if (mime.startsWith('audio/')) return 'sound recording';
     return null;
 }
 

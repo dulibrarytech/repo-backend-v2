@@ -7,9 +7,9 @@ const { ValidationError } = require('../../../libs/errors');
  * Minimal METS doc — one amdSec (RDF-flavor PREMIS) + one fileSec
  * with two files. Covers the happy path used by the worker.
  */
-function rdf_amdsec(mime) {
+function rdf_amdsec(mime, id) {
     return `
-    <mets:amdSec>
+    <mets:amdSec${id ? ` ID="${id}"` : ''}>
       <mets:techMD>
         <mets:mdWrap>
           <mets:xmlData>
@@ -57,9 +57,9 @@ function fits_amdsec_pdf() {
     </mets:amdSec>`;
 }
 
-function file_entry(id, href) {
+function file_entry(id, href, admid) {
     return `
-      <mets:file ID="${id}">
+      <mets:file ID="${id}"${admid ? ` ADMID="${admid}"` : ''}>
         <mets:FLocat xlink:href="${href}" />
       </mets:file>`;
 }
@@ -166,6 +166,72 @@ describe('ingester/libs/mets — parse_mets', () => {
         await expect(
             parse_mets('<not closed', { sip_uuid: 'x', dip_path: 'y' })
         ).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    it('associates mimes by ADMID, not position (uri.txt-first regression)', async () => {
+        /*
+         * The 2026-07/08 prod ingests shipped swapped mimes because the
+         * fileSec listed uri.txt BEFORE the media file while the amdSecs
+         * were in the opposite order — positional zip gave uri.txt the
+         * video mime and the .mov null. ADMID is authoritative.
+         */
+        const xml = wrap(`
+            ${rdf_amdsec('video/quicktime', 'amdSec-1')}
+            ${rdf_amdsec('text/plain', 'amdSec-2')}
+            <mets:fileSec>
+              <mets:fileGrp>
+                ${file_entry('file-txt-1', 'objects/uri.txt', 'amdSec-2')}
+                ${file_entry('file-mov-1', 'objects/interview.mov', 'amdSec-1')}
+              </mets:fileGrp>
+            </mets:fileSec>
+        `);
+        const out = await parse_mets(xml, { sip_uuid: 'sip-1', dip_path: 'x/y' });
+        expect(out[0].file).toBe('uri.txt');
+        expect(out[0].mime_type).toBe('text/plain');
+        expect(out[1].file).toBe('interview.mov');
+        expect(out[1].mime_type).toBe('video/quicktime');
+    });
+
+    it('takes the first token of a multi-valued ADMID', async () => {
+        const xml = wrap(`
+            ${rdf_amdsec('image/tiff', 'amdSec-9')}
+            <mets:fileSec>
+              <mets:fileGrp>
+                ${file_entry('file-a', 'objects/a.tif', 'amdSec-9 amdSec-extra')}
+              </mets:fileGrp>
+            </mets:fileSec>
+        `);
+        const out = await parse_mets(xml, { sip_uuid: 'sip-1', dip_path: 'x/y' });
+        expect(out[0].mime_type).toBe('image/tiff');
+    });
+
+    it('falls back to positional association when files carry no ADMID', async () => {
+        const xml = wrap(`
+            ${rdf_amdsec('image/tiff', 'amdSec-1')}
+            ${rdf_amdsec('image/png', 'amdSec-2')}
+            <mets:fileSec>
+              <mets:fileGrp>
+                ${file_entry('file-a', 'objects/a.tif')}
+                ${file_entry('file-b', 'objects/b.png')}
+              </mets:fileGrp>
+            </mets:fileSec>
+        `);
+        const out = await parse_mets(xml, { sip_uuid: 'sip-1', dip_path: 'x/y' });
+        expect(out[0].mime_type).toBe('image/tiff');
+        expect(out[1].mime_type).toBe('image/png');
+    });
+
+    it('falls back positionally when ADMID references an unknown amdSec', async () => {
+        const xml = wrap(`
+            ${rdf_amdsec('image/tiff', 'amdSec-1')}
+            <mets:fileSec>
+              <mets:fileGrp>
+                ${file_entry('file-a', 'objects/a.tif', 'amdSec-nope')}
+              </mets:fileGrp>
+            </mets:fileSec>
+        `);
+        const out = await parse_mets(xml, { sip_uuid: 'sip-1', dip_path: 'x/y' });
+        expect(out[0].mime_type).toBe('image/tiff');
     });
 
     it('falls back to the last mime type when fewer amdSecs than files', async () => {

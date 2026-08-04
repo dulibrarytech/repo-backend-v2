@@ -12,7 +12,7 @@
  *      file list, build the per-part records the dashboard renders
  *      (object path + thumbnail path inside DuraCloud).
  * 
- *   2. `build_object_row({ queue_row, metadata, parts, master, handle })`
+ *   2. `build_object_row({ queue_row, metadata, parts, handle })`
  *      — assemble the tbl_objects-shaped record ready for
  *      repository/model._insert. Encapsulates the field selection,
  *      JSON serialization, and the "is this compound?" decision.
@@ -24,6 +24,7 @@
  */
 
 const { ValidationError } = require('../../libs/errors');
+const display_envelope = require('../../libs/display_envelope');
 
 /*
  * Given the METS-parsed file list (from ingester/libs/mets.parse_mets)
@@ -162,8 +163,10 @@ function pick_master(parts) {
 /*
  * Build the tbl_objects row. `queue_row` is the ingest_queue row,
  * `metadata` is the AS snapshot (already validated), `parts` is the
- * output of enrich_parts, `master` is the output of pick_master,
- * `handle` is the URL minted by libs/handles (may be null in dev).
+ * output of enrich_parts (post attach_kaltura_ids), `handle` is the
+ * URL minted by libs/handles (may be null in dev). The master part is
+ * chosen inside libs/display_envelope from the merged manifest — same
+ * selection semantics as pick_master.
  * 
  * `collection_pid` (optional) is the local collection mirror's PID
  * resolved by Stage 5 before this call. It populates
@@ -176,7 +179,7 @@ function pick_master(parts) {
  * 
  * Returns an object ready for repository/model._insert.
  */
-function build_object_row({ queue_row, metadata, parts, master, handle, collection_pid }) {
+function build_object_row({ queue_row, metadata, parts, handle, collection_pid }) {
     if (!queue_row || !queue_row.sip_uuid || queue_row.sip_uuid === 'PENDING') {
         throw new ValidationError('queue_row.sip_uuid is required');
     }
@@ -187,29 +190,27 @@ function build_object_row({ queue_row, metadata, parts, master, handle, collecti
     const is_compound = compute_is_compound(metadata, parts);
 
     /*
-     * display_record envelope: v1's shape is `{ title, abstract,
-     * handle, parts, ...}` with the AS metadata nested under
-     * display_record itself for the indexer to read. We follow the
-     * same shape so the legacy + v2 projections both line up.
+     * display_record envelope: the full v1 contract — denormalized
+     * top-level fields + the raw AS record under display_record with
+     * the ONE merged parts manifest (ASpace order/title/MIME/caption/
+     * kaltura_id + METS DuraCloud object/thumbnail paths). Built by
+     * libs/display_envelope so ingest, metadata refresh, the indexer
+     * projection, and the backfill script all emit the same shape.
+     *
+     * The derived column values come back from the same call so the
+     * columns and the JSON cannot diverge. mime prefers the ASpace
+     * parts' MDO-stamped value over the METS-derived one (the METS
+     * association has shipped wrong — see mets.js).
      */
-    const envelope = {
-        title: metadata.title || '',
-        abstract: extract_note(metadata, 'abstract'),
-        handle: handle || '',
-        /*
-         * Inline the full AS record so the existing display_record
-         * consumers (indexer, dashboard) can read it without a
-         * second DB call. Kept as a nested object — NOT a string —
-         * matching how metadata/worker.js writes it.
-         */
-        display_record: metadata,
-        /*
-         * Parts array — the dashboard renders these as the compound
-         * children. Always present even for non-compound (single
-         * element) so the consumer never has to branch on shape.
-         */
-        parts,
-    };
+    const built = display_envelope.build_envelope({
+        pid: queue_row.sip_uuid,
+        is_member_of_collection: collection_pid || queue_row.collection_uuid || '',
+        handle,
+        is_published: 0, // staff publishes via the dashboard
+        is_compound,
+        metadata,
+        dip_parts: parts,
+    });
 
     return {
         pid: queue_row.sip_uuid,
@@ -225,14 +226,15 @@ function build_object_row({ queue_row, metadata, parts, master, handle, collecti
         mods: JSON.stringify(metadata),
         /*
          * mime_type / file_name / thumbnail come from the master
-         * part. For pure-txt or empty METS we'd land here with
+         * merged part. For pure-txt or empty METS we'd land here with
          * master=null — that's fine, tbl_objects.thumbnail is
          * nullable and the dashboard renders a placeholder.
          */
-        mime_type: master ? master.mime_type : null,
-        file_name: master ? master.file : null,
-        thumbnail: master ? master.thumbnail : null,
-        display_record: JSON.stringify(envelope),
+        mime_type: built.mime_type,
+        file_name: built.file_name,
+        thumbnail: built.thumbnail,
+        display_record: JSON.stringify(built.envelope),
+        compound_parts: built.compound_parts,
         sip_uuid: queue_row.sip_uuid,
         is_compound: is_compound ? 1 : 0,
         is_published: 0, // staff publishes via the dashboard

@@ -20,6 +20,7 @@ const app_config = require('../config/app');
 const log = require('../libs/log');
 const aspace_default = require('../libs/archivesspace');
 const repo_model = require('../repository/model');
+const display_envelope = require('../libs/display_envelope');
 const model = require('./model');
 const batches = require('./batches');
 
@@ -27,39 +28,108 @@ const batches = require('./batches');
  * Build the tbl_objects write from an ASpace metadata response:
  * `mods`, the denormalized `display_record` envelope, and the derived
  * `compound_parts` / `is_compound` fields.
+ *
+ * `existing_row` is the current tbl_objects row (repository/model.get
+ * shape). The envelope is REBUILT from scratch via libs/display_envelope
+ * so a refresh re-derives every denormalized top-level field (title,
+ * creator, f_subjects, type, …) instead of fossilizing the old ones —
+ * and so it heals thin pre-consolidation envelopes. The ASpace fetch
+ * carries no DuraCloud paths (those are local DIP data), so object/
+ * thumbnail per part are recovered from the previous envelope's parts.
  */
-function build_payload(existing_display_record, metadata) {
-    let envelope = {};
-    if (existing_display_record) {
+function build_payload(existing_row, metadata) {
+    const row = existing_row && typeof existing_row === 'object' ? existing_row : {};
+    let old_envelope = {};
+    if (row.display_record) {
         try {
-            const parsed = JSON.parse(existing_display_record);
-            if (parsed && typeof parsed === 'object') envelope = parsed;
+            const parsed =
+                typeof row.display_record === 'string'
+                    ? JSON.parse(row.display_record)
+                    : row.display_record;
+            if (parsed && typeof parsed === 'object') old_envelope = parsed;
         } catch {
-            /* Corrupt prior display_record — start a fresh envelope. */
+            /* Corrupt prior display_record — rebuild without path data. */
         }
     }
-    const is_compound = metadata && metadata.is_compound === true;
+
     /*
-     * The ASpace fetch carries no parts manifest (that is local DIP
-     * data), so for compound objects read the old parts list before
-     * overwriting display_record and splice it back in.
+     * DuraCloud object/thumbnail source, in either prior shape:
+     *   - thin envelope: the METS/DIP list at the top level, usable as-is
+     *   - fat envelope: the merged manifest at display_record.parts,
+     *     mapped back to the DIP shape merge_parts consumes
      */
-    let existing_parts = [];
-    if (is_compound && envelope.display_record && Array.isArray(envelope.display_record.parts)) {
-        existing_parts = envelope.display_record.parts;
+    let dip_parts = [];
+    if (display_envelope.is_dip_parts(old_envelope.parts)) {
+        dip_parts = old_envelope.parts;
+    } else {
+        const prior =
+            old_envelope.display_record && Array.isArray(old_envelope.display_record.parts)
+                ? old_envelope.display_record.parts
+                : [];
+        dip_parts = prior
+            .filter((p) => p && (p.object || p.thumbnail))
+            .map((p) => ({
+                file: p.title,
+                mime_type: p.type,
+                type: 'object',
+                object: p.object,
+                thumbnail: p.thumbnail,
+                kaltura_id: p.kaltura_id,
+            }));
     }
 
-    envelope.display_record = metadata;
-    let compound_parts = '[]';
-    if (is_compound) {
-        envelope.display_record.parts = existing_parts;
-        compound_parts = JSON.stringify(existing_parts);
+    /*
+     * A fresh fetch that carries no parts (older exporter output) must
+     * not lose the prior manifest: fall back to the previous inner parts
+     * for order/title/MIME/kaltura_id — merge_parts reunites them with
+     * the DuraCloud paths recovered above.
+     */
+    let metadata_for_envelope = metadata;
+    if (
+        (!Array.isArray(metadata && metadata.parts) || metadata.parts.length === 0) &&
+        old_envelope.display_record &&
+        Array.isArray(old_envelope.display_record.parts) &&
+        old_envelope.display_record.parts.length > 0
+    ) {
+        metadata_for_envelope = { ...metadata, parts: old_envelope.display_record.parts };
+    }
+
+    /*
+     * ASpace's explicit is_compound wins; when silent, keep the row's
+     * current value (the parts list alone can't distinguish a compound
+     * whose siblings failed to export).
+     */
+    const is_compound =
+        metadata && metadata.is_compound === true
+            ? 1
+            : metadata && metadata.is_compound === false
+              ? 0
+              : row.is_compound
+                ? 1
+                : 0;
+
+    const built = display_envelope.build_envelope({
+        pid: row.pid,
+        is_member_of_collection: row.is_member_of_collection,
+        handle: row.handle,
+        is_published: row.is_published,
+        is_compound,
+        metadata: metadata_for_envelope,
+        dip_parts,
+    });
+    /*
+     * A custom-uploaded thumbnail lives in the column as an absolute URL
+     * (set_thumbnail); it must survive a metadata refresh rather than be
+     * replaced by the derived DIP path.
+     */
+    if (typeof row.thumbnail === 'string' && /^https?:\/\//i.test(row.thumbnail)) {
+        built.envelope.thumbnail = row.thumbnail;
     }
     return {
         mods: JSON.stringify(metadata),
-        display_record: JSON.stringify(envelope),
-        compound_parts,
-        is_compound: is_compound ? 1 : 0,
+        display_record: JSON.stringify(built.envelope),
+        compound_parts: built.compound_parts,
+        is_compound,
     };
 }
 
@@ -154,7 +224,7 @@ async function process_row(row, aspace, token_holder, get_db_record) {
         if (result.outcome === 'dead_lettered') await roll_up(row, 'dead_lettered');
         return;
     }
-    const payload = build_payload(existing && existing.display_record, res.data);
+    const payload = build_payload(existing, res.data);
 
     try {
         await repo_model.update_metadata_payload(row.uuid, payload);

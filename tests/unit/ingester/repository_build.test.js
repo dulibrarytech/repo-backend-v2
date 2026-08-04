@@ -139,7 +139,6 @@ describe('ingester/lib/repository_build — build_object_row', () => {
             queue_row: base_queue_row,
             metadata: base_metadata,
             parts: base_parts,
-            master: base_parts[0],
             handle: 'https://hdl.example/sip-1',
         });
         expect(row.pid).toBe('sip-1');
@@ -156,12 +155,87 @@ describe('ingester/lib/repository_build — build_object_row', () => {
         expect(row.thumbnail).toBe('d/thumbnails/aaa.jpg');
         expect(row.file_name).toBe('thing.tif');
         expect(row.mime_type).toBe('image/tiff');
+        expect(row.compound_parts).toBe('[]');
         // mods + display_record are JSON strings.
         expect(JSON.parse(row.mods).title).toBe('A Title');
+        /*
+         * The envelope is the full v1 contract (libs/display_envelope):
+         * denormalized top level + raw AS record with ONE merged parts
+         * manifest, not the thin 5-key shape that shipped on the
+         * 2026-07/08 ingests.
+         */
         const envelope = JSON.parse(row.display_record);
+        expect(envelope.pid).toBe('sip-1');
+        expect(envelope.is_member_of_collection).toBe('codu:parent');
+        expect(envelope.handle).toBe('https://hdl.example/sip-1');
+        expect(envelope.object_type).toBe('object');
+        expect(envelope.is_published).toBe(0);
+        expect(envelope.is_compound).toBe(0);
+        expect(envelope.mime_type).toBe('image/tiff');
+        expect(envelope.thumbnail).toBe('d/thumbnails/aaa.jpg');
+        expect(envelope.object).toBe('d/objects/thing.tif');
         expect(envelope.title).toBe('A Title');
         expect(envelope.abstract).toBe('an abstract');
-        expect(envelope.parts).toEqual(base_parts);
+        // One merged parts copy inside the inner record; no top-level parts.
+        expect(envelope.parts).toBeUndefined();
+        expect(envelope.display_record.parts).toHaveLength(1);
+        expect(envelope.display_record.parts[0]).toMatchObject({
+            title: 'thing.tif',
+            type: 'image/tiff',
+            object: 'd/objects/thing.tif',
+            thumbnail: 'd/thumbnails/aaa.jpg',
+        });
+    });
+
+    it('merges ASpace part metadata (MIME, kaltura_id) with METS paths', () => {
+        const metadata = {
+            ...base_metadata,
+            parts: [
+                {
+                    order: '1',
+                    title: 'thing.tif',
+                    type: 'image/tiff',
+                    caption: 'A caption',
+                    kaltura_id: '1_abc',
+                },
+            ],
+        };
+        /*
+         * METS mime is null (the positional-association bug shipped
+         * wrong/null mimes) — the ASpace copy must win, and the txt
+         * sidecar must not become a part.
+         */
+        const parts = [
+            { ...base_parts[0], mime_type: null },
+            {
+                uuid: 'ttt',
+                file: 'uri.txt',
+                file_id: 'uri',
+                mime_type: 'video/quicktime',
+                type: 'txt',
+                object: 'd/objects/uri.txt',
+                thumbnail: 'd/thumbnails/ttt.jpg',
+            },
+        ];
+        const row = builder.build_object_row({
+            queue_row: base_queue_row,
+            metadata,
+            parts,
+            handle: null,
+        });
+        expect(row.mime_type).toBe('image/tiff');
+        const envelope = JSON.parse(row.display_record);
+        expect(envelope.entry_id).toBe('1_abc');
+        expect(envelope.display_record.parts).toHaveLength(1);
+        expect(envelope.display_record.parts[0]).toMatchObject({
+            order: '1',
+            title: 'thing.tif',
+            type: 'image/tiff',
+            caption: 'A caption',
+            kaltura_id: '1_abc',
+            object: 'd/objects/thing.tif',
+            thumbnail: 'd/thumbnails/aaa.jpg',
+        });
     });
 
     it('marks compound when metadata.is_compound=true', () => {
@@ -169,7 +243,6 @@ describe('ingester/lib/repository_build — build_object_row', () => {
             queue_row: base_queue_row,
             metadata: { ...base_metadata, is_compound: true },
             parts: base_parts,
-            master: base_parts[0],
             handle: null,
         });
         expect(row.object_type).toBe('compound');
@@ -185,7 +258,6 @@ describe('ingester/lib/repository_build — build_object_row', () => {
             queue_row: base_queue_row,
             metadata: { ...base_metadata, is_compound: undefined },
             parts,
-            master: parts[0],
             handle: null,
         });
         expect(row.is_compound).toBe(1);
@@ -200,7 +272,6 @@ describe('ingester/lib/repository_build — build_object_row', () => {
             queue_row: base_queue_row,
             metadata: { ...base_metadata, is_compound: false },
             parts,
-            master: parts[0],
             handle: null,
         });
         expect(row.is_compound).toBe(0);
@@ -211,7 +282,6 @@ describe('ingester/lib/repository_build — build_object_row', () => {
             queue_row: base_queue_row,
             metadata: base_metadata,
             parts: base_parts,
-            master: base_parts[0],
             handle: null,
         });
         expect(row.handle).toBe('');
@@ -222,7 +292,6 @@ describe('ingester/lib/repository_build — build_object_row', () => {
             queue_row: base_queue_row,
             metadata: base_metadata,
             parts: [],
-            master: null,
             handle: 'h',
         });
         expect(row.file_name).toBeNull();
@@ -236,7 +305,6 @@ describe('ingester/lib/repository_build — build_object_row', () => {
                 queue_row: { sip_uuid: 'PENDING', collection_uuid: 'x' },
                 metadata: base_metadata,
                 parts: [],
-                master: null,
                 handle: null,
             })
         ).toThrow(ValidationError);
@@ -248,7 +316,6 @@ describe('ingester/lib/repository_build — build_object_row', () => {
                 queue_row: base_queue_row,
                 metadata: null,
                 parts: [],
-                master: null,
                 handle: null,
             })
         ).toThrow(ValidationError);
@@ -259,7 +326,6 @@ describe('ingester/lib/repository_build — build_object_row', () => {
             queue_row: base_queue_row,
             metadata: { ...base_metadata, notes: [] },
             parts: base_parts,
-            master: base_parts[0],
             handle: null,
         });
         const envelope = JSON.parse(row.display_record);

@@ -241,7 +241,6 @@ async function run(row, deps = {}) {
             queue_row: row,
             metadata,
             parts,
-            master,
             handle: handle_url,
             collection_pid,
         });

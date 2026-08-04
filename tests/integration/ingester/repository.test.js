@@ -552,7 +552,9 @@ describe('ingester/stages/repository', () => {
      * Stage 5 calls kaltura_model.get_entry_id_for_file(package, file)
      * for each part before building the object row. A populated
      * tbl_kaltura_ids row should produce a `kaltura_id` field on the
-     * matching part in the saved display_record envelope.
+     * matching part in the saved display_record envelope — which since
+     * the display_envelope consolidation lives at the merged manifest,
+     * display_record.display_record.parts (plus a top-level entry_id).
      */
 
     it('attaches kaltura_id to parts when tbl_kaltura_ids has a match', async () => {
@@ -577,8 +579,9 @@ describe('ingester/stages/repository', () => {
         expect(out.ok).toBe(true);
         const obj = await db()(tables.objects).where({ pid: row.sip_uuid }).first();
         const envelope = JSON.parse(obj.display_record);
-        expect(envelope.parts).toHaveLength(1);
-        expect(envelope.parts[0].kaltura_id).toBe('1_kaltura_abc');
+        expect(envelope.display_record.parts).toHaveLength(1);
+        expect(envelope.display_record.parts[0].kaltura_id).toBe('1_kaltura_abc');
+        expect(envelope.entry_id).toBe('1_kaltura_abc');
     });
 
     it('leaves kaltura_id absent when no tbl_kaltura_ids row exists', async () => {
@@ -595,8 +598,8 @@ describe('ingester/stages/repository', () => {
          * The part exists, but no kaltura_id key was added — the lookup
          * just returned null and the part passed through unchanged.
          */
-        expect(envelope.parts[0].kaltura_id).toBeUndefined();
-        expect(envelope.parts[0].file).toBe('thing.tif');
+        expect(envelope.display_record.parts[0].kaltura_id).toBeUndefined();
+        expect(envelope.display_record.parts[0].title).toBe('thing.tif');
     });
 
     it('skips status=0 (not-found) rows even when they exist in tbl_kaltura_ids', async () => {
@@ -622,7 +625,7 @@ describe('ingester/stages/repository', () => {
         expect(out.ok).toBe(true);
         const obj = await db()(tables.objects).where({ pid: row.sip_uuid }).first();
         const envelope = JSON.parse(obj.display_record);
-        expect(envelope.parts[0].kaltura_id).toBeUndefined();
+        expect(envelope.display_record.parts[0].kaltura_id).toBeUndefined();
     });
 
     /*

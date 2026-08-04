@@ -60,18 +60,24 @@ async function parse_mets(xml, { sip_uuid, dip_path }) {
     }
 
     /*
-     * Walk amdSec children sequentially. The METS produced by AM
-     * alternates `mets:amdSec` blocks (one per file, carrying the mime
-     * type) with a single trailing `mets:fileSec` block (the file
-     * manifest). The mime-type-for-this-file association is positional
-     * in v1's xmldoc walker, so we preserve that semantic by walking
-     * the amdSec list in order and zipping mime types against fileSec
-     * entries by index.
+     * Each `mets:amdSec` block carries one file's mime type; the trailing
+     * `mets:fileSec` block is the file manifest. The reliable association
+     * is the file's ADMID attribute pointing at the amdSec's ID — AM
+     * emits both. Positional zip (amdSec[i] → file[i]) is the fallback
+     * for METS without ADMIDs, but it silently mis-assigns mimes whenever
+     * fileSec order differs from amdSec order (a uri.txt sidecar listed
+     * first shifted every mime by one on the 2026-07/08 ingests — see
+     * repo/REPOV2_DISPLAY_RECORD_FINDINGS.md).
      */
     const amd_secs = parsed['mets:amdSec'] || [];
     const file_sec = parsed['mets:fileSec'] && parsed['mets:fileSec'][0];
 
     const mime_types = amd_secs.map(extract_mime_type);
+    const mime_by_admid = new Map();
+    for (let i = 0; i < amd_secs.length; i++) {
+        const id = amd_secs[i] && amd_secs[i].$ && amd_secs[i].$.ID;
+        if (id) mime_by_admid.set(id, mime_types[i]);
+    }
 
     if (!file_sec) {
         return [];
@@ -93,21 +99,28 @@ async function parse_mets(xml, { sip_uuid, dip_path }) {
         const ext = ext_parts.length > 1 ? ext_parts.pop() : '';
         const file_id = ext_parts.join('.');
         const id_attr = (file.$ && file.$.ID) || '';
+        /*
+         * ADMID may reference several amdSecs space-separated; the first
+         * is the techMD block. Absent or unresolvable ADMID falls back
+         * to the positional zip (index, then last-captured — AM emits
+         * one amdSec per file in modern versions; we tolerate older
+         * METS).
+         */
+        const admid = String((file.$ && file.$.ADMID) || '').trim().split(/\s+/)[0];
+        let mime_type;
+        if (admid && mime_by_admid.has(admid)) {
+            mime_type = mime_by_admid.get(admid);
+        } else {
+            mime_type =
+                mime_types[i] !== undefined ? mime_types[i] : mime_types[mime_types.length - 1];
+        }
         out.push({
             uuid: id_attr.replace(/^file-/, ''),
             sip_uuid,
             dip_path,
             file: cleaned,
             file_id,
-            /*
-             * The xmldoc walker associated each file with the mime type
-             * from the matching amdSec (by index). Fall back to the last
-             * captured mime type if we ran out of amdSecs (AM emits one
-             * amdSec per file in modern versions; we tolerate older
-             * METS).
-             */
-            mime_type:
-                mime_types[i] !== undefined ? mime_types[i] : mime_types[mime_types.length - 1],
+            mime_type,
             type: ext === 'txt' ? 'txt' : 'object',
         });
     }
