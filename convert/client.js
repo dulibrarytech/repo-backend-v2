@@ -33,6 +33,22 @@ function build_url() {
     return `${cfg.url}${sep}api_key=${encodeURIComponent(cfg.api_key)}`;
 }
 
+/*
+ * The service's GET /image endpoint, derived from the configured convert
+ * URL (…/convert/api/v1/convert/tiff → …/convert/api/v1/image). Returns
+ * null when the URL doesn't match the expected shape — verification then
+ * reports 'unavailable' rather than failing rows.
+ */
+function build_image_url(filename) {
+    const cfg = app_config().convert_service;
+    if (!/\/convert\/tiff\/?$/.test(cfg.url || '')) return null;
+    const base = cfg.url.replace(/\/convert\/tiff\/?$/, '/image');
+    return (
+        `${base}?filename=${encodeURIComponent(filename)}` +
+        `&api_key=${encodeURIComponent(cfg.api_key)}`
+    );
+}
+
 function create_client(http = http_default) {
     return {
         is_configured,
@@ -65,9 +81,99 @@ function create_client(http = http_default) {
                 throw new UpstreamError(`Convert API request failed: ${err.message}`);
             }
         },
+
+        /*
+         * Probe the service's GET /image endpoint for a derivative, with
+         * a 1-byte Range so a good file costs a header exchange, not a
+         * download. Classifies the derivative's state:
+         *
+         *   { outcome: 'ok', bytes }   — real file (200/206; size from
+         *                                Content-Range total when ranged)
+         *   { outcome: 'empty' }       — exists but 0 bytes (the service
+         *                                validates size and 400s
+         *                                "File is empty" — the ENOSPC
+         *                                signature)
+         *   { outcome: 'missing' }     — 404 with the controller's JSON
+         *                                shape (conversion not landed)
+         *   { outcome: 'unavailable' } — endpoint absent (older service:
+         *                                non-JSON 404 / unroutable URL) —
+         *                                caller falls back to unverified
+         *                                completion rather than failing
+         *                                rows it can't check
+         *
+         * Throws UpstreamError on transport failure (service down).
+         */
+        async verify_image(filename, { signal } = {}) {
+            const cfg = app_config().convert_service;
+            const url = build_image_url(filename);
+            if (!url) return { outcome: 'unavailable' };
+            try {
+                const res = await http.get(url, {
+                    timeout: cfg.timeout_ms,
+                    signal,
+                    headers: { Range: 'bytes=0-0', Accept: 'application/json, */*' },
+                    responseType: 'arraybuffer',
+                    validateStatus: () => true,
+                });
+                if (res.status === 200 || res.status === 206) {
+                    const range = String(res.headers['content-range'] || '');
+                    const total = range.includes('/') ? Number(range.split('/').pop()) : NaN;
+                    const bytes = Number.isFinite(total)
+                        ? total
+                        : Number(res.headers['content-length']) || null;
+                    return { outcome: 'ok', bytes };
+                }
+                /*
+                 * The controller's error responses are JSON with
+                 * error:true; an Express route miss is HTML. Only the
+                 * JSON shapes are authoritative about the file.
+                 */
+                let body = null;
+                try {
+                    body = JSON.parse(Buffer.from(res.data).toString('utf8'));
+                } catch {
+                    body = null;
+                }
+                if (res.status === 400 && body && body.error) {
+                    const msgs = []
+                        .concat(body.errors || [], body.message || [])
+                        .join(' ');
+                    /*
+                     * "File is empty" is the verdict we act on; any other
+                     * 400 is a validation quirk, not a file state.
+                     */
+                    if (/empty/i.test(msgs)) return { outcome: 'empty' };
+                    log.warn({
+                        event: 'convert_verify_rejected',
+                        object: filename,
+                        detail: msgs.slice(0, 200),
+                    });
+                    return { outcome: 'unavailable' };
+                }
+                if (res.status === 404 && body && body.error) return { outcome: 'missing' };
+                log.warn({
+                    event: 'convert_verify_unexpected_status',
+                    object: filename,
+                    status: res.status,
+                });
+                return { outcome: 'unavailable' };
+            } catch (err) {
+                log.warn({
+                    event: 'convert_verify_failed',
+                    object: filename,
+                    err: err.message,
+                });
+                throw new UpstreamError(`Convert verify request failed: ${err.message}`);
+            }
+        },
     };
 }
 
 module.exports = create_client();
 module.exports.create_client = create_client;
 module.exports.is_configured = is_configured;
+/*
+ * Shared with the images gateway (images/gateway.js) so both derive the
+ * service's GET /image endpoint from the one CONVERT_SERVICE setting.
+ */
+module.exports.build_image_url = build_image_url;

@@ -179,6 +179,12 @@ module.exports = function create_app() {
      * CORS + auth wiring is what governs /repo/dashboard/* requests.
      */
     require('../api/routes')(app);
+    /*
+     * Derivative-image gateway — the one endpoint the public frontend
+     * and Cantaloupe call for JPG derivatives (streamed from the
+     * curation service's store). Api-key gated, not JWT.
+     */
+    require('../images/routes')(app);
 
     // 404 fallthrough — must come after all routes, before error handler.
     app.use((req, _res, next) => {

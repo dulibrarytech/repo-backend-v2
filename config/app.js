@@ -336,6 +336,30 @@ function build() {
             max_batch: integer('CONVERT_MAX_BATCH', 5000),
             // How many payloads the dry-run preview lists (count is exact).
             preview_sample: integer('CONVERT_PREVIEW_SAMPLE', 25),
+            /*
+             * Post-conversion verification. The convert service ACKs 202
+             * before converting (fire-and-forget), so an OK queue row
+             * proves nothing about the derivative — libspec02's full
+             * disk produced 0-byte JPGs while every row read "OK"
+             * (2026-08-04). When enabled, the worker probes the
+             * service's GET /image endpoint on the tick AFTER each POST
+             * and only then marks the row COMPLETE; empty or missing
+             * derivatives mark FAILED (paced retry, then terminal).
+             */
+            verify_enabled: boolean('CONVERT_VERIFY_ENABLED', true),
+            // Missing-file checks per row before failing (one per tick).
+            verify_max_checks: integer('CONVERT_VERIFY_MAX_CHECKS', 3),
+        },
+
+        /*
+         * Derivative-image gateway (images/): serves JPG derivatives to
+         * the public frontend + Cantaloupe by streaming from the convert
+         * service's GET /image endpoint (derived from CONVERT_SERVICE).
+         * The key gates raw filename access — unpublished derivatives
+         * must not be enumerable without it. Unset → gateway refuses 503.
+         */
+        images: {
+            api_key: optional('IMAGES_API_KEY', ''),
         },
 
         /*
