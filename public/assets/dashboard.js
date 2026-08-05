@@ -40,14 +40,35 @@
      */
     document.body.addEventListener('htmx:responseError', function (evt) {
         const xhr = evt.detail.xhr;
-        if (xhr && xhr.status === 401) {
+        if (!xhr) return;
+        if (xhr.status === 401) {
             const redirect = xhr.getResponseHeader('HX-Redirect');
             if (redirect) {
                 window.location.assign(redirect);
             } else {
                 window.location.assign(DASHBOARD_BASE + '/login');
             }
+            return;
         }
+        /*
+         * Every other error status: surface the server's message as an
+         * error toast. htmx doesn't swap non-2xx responses, so without
+         * this the request fails in silence (a 400 "No convertible TIFF
+         * files" rendered NOTHING — 2026-08-05). The central error
+         * handler responds { error: <message>, code, request_id }; fall
+         * back to a generic line for non-JSON bodies (proxy errors).
+         */
+        let message = '';
+        try {
+            const body = JSON.parse(xhr.responseText || '');
+            message = body.error || body.message || '';
+        } catch {
+            message = '';
+        }
+        show_toast({
+            level: 'error',
+            message: message || 'Request failed (HTTP ' + xhr.status + ').',
+        });
     });
 
     /*
