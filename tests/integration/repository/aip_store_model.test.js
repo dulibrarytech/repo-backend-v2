@@ -164,14 +164,14 @@ describe('repository/aip_store_model', () => {
             expect(statuses).toEqual(['copied', 'failed', 'in_progress']);
         });
 
-        it('default sort floats attention rows (copied_at NULL) above copied rows', async () => {
+        it('default sort floats attention rows (failed/in-flight) above copied rows', async () => {
             /*
              * Failed / in-flight rows never get copied_at, and MariaDB
              * sorts NULLs last under plain `copied_at DESC` — a failed
              * Stage 6 copy sank behind ~20k legacy rows (2026-07-31)
              * and staff concluded the AIP was missing. The default
-             * sort must surface NULL-copied_at rows first, with the
-             * copied rows newest-first below them.
+             * sort must surface failed and in-flight rows first, with
+             * the copied rows newest-first below them.
              */
             const old_ok = await db_helper.seed_aip_store({
                 is_migrated: 6,
@@ -186,11 +186,48 @@ describe('repository/aip_store_model', () => {
                 error: 'copy failed',
                 copied_at: null,
             });
+            const in_flight = await db_helper.seed_aip_store({
+                is_migrated: 0,
+                copied_at: null,
+            });
             const result = await model.list({});
             expect(result.items.map((r) => r.id)).toEqual([
+                in_flight.id,
                 failed.id,
                 new_ok.id,
                 old_ok.id,
+            ]);
+        });
+
+        it('default sort sinks legacy migrated-OK and orphan rows below recent copies', async () => {
+            /*
+             * Regression: the previous default sort keyed on
+             * `copied_at IS NULL` to float attention rows — but the
+             * ~20k legacy migrated-OK rows (is_migrated=5) ALSO have
+             * NULL copied_at, so every legacy row floated above the
+             * timestamped v2 copies and "Most recent" showed the
+             * legacy backlog instead of the most recently copied
+             * AIPs. Terminal rows without a timestamp (legacy-OK,
+             * orphans) must sort BELOW timestamped copies.
+             */
+            const legacy_ok = await db_helper.seed_aip_store({
+                is_migrated: 5,
+                source: 'legacy_migration',
+                copied_at: null,
+            });
+            const orphan = await db_helper.seed_aip_store({
+                is_migrated: 8,
+                copied_at: null,
+            });
+            const recent_copy = await db_helper.seed_aip_store({
+                is_migrated: 6,
+                copied_at: new Date('2026-08-01T00:00:00Z'),
+            });
+            const result = await model.list({});
+            expect(result.items.map((r) => r.id)).toEqual([
+                recent_copy.id,
+                orphan.id,
+                legacy_ok.id,
             ]);
         });
 

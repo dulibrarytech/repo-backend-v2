@@ -323,11 +323,23 @@ async function list(filter = {}) {
     } else {
         /*
          * Default sort: rows needing attention first, then
-         * newest-copied. Failed and in-flight rows have copied_at NULL,
-         * which MariaDB would otherwise sort last; the IS NULL key
-         * floats them to the top.
+         * newest-copied. "Needing attention" is scoped by status —
+         * failures + in-flight — NOT by copied_at IS NULL: the ~20k
+         * legacy migrated-OK rows also have NULL copied_at (the
+         * one-time migration recorded no per-row timestamp), so a
+         * NULL-first key buries recent copies behind the entire
+         * legacy backlog. Legacy-OK and orphan rows sink to the
+         * bottom (copied_at DESC puts NULLs last in both MariaDB
+         * and sqlite), with id DESC as the stable tiebreaker.
          */
-        q.orderByRaw('(copied_at IS NULL) DESC, copied_at DESC, id DESC');
+        q.orderByRaw(
+            '(is_migrated NOT IN (?, ?, ?)) DESC, copied_at DESC, id DESC',
+            [
+                STATUS.LEGACY_MIGRATED_OK,
+                STATUS.INGEST_COPIED_OK,
+                STATUS.AM_NOT_FOUND,
+            ]
+        );
     }
     q.limit(page_size).offset((page - 1) * page_size);
 
