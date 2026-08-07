@@ -59,6 +59,35 @@ describe('ingester/aip_backfill', () => {
             expect(preview.map((r) => r.pid).sort()).toEqual([a.pid, b.pid].sort());
         });
 
+        it('excludes collection records — no AIP exists for them', async () => {
+            /*
+             * Collections carry their OWN pid in sip_uuid (they never
+             * went through AM, so there is no real package UUID) —
+             * without the object_type filter each one would enter the
+             * backfill, 404 against AM Storage for the full not-found
+             * attempt budget (~90 min apiece), and end up tagged as a
+             * false orphan. 109 such rows in production.
+             */
+            const obj = await db_helper.seed_object({ sip_uuid: randomUUID() });
+            const coll_pid = randomUUID();
+            await db_helper.seed_object({
+                pid: coll_pid,
+                object_type: 'collection',
+                sip_uuid: coll_pid,
+            });
+
+            expect(await aip_backfill.count_missing_aips()).toBe(1);
+            const preview = await aip_backfill.preview_next_chunk(10);
+            expect(preview.map((r) => r.pid)).toEqual([obj.pid]);
+
+            const result = await aip_backfill.enqueue_backfill_batch({});
+            expect(result.count).toBe(1);
+            const queued = await db_queue()(QUEUE)
+                .where({ batch: result.batch_marker })
+                .select('sip_uuid');
+            expect(queued.map((r) => r.sip_uuid)).toEqual([obj.sip_uuid]);
+        });
+
         it('excludes orphan (AM_NOT_FOUND) rows from eligibility so they aren\'t re-enqueued', async () => {
             /*
              * Orphans are terminal-and-non-retryable. Stage 6 marks

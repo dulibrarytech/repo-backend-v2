@@ -63,9 +63,14 @@ const BACKFILL_BATCH_PREFIX = 'aip-backfill-';
  * about which rows qualify.
  * 
  * A row is eligible IFF:
- *   1. tbl_objects.is_active = 1                  (not soft-deleted)
- *   2. tbl_objects.sip_uuid is a real value       (Stage 6 needs it)
- *   3. NOT EXISTS a tbl_aip_store row for the pid that's already in
+ *   1. tbl_objects.object_type = 'object'         (collections have NO
+ *      AIP — AM never packages them — but they carry their own pid in
+ *      sip_uuid, so without this filter each one would enter the queue
+ *      and burn the full not-found attempt budget before being tagged
+ *      a false orphan)
+ *   2. tbl_objects.is_active = 1                  (not soft-deleted)
+ *   3. tbl_objects.sip_uuid is a real value       (Stage 6 needs it)
+ *   4. NOT EXISTS a tbl_aip_store row for the pid that's already in
  *      a "we've definitively decided this row's fate" state:
  *        - legacy migrated OK (5)
  *        - v2 ingest copied OK (6)
@@ -75,7 +80,7 @@ const BACKFILL_BATCH_PREFIX = 'aip-backfill-';
  *      Other failure states (2, 3, 7) DO keep the row eligible
  *      because they're retry-recoverable (transient curation /
  *      Wasabi / AM-5xx errors).
- * 
+ *
  * This makes the backfill idempotent + skips dead-end orphans.
  */
 function _apply_eligible_filter(q) {
@@ -92,6 +97,7 @@ function _apply_eligible_filter(q) {
                 aip_store_model.STATUS.AM_NOT_FOUND,
             ]);
         })
+        .where('o.object_type', 'object')
         .where('o.is_active', 1)
         .whereNotNull('o.sip_uuid')
         .whereNot('o.sip_uuid', '')

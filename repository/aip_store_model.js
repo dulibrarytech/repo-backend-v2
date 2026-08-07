@@ -356,6 +356,36 @@ async function list(filter = {}) {
 }
 
 /*
+ * Which of the given AM AIP UUIDs are currently in retry backoff
+ * (next_attempt_at in the future)? Returns a Set of aip_uuid strings.
+ *
+ * Used by the ingest worker's Stage 6 claim so a row waiting out its
+ * backoff doesn't occupy the (serial) copy slot every tick and stall
+ * every AIP behind it — the worker skips backoff rows and claims the
+ * next runnable one instead. The stage's own backoff guard stays as
+ * the authoritative per-row gate; this is claim-time scheduling only.
+ *
+ * The date comparison happens in JS, not SQL, because sqlite (tests)
+ * and MariaDB (prod) disagree on Date binding semantics; the row set
+ * is small (only rows with a live next_attempt_at can match).
+ */
+async function list_uuids_in_backoff(aip_uuids) {
+    if (!Array.isArray(aip_uuids) || aip_uuids.length === 0) return new Set();
+    const uuids = aip_uuids.filter((u) => typeof u === 'string' && u.length > 0);
+    if (uuids.length === 0) return new Set();
+    const rows = await db()(AIP_STORE)
+        .whereIn('aip_uuid', uuids)
+        .whereNotNull('next_attempt_at')
+        .select('aip_uuid', 'next_attempt_at');
+    const now = new Date();
+    return new Set(
+        rows
+            .filter((r) => new Date(r.next_attempt_at) > now)
+            .map((r) => r.aip_uuid)
+    );
+}
+
+/*
  * Resolve a downloadable Wasabi key from a tbl_aip_store row, walking
  * the fallback chain wasabi_key → aip → basename(aip_legacy), where
  * the basename strip is `split('/').pop().replace('_transfer', '')`.
@@ -471,6 +501,7 @@ module.exports = {
     get,
     get_by_uuid,
     list,
+    list_uuids_in_backoff,
     upsert_by_uuid,
     update,
     increment_downloaded,

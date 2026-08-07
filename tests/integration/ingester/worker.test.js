@@ -631,6 +631,66 @@ describe('ingester/worker', () => {
             expect(seen[0]).not.toBe(seen[1]);
         });
 
+        it('a PENDING row in retry backoff does not head-of-line block later rows', async () => {
+            /*
+             * Regression (2026-08-07): the claim picks the newest
+             * AIP_STORE_PENDING row (list_queue orders id DESC), and a
+             * failed row returns to PENDING while its tbl_aip_store
+             * backoff runs — so under the serial gate the one Stage 6
+             * slot per tick went to a guaranteed no-op and every AIP
+             * behind it stalled for the full backoff window. The claim
+             * now filters out rows in backoff and dispatches the next
+             * runnable one.
+             */
+            const runnable_uuid = `run-${Math.random().toString(16).slice(2, 8)}`;
+            const backoff_uuid = `off-${Math.random().toString(16).slice(2, 8)}`;
+            const runnable = await seed('AIP_STORE_PENDING', { sip_uuid: runnable_uuid });
+            /*
+             * Seeded second → higher id → claimed FIRST without the
+             * filter. Its aip_store row is mid-backoff.
+             */
+            await seed('AIP_STORE_PENDING', { sip_uuid: backoff_uuid });
+            await db_helper.seed_aip_store({
+                aip_uuid: backoff_uuid,
+                is_migrated: 7,
+                copied_at: null,
+                next_attempt_at: new Date(Date.now() + 10 * 60 * 1000),
+            });
+            const seen = [];
+            const worker = create_worker({
+                stages: { AIP_STORE_PENDING: noop_stage(seen, 'aip_store') },
+            });
+            await worker.tick();
+            expect(seen).toHaveLength(1);
+            expect(seen[0].id).toBe(runnable.id);
+        });
+
+        it('claims nothing when every PENDING row is in backoff; claims again once elapsed', async () => {
+            const uuid = `elap-${Math.random().toString(16).slice(2, 8)}`;
+            const row = await seed('AIP_STORE_PENDING', { sip_uuid: uuid });
+            const store = await db_helper.seed_aip_store({
+                aip_uuid: uuid,
+                is_migrated: 7,
+                copied_at: null,
+                next_attempt_at: new Date(Date.now() + 10 * 60 * 1000),
+            });
+            const seen = [];
+            const worker = create_worker({
+                stages: { AIP_STORE_PENDING: noop_stage(seen, 'aip_store') },
+            });
+            await worker.tick();
+            expect(seen).toHaveLength(0);
+
+            /* Backoff elapses → the same row is claimable again. */
+            const { db } = require('../../../config/db');
+            await db()(tables.aip_store)
+                .where({ id: store.id })
+                .update({ next_attempt_at: new Date(Date.now() - 1000) });
+            await worker.tick();
+            expect(seen).toHaveLength(1);
+            expect(seen[0].id).toBe(row.id);
+        });
+
         it('AIP_STORE_SERIAL=false restores parallel Stage 6 (escape hatch)', async () => {
             process.env.AIP_STORE_SERIAL = 'false';
             app_config._reset();

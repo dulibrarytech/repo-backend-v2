@@ -293,6 +293,52 @@ describe('repository/aip_store_model', () => {
         });
     });
 
+    describe('list_uuids_in_backoff', () => {
+        it('returns only the uuids whose next_attempt_at is in the future', async () => {
+            /*
+             * Feeds the worker's Stage 6 claim filter: rows waiting
+             * out a retry backoff must not occupy the serial copy
+             * slot (head-of-line blocking). Elapsed backoffs and
+             * rows without one are runnable.
+             */
+            const future = new Date(Date.now() + 10 * 60 * 1000);
+            const past = new Date(Date.now() - 10 * 60 * 1000);
+            const waiting = randomUUID();
+            const elapsed = randomUUID();
+            const clean = randomUUID();
+            await db_helper.seed_aip_store({
+                aip_uuid: waiting,
+                is_migrated: 7,
+                copied_at: null,
+                next_attempt_at: future,
+            });
+            await db_helper.seed_aip_store({
+                aip_uuid: elapsed,
+                is_migrated: 7,
+                copied_at: null,
+                next_attempt_at: past,
+            });
+            await db_helper.seed_aip_store({ aip_uuid: clean, is_migrated: 6 });
+
+            const set = await model.list_uuids_in_backoff([
+                waiting,
+                elapsed,
+                clean,
+                randomUUID(), // no row at all
+            ]);
+            expect(set.has(waiting)).toBe(true);
+            expect(set.has(elapsed)).toBe(false);
+            expect(set.has(clean)).toBe(false);
+            expect(set.size).toBe(1);
+        });
+
+        it('returns an empty set for empty or invalid input', async () => {
+            expect((await model.list_uuids_in_backoff([])).size).toBe(0);
+            expect((await model.list_uuids_in_backoff(null)).size).toBe(0);
+            expect((await model.list_uuids_in_backoff([null, ''])).size).toBe(0);
+        });
+    });
+
     describe('derive_wasabi_key', () => {
         it('prefers wasabi_key when populated (v2 ingest path)', () => {
             const key = model.derive_wasabi_key({

@@ -26,6 +26,7 @@
 const app_config = require('../config/app');
 const log = require('../libs/log');
 const model_default = require('./model');
+const aip_store_model_default = require('../repository/aip_store_model');
 
 const process_metadata_stage = require('./stages/process_metadata');
 const upload_stage = require('./stages/upload');
@@ -85,6 +86,11 @@ function ready_states() {
  * outside the serial window and runs in the background.
  */
 const STAGE6_STATES = new Set(['AIP_STORE_PENDING', 'AIP_STORE_IN_PROGRESS']);
+/*
+ * How many AIP_STORE_PENDING rows the Stage 6 claim scans per tick
+ * when filtering out rows in retry backoff (see claim_stage6_pending).
+ */
+const STAGE6_BACKOFF_SCAN = 50;
 const PIPELINE_STATES = new Set(
     Object.keys(STAGE_BY_STATE).filter((s) => !STAGE6_STATES.has(s))
 );
@@ -161,6 +167,7 @@ const AM_ACTIVE_STATES = new Set([...AM_ENTRY_STATES, ...AM_INSIDE_STATES]);
 
 function create_worker(deps = {}) {
     const model = deps.model || model_default;
+    const aip_store_model = deps.aip_store_model || aip_store_model_default;
     const stages = deps.stages || STAGE_BY_STATE;
     let running = false;
     let stopping = false;
@@ -198,6 +205,57 @@ function create_worker(deps = {}) {
      * count closes the entry gate across restarts.
      */
     const stage6_dispatched = new Set();
+
+    /*
+     * Claim AIP_STORE_PENDING rows, skipping any whose tbl_aip_store
+     * row is in retry backoff (next_attempt_at in the future).
+     *
+     * Without this, a failing AIP head-of-line blocks Stage 6: the
+     * claim picks the newest PENDING row (list_queue orders id DESC),
+     * a backing-off row stays PENDING, and under the serial gate the
+     * one Stage 6 slot per tick goes to a guaranteed no-op — every
+     * AIP behind it stalls for the full backoff window (up to ~90 min
+     * on the not-found budget). Scanning a wider candidate window and
+     * filtering out backoff rows lets the worker copy the next
+     * runnable AIP while failed ones wait out their backoff.
+     *
+     * The scan window (50) bounds the lookup cost per tick; a run of
+     * 50+ distinct AIPs simultaneously in backoff means something
+     * systemic (curation down) and stalling is then correct anyway.
+     * Backoff rows are matched via tbl_aip_store.aip_uuid, which
+     * _record_failure always stamps with the queue row's sip_uuid.
+     * Best-effort: if the backoff lookup fails, fall back to the
+     * unfiltered head so a read glitch can't stop Stage 6 claims —
+     * the stage's own backoff guard stays authoritative per row.
+     */
+    async function claim_stage6_pending(limit) {
+        const candidates = await model.list_queue(
+            { status: 'AIP_STORE_PENDING', is_complete: false },
+            { limit: STAGE6_BACKOFF_SCAN, offset: 0 }
+        );
+        if (candidates.length === 0) return [];
+        try {
+            const uuids = [...new Set(candidates.map((r) => r.sip_uuid))];
+            const in_backoff = await aip_store_model.list_uuids_in_backoff(uuids);
+            if (in_backoff.size > 0) {
+                const runnable = candidates.filter((r) => !in_backoff.has(r.sip_uuid));
+                if (runnable.length < candidates.length) {
+                    log.debug({
+                        event: 'stage6_claim_skipped_backoff',
+                        skipped: candidates.length - runnable.length,
+                        runnable: runnable.length,
+                    });
+                }
+                return runnable.slice(0, limit);
+            }
+        } catch (err) {
+            log.warn({
+                event: 'stage6_backoff_filter_failed',
+                err: err.message,
+            });
+        }
+        return candidates.slice(0, limit);
+    }
 
     async function dispatch_one(row) {
         const stage = stages[row.pipeline_state];
@@ -392,10 +450,13 @@ function create_worker(deps = {}) {
                  * claimed, so parallelizing would waste DB roundtrips
                  * we'd just discard.
                  */
-                const batch = await model.list_queue(
-                    { status: state, is_complete: false },
-                    { limit: remaining, offset: 0 }
-                );
+                const batch =
+                    state === 'AIP_STORE_PENDING'
+                        ? await claim_stage6_pending(remaining)
+                        : await model.list_queue(
+                              { status: state, is_complete: false },
+                              { limit: remaining, offset: 0 }
+                          );
                 /*
                  * Skip rows already in flight (in another tick that
                  * hasn't completed). Cheap O(N) check; concurrency is
