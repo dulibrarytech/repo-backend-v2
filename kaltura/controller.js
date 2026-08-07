@@ -109,26 +109,7 @@ async function post_metadata(req, res) {
         ks = await service.start_session();
     }
 
-    /*
-     * Stage 0 — clear-on-start. Drop any earlier queue + IDs rows for
-     * THIS batch's packages so a retry replaces its previous results
-     * instead of appending to them. Scoped to the incoming package
-     * names on purpose — a global wipe would delete entry ids that
-     * in-flight ingests still read in Stage 5 (attach_kaltura_ids).
-     */
-    await model.clear_packages(req.body.packages.map((p) => p.package));
-
-    /*
-     * Stage 1 — enqueue. JSON-stringify files at insert time so the
-     * LONGTEXT column round-trips cleanly.
-     */
-    await model.queue_packages(req.body.packages);
-
-    /*
-     * Stage 2 — drain. Bounded loop with the same per-package /
-     * per-file backoff as the legacy controller.
-     */
-    const results = await _drain_queue(ks);
+    const results = await resolve_packages(req.body.packages, { ks });
 
     res.status(200).json({
         error: false,
@@ -164,16 +145,65 @@ function _validate_metadata_body(body) {
 }
 
 /*
+ * Resolve filename→entry-id for a set of packages: scoped clear of any
+ * earlier rows, enqueue, drain. Returns the flat array of
+ * `{package, file, entry_id, status, message}` rows (also persisted to
+ * tbl_kaltura_ids, where ingest Stage 5 reads them).
+ *
+ * Shared by POST /metadata and the ingest workspace's Make Digital
+ * Objects action, which resolves a folder's media files before running
+ * MDO so the entry IDs can be stamped into ArchivesSpace.
+ *
+ * `opts.ks` reuses an existing session; otherwise one is minted.
+ * `opts.deps` injects {service, model, config} for tests.
+ */
+async function resolve_packages(packages, opts = {}) {
+    const deps = opts.deps || {};
+    const cfg = deps.config || config;
+    const svc = deps.service || service;
+    const mdl = deps.model || model;
+
+    if (!cfg.is_configured()) {
+        throw new ServiceUnavailableError('Kaltura is not configured');
+    }
+    _validate_metadata_body({ packages });
+
+    const ks = opts.ks || (await svc.start_session());
+
+    /*
+     * Stage 0 — clear-on-start. Drop any earlier queue + IDs rows for
+     * THIS batch's packages so a retry replaces its previous results
+     * instead of appending to them. Scoped to the incoming package
+     * names on purpose — a global wipe would delete entry ids that
+     * in-flight ingests still read in Stage 5 (attach_kaltura_ids).
+     */
+    await mdl.clear_packages(packages.map((p) => p.package));
+
+    /*
+     * Stage 1 — enqueue. JSON-stringify files at insert time so the
+     * LONGTEXT column round-trips cleanly.
+     */
+    await mdl.queue_packages(packages);
+
+    /*
+     * Stage 2 — drain. Bounded loop with the same per-package /
+     * per-file backoff as the legacy controller.
+     */
+    return _drain_queue(ks, deps);
+}
+
+/*
  * Drain unprocessed packages from the queue. Returns a flat array of
  * `{package, file, entry_id, status, message}` results for the caller.
  */
-async function _drain_queue(ks) {
+async function _drain_queue(ks, deps = {}) {
+    const mdl = deps.model || model;
     const all_results = [];
     let processed = 0;
     while (processed < MAX_PACKAGES_PER_REQUEST) {
-        const pkg = await model.get_next_package();
+        const pkg = await mdl.get_next_package();
         if (!pkg) break;
-        const pkg_results = await _process_package(pkg, ks);
+        const pkg_results = await _process_package(pkg, ks, deps);
         all_results.push(...pkg_results);
         processed += 1;
         if (processed < MAX_PACKAGES_PER_REQUEST) {
@@ -190,6 +220,7 @@ async function _drain_queue(ks) {
  * doesn't leave us re-processing the same files on retry.
  */
 async function _process_package(pkg, ks, deps = {}) {
+    const mdl = deps.model || model;
     let files;
     try {
         files = JSON.parse(pkg.files);
@@ -199,7 +230,7 @@ async function _process_package(pkg, ks, deps = {}) {
             package: pkg.package,
             err: err.message,
         });
-        await model.mark_package_processed(pkg.package);
+        await mdl.mark_package_processed(pkg.package);
         return [];
     }
     if (!Array.isArray(files)) {
@@ -207,17 +238,17 @@ async function _process_package(pkg, ks, deps = {}) {
             event: 'kaltura_files_not_array',
             package: pkg.package,
         });
-        await model.mark_package_processed(pkg.package);
+        await mdl.mark_package_processed(pkg.package);
         return [];
     }
 
-    await model.mark_package_processed(pkg.package);
+    await mdl.mark_package_processed(pkg.package);
 
     const results = [];
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const file_results = await _resolve_file(file, pkg.package, ks, deps);
-        await model.save_entry_ids(file_results);
+        await mdl.save_entry_ids(file_results);
         results.push(...file_results);
         if (i < files.length - 1) await _sleep(FILE_DELAY_MS);
     }
@@ -372,6 +403,7 @@ module.exports = {
     get_queue,
     get_entry_ids,
     clear_queue,
+    resolve_packages,
     /*
      * Internals exposed for tests so unit tests don't need to mock
      * the full HTTP layer to exercise the per-file resolution rules.

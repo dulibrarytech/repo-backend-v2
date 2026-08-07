@@ -357,11 +357,20 @@ async function make_digital_objects_action(req, res) {
         });
     }
     res.set('HX-Trigger', 'workspace:refresh');
+    /*
+     * result.kaltura is present only when the folder contained
+     * audio/video files — the count confirms to staff that every
+     * media file got its Kaltura ID attached in ArchivesSpace.
+     */
+    const kaltura_note =
+        result.kaltura && result.kaltura.attached > 0
+            ? ` ${result.kaltura.attached} Kaltura ID(s) attached.`
+            : '';
     render_action_result(req, res, {
         ok: true,
         action: 'Make Digital Objects',
         folder,
-        message: `Make Digital Objects completed for ${folder}.`,
+        message: `Make Digital Objects completed for ${folder}.${kaltura_note}`,
         detail: result.body,
     });
 }

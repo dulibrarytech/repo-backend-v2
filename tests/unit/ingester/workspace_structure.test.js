@@ -27,8 +27,24 @@ const LOOSE_FLAG = {
     total: 2,
 };
 
-function make_astools({ workspace_data, packages_data, packages_status = 200 } = {}) {
-    const calls = { list_workspace: 0, list_packages: [], make_digital_objects: [] };
+function make_astools({
+    workspace_data,
+    packages_data,
+    packages_status = 200,
+    /*
+     * Per-package file listings for the MDO Kaltura pre-flight
+     * (astools.get_uri). Keyed by package name; defaults to a
+     * media-free package so non-Kaltura tests exercise the plain
+     * MDO path unchanged.
+     */
+    package_files = {},
+} = {}) {
+    const calls = {
+        list_workspace: 0,
+        list_packages: [],
+        get_uri: [],
+        make_digital_objects: [],
+    };
     return {
         calls,
         is_configured: () => true,
@@ -44,9 +60,32 @@ function make_astools({ workspace_data, packages_data, packages_status = 200 } =
             if (packages_data && packages_data.throw) throw new Error(packages_data.throw);
             return { status: packages_status, data: packages_data };
         },
-        async make_digital_objects(folder) {
-            calls.make_digital_objects.push(folder);
+        async get_uri(folder, pkg) {
+            calls.get_uri.push({ folder, pkg });
+            if (package_files.throw) throw new Error(package_files.throw);
+            const files = package_files[pkg] || ['uri.txt', 'scan_001.tif'];
+            return { status: 200, data: { result: { uris: [], files }, errors: [] } };
+        },
+        async make_digital_objects(folder, opts) {
+            calls.make_digital_objects.push(opts ? { folder, opts } : folder);
             return { status: 200, data: { result: { success: true }, errors: [] } };
+        },
+    };
+}
+
+/*
+ * Fake Kaltura collaborator for run_make_digital_objects. `rows` is
+ * what resolve_packages returns; `configured` gates the media branch.
+ */
+function make_kaltura({ rows = [], configured = true, throw_error = null } = {}) {
+    const calls = { resolve_packages: [] };
+    return {
+        calls,
+        is_configured: () => configured,
+        async resolve_packages(packages) {
+            calls.resolve_packages.push(packages);
+            if (throw_error) throw new Error(throw_error);
+            return rows;
         },
     };
 }
@@ -267,6 +306,154 @@ describe('workspace.run_make_digital_objects — structure gate', () => {
 
         expect(result.ok).toBe(true);
         expect(astools.calls.make_digital_objects.length).toBe(1);
+    });
+});
+
+describe('workspace.run_make_digital_objects — Kaltura pre-flight', () => {
+    const FOLDER = 'new_media-resources_9';
+
+    function media_astools(package_files) {
+        return make_astools({
+            packages_data: { result: ['pkg_a', 'pkg_b'], errors: [] },
+            package_files,
+        });
+    }
+
+    it('resolves media files and passes is_kaltura + files to MDO', async () => {
+        const astools = media_astools({
+            pkg_a: ['uri.txt', 'interview.MP4', 'notes.txt'],
+            pkg_b: ['song.wav'],
+        });
+        const kaltura = make_kaltura({
+            rows: [
+                { package: 'pkg_a', file: 'interview.MP4', entry_id: '1_aaa', status: 1 },
+                { package: 'pkg_b', file: 'song.wav', entry_id: '1_bbb', status: 1 },
+            ],
+        });
+
+        const result = await workspace.run_make_digital_objects(FOLDER, { astools, kaltura });
+
+        expect(result.ok).toBe(true);
+        expect(kaltura.calls.resolve_packages).toEqual([
+            [
+                { package: 'pkg_a', files: ['interview.MP4'] },
+                { package: 'pkg_b', files: ['song.wav'] },
+            ],
+        ]);
+        expect(astools.calls.make_digital_objects).toEqual([
+            {
+                folder: FOLDER,
+                opts: {
+                    is_kaltura: 1,
+                    files: [
+                        { package: 'pkg_a', file: 'interview.MP4', entry_id: '1_aaa' },
+                        { package: 'pkg_b', file: 'song.wav', entry_id: '1_bbb' },
+                    ],
+                },
+            },
+        ]);
+        expect(result.kaltura).toEqual({ attached: 2 });
+    });
+
+    it('calls MDO without options when the folder has no media files', async () => {
+        const astools = media_astools({});
+        const kaltura = make_kaltura();
+
+        const result = await workspace.run_make_digital_objects(FOLDER, { astools, kaltura });
+
+        expect(result.ok).toBe(true);
+        expect(kaltura.calls.resolve_packages).toEqual([]);
+        expect(astools.calls.make_digital_objects).toEqual([FOLDER]);
+        expect(result.kaltura).toBeUndefined();
+    });
+
+    it('blocks (422) when a media file has no Kaltura match', async () => {
+        const astools = media_astools({ pkg_a: ['clip.mov'] });
+        const kaltura = make_kaltura({
+            rows: [
+                {
+                    package: 'pkg_a',
+                    file: 'clip.mov',
+                    entry_id: '0_0',
+                    status: 0,
+                    message: 'File does not have an Entry ID. Please check Kaltura record for all required fields.',
+                },
+            ],
+        });
+
+        const result = await workspace.run_make_digital_objects(FOLDER, { astools, kaltura });
+
+        expect(result.ok).toBe(false);
+        expect(result.status).toBe(422);
+        expect(result.error).toContain('pkg_a/clip.mov');
+        expect(result.error).toContain('does not have an Entry ID');
+        expect(astools.calls.make_digital_objects).toEqual([]);
+    });
+
+    it('blocks when a media file matches more than one Kaltura entry', async () => {
+        const astools = media_astools({ pkg_a: ['clip.mov'] });
+        const kaltura = make_kaltura({
+            rows: [
+                {
+                    package: 'pkg_a',
+                    file: 'clip.mov',
+                    entry_id: '["1_a","1_b"]',
+                    status: 2,
+                    message: 'File has more than 1 Entry ID. Please check Kaltura record(s).',
+                },
+            ],
+        });
+
+        const result = await workspace.run_make_digital_objects(FOLDER, { astools, kaltura });
+
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain('more than 1 Entry ID');
+        expect(astools.calls.make_digital_objects).toEqual([]);
+    });
+
+    it('blocks when the resolver returns no row at all for a media file', async () => {
+        const astools = media_astools({ pkg_a: ['clip.mov'] });
+        const kaltura = make_kaltura({ rows: [] });
+
+        const result = await workspace.run_make_digital_objects(FOLDER, { astools, kaltura });
+
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain('No result came back');
+        expect(astools.calls.make_digital_objects).toEqual([]);
+    });
+
+    it('blocks when media exists but Kaltura is not configured', async () => {
+        const astools = media_astools({ pkg_a: ['clip.mov'] });
+        const kaltura = make_kaltura({ configured: false });
+
+        const result = await workspace.run_make_digital_objects(FOLDER, { astools, kaltura });
+
+        expect(result.ok).toBe(false);
+        expect(result.error).toMatch(/Kaltura connection is not set up/);
+        expect(kaltura.calls.resolve_packages).toEqual([]);
+        expect(astools.calls.make_digital_objects).toEqual([]);
+    });
+
+    it('blocks with a retry message when the Kaltura lookup itself fails', async () => {
+        const astools = media_astools({ pkg_a: ['clip.mov'] });
+        const kaltura = make_kaltura({ throw_error: 'Kaltura session.start timed out' });
+
+        const result = await workspace.run_make_digital_objects(FOLDER, { astools, kaltura });
+
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain('try again');
+        expect(astools.calls.make_digital_objects).toEqual([]);
+    });
+
+    it('blocks when a per-package file listing fails mid-enumeration', async () => {
+        const astools = media_astools({ throw: 'ECONNRESET' });
+        const kaltura = make_kaltura();
+
+        const result = await workspace.run_make_digital_objects(FOLDER, { astools, kaltura });
+
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain('Could not check');
+        expect(astools.calls.make_digital_objects).toEqual([]);
     });
 });
 

@@ -28,6 +28,18 @@ const jobs_default = require('./jobs');
 const app_config = require('../config/app');
 const log = require('../libs/log');
 const collection_provision = require('../repository/collection_provision');
+const kaltura_controller = require('../kaltura/controller');
+const kaltura_config = require('../kaltura/config');
+
+/*
+ * Default Kaltura collaborator for run_make_digital_objects. Kept as a
+ * two-method facade so tests inject a plain object instead of stubbing
+ * the controller + config modules.
+ */
+const kaltura_default = {
+    is_configured: () => kaltura_config.is_configured(),
+    resolve_packages: (packages) => kaltura_controller.resolve_packages(packages),
+};
 
 /*
  * --- Collection-resource gate (pre-flight for submit_to_ingest) -----
@@ -368,10 +380,108 @@ function _extract_package_array(data) {
     return null;
 }
 
+/*
+ * --- Kaltura media detection (Make Digital Objects) -----------------
+ *
+ * Streaming masters live in Kaltura, and MDO is the step that writes
+ * each file's Kaltura entry id into ArchivesSpace (the component's
+ * "Identifier" field) — that id later flows into the repository record
+ * via the exporter at ingest Stage 1. Files are treated as
+ * Kaltura-hosted by extension; the set mirrors the formats DU sends to
+ * Kaltura (matching the MIME families Stage 5 treats as streamed).
+ */
+const KALTURA_MEDIA_EXTENSIONS = new Set([
+    // video
+    'mp4', 'mov', 'm4v', 'avi', 'mkv', 'mpg', 'mpeg', 'wmv',
+    // audio
+    'wav', 'mp3', 'm4a', 'flac', 'ogg', 'aiff', 'aif', 'wma',
+]);
+
+function _is_kaltura_media(filename) {
+    if (typeof filename !== 'string') return false;
+    const dot = filename.lastIndexOf('.');
+    if (dot <= 0) return false;
+    return KALTURA_MEDIA_EXTENSIONS.has(filename.slice(dot + 1).toLowerCase());
+}
+
+/*
+ * Enumerate the folder's audio/video files, one entry per package:
+ *   { ok: true,  media: [{ package, files: [...] }, ...] }
+ *   { ok: false, error }   — enumeration failed part-way
+ *
+ * Failure semantics are deliberately split:
+ *   - If the package LIST can't be fetched at all, the caller proceeds
+ *     without Kaltura (fail open, like the structure gate) — the MDO
+ *     call itself will surface a curation-service outage loudly.
+ *   - If the list succeeded but a per-package file fetch fails, we
+ *     BLOCK: the service is demonstrably up, so proceeding could
+ *     silently skip a media file — the exact defect this path exists
+ *     to prevent (see notes/MDO_KALTURA_WORKFLOW_NOTES.md).
+ */
+async function _collect_kaltura_media(astools, folder) {
+    let folder_state;
+    try {
+        folder_state = await _fetch_folder_state(astools, folder);
+    } catch (err) {
+        folder_state = { packages: [], packages_error: err.message };
+    }
+    if (folder_state.packages_error) {
+        log.warn({
+            event: 'workspace_mdo_kaltura_enum_unavailable',
+            folder,
+            err: folder_state.packages_error,
+        });
+        return { ok: true, media: [] };
+    }
+
+    const media = [];
+    for (const pkg of folder_state.packages) {
+        if (!pkg || !pkg.name) continue;
+        let res;
+        try {
+            res = await astools.get_uri(folder, pkg.name);
+        } catch (err) {
+            log.warn({
+                event: 'workspace_mdo_kaltura_enum_failed',
+                folder,
+                package: pkg.name,
+                err: err.message,
+            });
+            return {
+                ok: false,
+                error:
+                    `Could not check "${pkg.name}" for audio/video files, so Make ` +
+                    `Digital Objects was not started. Try again in a minute; if this ` +
+                    `keeps happening, contact LDT.`,
+            };
+        }
+        const files =
+            res && res.status === 200 && res.data && res.data.result &&
+            Array.isArray(res.data.result.files)
+                ? res.data.result.files
+                : [];
+        const media_files = files.filter(_is_kaltura_media);
+        if (media_files.length > 0) {
+            media.push({ package: pkg.name, files: media_files });
+        }
+    }
+    return { ok: true, media };
+}
+
+/*
+ * Turn non-resolving Kaltura rows into one staff-actionable message per
+ * file. The row messages ("File does not have an Entry ID…", "File has
+ * more than 1 Entry ID…") come from kaltura/controller._resolve_file.
+ */
+function _format_kaltura_failures(rows) {
+    return rows.map((r) => `${r.package}/${r.file}: ${r.message || 'could not be matched in Kaltura.'}`);
+}
+
 // --- Actions ---------------------------------------------------------
 
 async function run_make_digital_objects(folder, deps = {}) {
     const astools = deps.astools || astools_default;
+    const kaltura = deps.kaltura || kaltura_default;
     if (!astools.is_configured()) {
         return { ok: false, status: 0, error: 'ASTools is not configured' };
     }
@@ -380,13 +490,121 @@ async function run_make_digital_objects(folder, deps = {}) {
         log.warn({ event: 'workspace_mdo_blocked_structure', folder });
         return { ok: false, status: 422, error: gate.error, structure_errors: gate.structure_errors };
     }
+
+    /*
+     * Kaltura pre-flight: resolve every audio/video file to its entry id
+     * BEFORE running MDO, and refuse to run when any media file cannot be
+     * resolved. A partial run would create AS components with no
+     * Identifier, and nothing downstream heals that silently — staff fix
+     * the Kaltura entry, then simply re-run this action.
+     */
+    const enumeration = await _collect_kaltura_media(astools, folder);
+    if (!enumeration.ok) {
+        return { ok: false, status: 422, error: enumeration.error };
+    }
+
+    let kaltura_files = null;
+    if (enumeration.media.length > 0) {
+        if (!kaltura.is_configured()) {
+            return {
+                ok: false,
+                status: 422,
+                error:
+                    `"${folder}" contains audio/video files, but the Kaltura ` +
+                    `connection is not set up on this server, so their Kaltura IDs ` +
+                    `cannot be attached. Contact LDT before running Make Digital ` +
+                    `Objects on this folder.`,
+            };
+        }
+        let rows;
+        try {
+            rows = await kaltura.resolve_packages(enumeration.media);
+        } catch (err) {
+            log.warn({ event: 'workspace_mdo_kaltura_resolve_failed', folder, err: err.message });
+            return {
+                ok: false,
+                status: 422,
+                error:
+                    `Looking up Kaltura IDs for "${folder}" failed (${err.message}). ` +
+                    `Make Digital Objects was not started — try again in a minute; ` +
+                    `if this keeps happening, contact LDT.`,
+            };
+        }
+
+        /*
+         * Every enumerated media file must come back as exactly one
+         * status=1 row. Anything else — no match, multi-match, or a file
+         * the resolver never reported on — blocks the run.
+         */
+        const resolved = new Map();
+        for (const row of rows || []) {
+            if (row && row.status === 1 && row.entry_id) {
+                resolved.set(`${row.package}\n${row.file}`, row.entry_id);
+            }
+        }
+        const failures = [];
+        for (const pkg of enumeration.media) {
+            for (const file of pkg.files) {
+                if (!resolved.has(`${pkg.package}\n${file}`)) {
+                    const row = (rows || []).find(
+                        (r) => r && r.package === pkg.package && r.file === file
+                    );
+                    failures.push(
+                        row || {
+                            package: pkg.package,
+                            file,
+                            message: 'No result came back from the Kaltura lookup.',
+                        }
+                    );
+                }
+            }
+        }
+        if (failures.length > 0) {
+            log.warn({
+                event: 'workspace_mdo_blocked_kaltura',
+                folder,
+                failures: failures.length,
+            });
+            return {
+                ok: false,
+                status: 422,
+                error:
+                    `${failures.length} audio/video file(s) in "${folder}" could not ` +
+                    `be matched to a single Kaltura entry, so Make Digital Objects ` +
+                    `was not started. Fix each file in Kaltura, then run this step ` +
+                    `again: ${_format_kaltura_failures(failures).join(' ')}`,
+                kaltura_failures: failures,
+            };
+        }
+
+        kaltura_files = [];
+        for (const pkg of enumeration.media) {
+            for (const file of pkg.files) {
+                kaltura_files.push({
+                    package: pkg.package,
+                    file,
+                    entry_id: resolved.get(`${pkg.package}\n${file}`),
+                });
+            }
+        }
+    }
+
     try {
-        const res = await astools.make_digital_objects(folder);
-        return {
+        const res = kaltura_files
+            ? await astools.make_digital_objects(folder, {
+                  is_kaltura: 1,
+                  files: kaltura_files,
+              })
+            : await astools.make_digital_objects(folder);
+        const result = {
             ok: res.status >= 200 && res.status < 300,
             status: res.status,
             body: res.data,
         };
+        if (kaltura_files && result.ok) {
+            result.kaltura = { attached: kaltura_files.length };
+        }
+        return result;
     } catch (err) {
         log.warn({ event: 'workspace_mdo_failed', folder, err: err.message });
         return { ok: false, status: 0, error: err.message };

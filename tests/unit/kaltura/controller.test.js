@@ -169,3 +169,108 @@ describe('kaltura/controller — _resolve_file', () => {
         expect(out[0].message).toMatch(/Processing error: SDK boom/);
     });
 });
+
+describe('kaltura/controller — resolve_packages', () => {
+    /*
+     * In-memory model: queue_packages stores rows the way the DB does
+     * (files JSON-stringified), get_next_package drains them in order.
+     */
+    function make_fake_model() {
+        const calls = { order: [], saved: [] };
+        let queue = [];
+        return {
+            calls,
+            async clear_packages(names) {
+                calls.order.push(`clear:${names.join(',')}`);
+                return { ids: 0, queue: 0 };
+            },
+            async queue_packages(packages) {
+                calls.order.push('queue');
+                queue = packages.map((p) => ({
+                    package: p.package,
+                    files: JSON.stringify(p.files),
+                }));
+                return { count: queue.length };
+            },
+            async get_next_package() {
+                return queue.length > 0 ? queue[0] : null;
+            },
+            async mark_package_processed(name) {
+                calls.order.push(`processed:${name}`);
+                queue = queue.filter((q) => q.package !== name);
+                return { affected: 1 };
+            },
+            async save_entry_ids(rows) {
+                calls.saved.push(...rows);
+                return { count: rows.length };
+            },
+        };
+    }
+
+    function make_service_for(responses) {
+        return {
+            async start_session() {
+                return 'minted-ks';
+            },
+            async search_metadata(term) {
+                return responses[term] || { totalCount: 0, objects: [] };
+            },
+        };
+    }
+
+    const configured = { is_configured: () => true };
+
+    it('clears, queues, drains, and returns + persists the resolved rows', async () => {
+        const model = make_fake_model();
+        const service = make_service_for({
+            'a.mp4': { totalCount: 1, objects: [{ object: { id: '1_a' } }] },
+        });
+
+        const rows = await controller.resolve_packages(
+            [{ package: 'pkg_a', files: ['a.mp4'] }],
+            { ks: 'ks', deps: { model, service, config: configured } }
+        );
+
+        expect(model.calls.order).toEqual(['clear:pkg_a', 'queue', 'processed:pkg_a']);
+        expect(rows).toEqual([
+            {
+                package: 'pkg_a',
+                file: 'a.mp4',
+                entry_id: '1_a',
+                status: 1,
+                message: 'Success.',
+            },
+        ]);
+        expect(model.calls.saved).toEqual(rows);
+    });
+
+    it('mints a session when none is supplied', async () => {
+        const model = make_fake_model();
+        const service = make_service_for({});
+        const rows = await controller.resolve_packages(
+            [{ package: 'pkg_b', files: ['b.wav'] }],
+            { deps: { model, service, config: configured } }
+        );
+        // A miss on both lookups records the status=0 placeholder row.
+        expect(rows[0].status).toBe(0);
+    });
+
+    it('throws ServiceUnavailable when Kaltura is not configured', async () => {
+        await expect(
+            controller.resolve_packages([{ package: 'p', files: [] }], {
+                deps: { config: { is_configured: () => false } },
+            })
+        ).rejects.toThrow(/not configured/i);
+    });
+
+    it('rejects a malformed packages array before touching the queue', async () => {
+        const model = make_fake_model();
+        await expect(
+            controller.resolve_packages([{ files: ['x.mp4'] }], {
+                ks: 'ks',
+                deps: { model, config: configured },
+            })
+        ).rejects.toThrow(/validation failed/i);
+        expect(model.calls.order).toEqual([]);
+    });
+});
