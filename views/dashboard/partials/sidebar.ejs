@@ -40,11 +40,12 @@
         // TEMPORARY (2026-07-24) v1-familiar nav rollout: flip these back
         // to true to restore the hidden icons. Stats is hidden because the
         // stats view IS the home page for now (controller redirects
-        // /dashboard/stats → /dashboard/). AIPs is hidden from the rail
-        // only — its route stays live for direct URLs.
+        // /dashboard/stats → /dashboard/).
         // admin_utils restored 2026-07-29 by request (icon is still
         // admin-only via the allow('manage_index') gate below).
-        const nav_show = { stats: false, aips: false, admin_utils: true };
+        // AIPs left this flag set 2026-08-07 — it moved permanently into
+        // the Admin Utils rail (below Batch Backups), not behind a flag.
+        const nav_show = { stats: false, admin_utils: true };
     %>
 
     <% if (in_workflow) { %>
@@ -185,7 +186,8 @@
              to keep staff on the admin surface.
 
              Order: Home → Services Health → TIFF→JPG Conversion →
-                    Indexer → Metadata Refresh → AIP Backfill */%>
+                    Indexer → Metadata Refresh → AIP Backfill →
+                    Handles → Batch Backups → AIPs */%>
 
         <a href="<%= dashboard_base %>/" aria-label="Home" title="Home">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -290,9 +292,10 @@
 
         <%/* Batch Backups (Wasabi) — read-only browse + download of
              the Wasabi batch archive (retired 003-ingested
-             replacement). Archive-box icon. Reachable only via URL /
-             this admin focus mode while nav_show.admin_utils stays
-             off. */%>
+             replacement). Duplicate/copy icon (two overlapping
+             squares — a backup is a copy kept elsewhere), chosen
+             2026-08-07 to stop clashing with the AIPs entry below,
+             which kept the archive-box family. */%>
         <a href="<%= dashboard_base %>/admin/archive"
            class="<%= page === 'archive' ? 'active' : '' %>"
            <% if (page === 'archive') { %>aria-current="page"<% } %>
@@ -300,9 +303,28 @@
            title="Batch Backups (admin)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="2" y="4" width="20" height="5" rx="1"/>
-                <path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9"/>
-                <line x1="10" y1="13" x2="14" y2="13"/>
+                <rect x="9" y="9" width="13" height="13" rx="2"/>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+        </a>
+
+        <%/* AIPs — preservation storage browse + download. Sits below
+             Batch Backups (2026-08-07, moved from the main nav): both
+             browse the Wasabi preservation tier — Batch Backups the
+             batch archive, AIPs the per-object AIP copies. Archive-box
+             icon (Batch Backups switched to the duplicate/copy icon
+             so the two neighbors don't read as twins). Route gating
+             is manage_ingest, matching Batch Backups. */%>
+        <a href="<%= dashboard_base %>/aips"
+           class="<%= page === 'aips' ? 'active' : '' %>"
+           <% if (page === 'aips') { %>aria-current="page"<% } %>
+           aria-label="AIPs (admin)"
+           title="AIPs (admin)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 8v13H3V8"/>
+                <path d="M1 3h22v5H1z"/>
+                <line x1="10" y1="12" x2="14" y2="12"/>
             </svg>
         </a>
 
@@ -387,28 +409,6 @@
                 <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
                 <line x1="9" y1="12" x2="15" y2="12"/>
                 <line x1="9" y1="16" x2="13" y2="16"/>
-            </svg>
-        </a>
-        <% } %>
-
-        <%/* AIPs — preservation storage browse + download.
-             Archive-box icon. Sits directly under DPJ because the
-             two are conceptually adjacent: DPJ is the path AIPs
-             come INTO existence on (ingest), AIPs is where they
-             live AFTER (preservation tier). Visible in the main
-             nav (not hidden behind Admin Utils) so staff verifying
-             or recovering an AIP don't have to enter focus mode. */%>
-        <% if (nav_show.aips) { %>
-        <a href="<%= dashboard_base %>/aips"
-           class="<%= active === 'aips' ? 'active' : '' %>"
-           <% if (active === 'aips') { %>aria-current="page"<% } %>
-           aria-label="AIPs"
-           title="AIPs">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M21 8v13H3V8"/>
-                <path d="M1 3h22v5H1z"/>
-                <line x1="10" y1="12" x2="14" y2="12"/>
             </svg>
         </a>
         <% } %>

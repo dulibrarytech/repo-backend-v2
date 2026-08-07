@@ -173,13 +173,14 @@ async function aips_page(req, res) {
     render_page(req, res, 'dashboard/aips', {
         page: 'aips',
         /*
-         * 'aips' (not 'admin') so the sidebar renders normal-mode
-         * nav with the AIPs icon highlighted in place. AIPs is
-         * adjacent to Digital Preservation Jobs in the main nav
-         * — same staff path as objects/collections — rather than
-         * hidden behind the Admin Utils focus mode.
+         * 'admin' so the sidebar renders the Admin Utils focus mode
+         * with the AIPs icon highlighted (page === 'aips'). The view
+         * moved into the admin rail below Batch Backups (2026-08-07)
+         * — the two are neighbors on the preservation tier: Batch
+         * Backups browses the batch archive, AIPs browses the
+         * per-object AIP copies.
          */
-        active: 'aips',
+        active: 'admin',
         title: 'AIPs — Repo Dashboard',
         filters: {
             q: req.query.q || '',

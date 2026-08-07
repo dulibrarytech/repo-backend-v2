@@ -793,15 +793,19 @@ describe('dashboard — e2e', () => {
             );
         });
 
-        it('hidden nav icons (Stats / AIPs) are absent; Admin Utils is back', async () => {
+        it('main nav omits Stats and AIPs icons; Admin Utils is present', async () => {
             const cookie = await cookie_for('stats-7');
             const res = await supertest(app).get('/repo/dashboard/').set('Cookie', cookie);
             /*
-             * TEMPORARY (2026-07-24) v1-familiar nav: Stats and AIPs
-             * stay hidden via the nav_show flags in sidebar.ejs
-             * (routes live, rail links gone). Admin Utils was restored
+             * TEMPORARY (2026-07-24) v1-familiar nav: Stats stays
+             * hidden via the nav_show flag in sidebar.ejs (route
+             * live, rail link gone). Admin Utils was restored
              * 2026-07-29 — admin-only via allow('manage_index'); the
-             * default test user is admin.
+             * default test user is admin. AIPs moved PERMANENTLY into
+             * the Admin Utils rail (2026-08-07, below Batch Backups)
+             * — its main-nav block and nav_show flag are gone, so a
+             * bare aria-label="AIPs" must never render here (the
+             * admin-rail entry is labelled "AIPs (admin)").
              */
             expect(res.text).not.toMatch(/aria-label="Stats"/);
             expect(res.text).not.toMatch(/aria-label="AIPs"/);
@@ -3418,6 +3422,36 @@ describe('dashboard — e2e', () => {
             expect(res.text).toMatch(/\/dashboard\/aips\/list/);
         });
 
+        it('renders the Admin Utils rail with AIPs active, below Batch Backups', async () => {
+            /*
+             * The AIPs view lives in the Admin Utils focus mode
+             * (2026-08-07, moved from the main nav): the page sets
+             * active:'admin' so the sidebar renders the admin rail,
+             * and page:'aips' highlights the AIPs entry. Order
+             * contract: the AIPs icon sits directly below Batch
+             * Backups at the end of the rail.
+             */
+            const cookie = await cookie_for('aip-rail');
+            const res = await supertest(app)
+                .get('/repo/dashboard/aips')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            // Admin rail is rendered (its tools are present)…
+            expect(res.text).toMatch(/aria-label="Batch Backups \(admin\)"/);
+            expect(res.text).toMatch(/aria-label="Services Health \(admin\)"/);
+            // …with the AIPs entry marked current.
+            expect(res.text).toMatch(
+                /<a[^>]*class="active"[^>]*aria-current="page"[^>]*aria-label="AIPs \(admin\)"/
+            );
+            // Batch Backups renders before AIPs in source order.
+            const backups_at = res.text.indexOf('aria-label="Batch Backups (admin)"');
+            const aips_at = res.text.indexOf('aria-label="AIPs (admin)"');
+            expect(backups_at).toBeGreaterThan(-1);
+            expect(aips_at).toBeGreaterThan(backups_at);
+            // Main-nav icons stay hidden in focus mode.
+            expect(res.text).not.toMatch(/aria-label="Objects"/);
+        });
+
         it("header shows the user's full name (from tbl_users), not the DU ID", async () => {
             /*
              * Regression: the identity next to the logout icon showed the raw
@@ -3854,26 +3888,23 @@ describe('dashboard — e2e', () => {
             }
         });
 
-        it('AIPs page still renders while its sidebar icon is temporarily hidden', async () => {
+        it('AIPs page renders admin focus mode, not the normal nav', async () => {
             /*
-             * TEMPORARY (2026-07-24) v1-familiar nav: the AIPs rail
-             * icon is hidden via nav_show in sidebar.ejs but the route
-             * stays live for direct URLs. Restore the original
-             * icon-visible + active-state assertions (git history)
-             * when nav_show.aips flips back on.
+             * 2026-08-07: the AIPs view moved into the Admin Utils
+             * rail (below Batch Backups), replacing the TEMPORARY
+             * nav_show.aips hidden-icon arrangement. The page now
+             * renders the admin focus mode — normal-nav icons like
+             * DPJ must NOT appear. The positive rail assertions
+             * (order, active state) live in the "renders the Admin
+             * Utils rail" test above.
              */
             const cookie = await cookie_for('aip-nav');
             const res = await supertest(app)
                 .get('/repo/dashboard/aips')
                 .set('Cookie', cookie);
             expect(res.status).toBe(200);
-            expect(res.text).not.toMatch(/aria-label="AIPs"/);
-            /*
-             * Sibling check: the DPJ icon should be present in the
-             * same render (i.e. we ARE in normal nav, not the admin
-             * focus mode that would hide it).
-             */
-            expect(res.text).toMatch(/aria-label="Digital Preservation Jobs"/);
+            expect(res.text).not.toMatch(/aria-label="Digital Preservation Jobs"/);
+            expect(res.text).toMatch(/aria-label="AIPs \(admin\)"/);
         });
     });
 

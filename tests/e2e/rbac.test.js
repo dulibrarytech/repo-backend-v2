@@ -88,6 +88,31 @@ describe('RBAC e2e — admin surfaces gated by role', () => {
         });
     });
 
+    describe('AIPs view (manage_ingest)', () => {
+        /*
+         * The AIPs read routes were auth-only until 2026-08-07; the
+         * view then moved into the Admin Utils rail below Batch
+         * Backups and picked up the same manage_ingest gate as its
+         * neighbor. Staff keep access (they hold manage_ingest);
+         * viewers lose it.
+         */
+        it('viewer is forbidden from the AIPs page and list partial', async () => {
+            const cookie = await cookie_for('rbac-aips-viewer', 'viewer');
+            const page = await supertest(app).get('/repo/dashboard/aips').set('Cookie', cookie);
+            expect(page.status).toBe(403);
+            const list = await supertest(app)
+                .get('/repo/dashboard/aips/list')
+                .set('Cookie', cookie);
+            expect(list.status).toBe(403);
+        });
+
+        it('staff can load the AIPs page', async () => {
+            const cookie = await cookie_for('rbac-aips-staff', 'staff');
+            const res = await supertest(app).get('/repo/dashboard/aips').set('Cookie', cookie);
+            expect(res.status).toBe(200);
+        });
+    });
+
     describe('user management (manage_users)', () => {
         it('staff is forbidden from the dashboard users page', async () => {
             const cookie = await cookie_for('rbac-usr-staff', 'staff');

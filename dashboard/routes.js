@@ -356,17 +356,29 @@ module.exports = function mount(app) {
      * `/aips/list` is registered BEFORE the `:id` routes so Express's
      * path matcher doesn't try to match `list` as a numeric id. Same
      * hazard the `/collections/list` ordering above guards against.
+     *
+     * Gated on manage_ingest like Batch Backups (2026-08-07): the view
+     * moved into the Admin Utils rail next to the archive browser, and
+     * the two surfaces share an audience — staff who run ingests and
+     * verify the preservation tier. Viewers lose direct-URL access.
      */
-    app.get(`${base}/aips`, require_dashboard_auth, aip_controller.aips_page);
-    app.get(`${base}/aips/list`, require_dashboard_auth, aip_controller.aips_table_partial);
+    app.get(`${base}/aips`, require_dashboard_auth, can_ingest, aip_controller.aips_page);
+    app.get(
+        `${base}/aips/list`,
+        require_dashboard_auth,
+        can_ingest,
+        aip_controller.aips_table_partial
+    );
     app.get(
         `${base}/aips/:id/download`,
         require_dashboard_auth,
+        can_ingest,
         aip_controller.aip_download
     );
     app.get(
         `${base}/aips/:id/row`,
         require_dashboard_auth,
+        can_ingest,
         aip_controller.aip_row_partial
     );
     app.post(
