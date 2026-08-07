@@ -347,8 +347,16 @@ async function run(row, deps = {}) {
         attempts: 0,
         next_attempt_at: null,
         error: null,
-        // Provenance: which source served the bytes (null = AM, the default).
-        message: use_duracloud ? 'COPIED_FROM_DURACLOUD' : null,
+        /*
+         * Provenance: which source actually served the bytes. The
+         * response's `source` field is authoritative — since the
+         * 2026-08-03 large-AIP routing, the curation side can serve
+         * from DuraCloud even on a plain copy_to_wasabi call.
+         */
+        message:
+            use_duracloud || data.source === 'duracloud'
+                ? 'COPIED_FROM_DURACLOUD'
+                : null,
     });
 
     await model.update_queue(
@@ -468,7 +476,18 @@ async function _resolve_repo_pid(deps, row) {
  * _record_failure.
  */
 function _is_am_not_found_error(error_text) {
-    return /not found in AM Storage Service/i.test(error_text || '');
+    /*
+     * Two ambiguous not-found shapes share the generous retry budget:
+     *   - AM's "not found in AM Storage Service" — a large AIP may
+     *     register in the Storage Service late.
+     *   - DuraCloud's "not found in DuraCloud (not replicated yet?)"
+     *     — AM replicates to DuraCloud asynchronously, so a fresh
+     *     large AIP (routed to the DuraCloud source by default since
+     *     2026-08-03) may simply not be there yet.
+     * Both usually resolve with time; neither should burn the short
+     * budget or dead-letter on first sight.
+     */
+    return /not found in (AM Storage Service|DuraCloud)/i.test(error_text || '');
 }
 
 /*

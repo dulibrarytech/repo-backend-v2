@@ -258,6 +258,63 @@ describe('ingester/stages/aip_store — Stage 6', () => {
         expect(after.pipeline_state).toBe('AIP_STORE_COMPLETE');
     });
 
+    it('records COPIED_FROM_DURACLOUD when curation-side routing served from DuraCloud', async () => {
+        /*
+         * 2026-08-03: large AIPs route to DuraCloud INSIDE the curation
+         * service, so a plain copy_to_wasabi response can come back
+         * with source='duracloud'. Provenance must follow the
+         * response, not just the request flag.
+         */
+        const { queue_id, pid } = await seed_pipeline_at_stage_6();
+        const row = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        const client = make_fake_client({
+            copy_to_wasabi: async () => ({
+                status: 200,
+                data: {
+                    ok: true,
+                    bucket: 'library-repository',
+                    key: 'aip-store/pkg-abc.7z',
+                    bytes: 4096,
+                    elapsed_ms: 90,
+                    source: 'duracloud',
+                },
+            }),
+        });
+        const result = await aip_store_stage.run(row, { client });
+        expect(result.ok).toBe(true);
+        const stored = await aip_store_model.get_by_uuid(pid);
+        expect(stored.message).toBe('COPIED_FROM_DURACLOUD');
+    });
+
+    it('a DuraCloud replication-lag 404 gets the generous ambiguous-not-found budget', async () => {
+        /*
+         * With DuraCloud the default source for large AIPs, a fresh
+         * AIP may not have replicated yet — the same ambiguous shape
+         * as AM's late registration, and it must be classified into
+         * the generous retry budget, not the short COPY_FAILED one.
+         */
+        const { queue_id, pid } = await seed_pipeline_at_stage_6();
+        const row = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        const client = make_fake_client({
+            copy_to_wasabi: async () => ({
+                status: 200,
+                data: {
+                    ok: false,
+                    error: 'AIP not found in DuraCloud (not replicated yet?): aip-store/x/y.7z',
+                    source: 'duracloud',
+                },
+            }),
+        });
+        const result = await aip_store_stage.run(row, { client });
+        expect(result.ok).toBe(false);
+        const stored = await aip_store_model.get_by_uuid(pid);
+        /* The not-found classification, not generic COPY_FAILED. */
+        expect(stored.message).toBe('AM_NOT_FOUND_RETRY');
+        expect(stored.attempts).toBe(1);
+        const after = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        expect(after.pipeline_state).toBe('AIP_STORE_PENDING');
+    });
+
     it('a failed DuraCloud attempt keeps the flag so the retry budget stays on DuraCloud', async () => {
         const { queue_id, pid } = await seed_pipeline_at_stage_6();
         await aip_store_model.upsert_by_uuid(pid, {
