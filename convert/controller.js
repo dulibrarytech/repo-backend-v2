@@ -24,6 +24,7 @@ const app_config = require('../config/app');
 const validator = require('validator');
 
 const model = require('./model');
+const user_model = require('../users/model');
 const { ValidationError } = require('../libs/errors');
 
 // --- render helpers (mirror indexer/controller.js) ------------------- //
@@ -94,8 +95,18 @@ function actor_of(req) {
     return String(u.du_id || u.sub || u.email || '');
 }
 
-function actor_name_of(req) {
+/*
+ * The operator's FULL NAME for the batch's "By" column. The JWT carries
+ * no name (sub/du_id/email only), so resolve it from the users table;
+ * the email is the last-resort fallback, not the display value.
+ */
+async function actor_name_of(req) {
     const u = req.user || {};
+    if (u.du_id) {
+        const names = await user_model.names_by_du_id([u.du_id]);
+        const name = names.get(String(u.du_id));
+        if (name) return name;
+    }
     return String(u.name || u.full_name || u.email || '');
 }
 
@@ -152,7 +163,7 @@ async function convert_start(req, res) {
         sip_uuid: sip_uuid || undefined,
         limit,
         actor: actor_of(req),
-        actor_name: actor_name_of(req),
+        actor_name: await actor_name_of(req),
     });
     const secs = Math.round(app_config().convert_service.delay_ms / 1000);
     trigger_toast(
@@ -176,7 +187,7 @@ async function convert_object(req, res) {
     const result = await model.enqueue({
         pid,
         actor: actor_of(req),
-        actor_name: actor_name_of(req),
+        actor_name: await actor_name_of(req),
     });
     /*
      * ASCII-only header value — no Unicode ellipsis (same gotcha the

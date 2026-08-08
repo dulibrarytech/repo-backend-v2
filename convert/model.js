@@ -22,6 +22,7 @@ const { basename } = require('node:path').posix;
 const { db, db_queue } = require('../config/db');
 const tables = require('../config/db_tables');
 const app_config = require('../config/app');
+const user_model = require('../users/model');
 const { ValidationError } = require('../libs/errors');
 
 const OBJECTS = tables.objects;
@@ -350,6 +351,23 @@ async function _counts_for(where) {
     return out;
 }
 
+/*
+ * Display label for a batch's "By" column: the operator's full name
+ * resolved from the users table by du_id (batches store the du_id in
+ * `actor`), falling back to the stored actor_name and then the raw
+ * actor. Heals rows recorded before names were stored (early batches
+ * carried the email in actor_name), and passes system batches straight
+ * through ('system' resolves to nothing → 'Ingest (auto)' shows).
+ */
+function batch_actor_label(batch, names) {
+    return (
+        names.get(String(batch.actor || '')) ||
+        batch.actor_name ||
+        batch.actor ||
+        ''
+    );
+}
+
 // Snapshot for the dashboard status panel.
 async function status_summary() {
     const cfg = app_config().convert_service;
@@ -386,6 +404,15 @@ async function status_summary() {
 
     // Recent batches + their counts in two queries (no N+1).
     const recent = await db_queue()(BATCHES).orderBy('id', 'desc').limit(8);
+
+    /*
+     * One name-resolution query for every actor on the panel ("By"
+     * column shows the operator's full name, not their du_id/email).
+     */
+    const actor_names = await user_model.names_by_du_id(
+        [latest && latest.actor, ...recent.map((b) => b.actor)].filter(Boolean)
+    );
+
     let history = [];
     if (recent.length > 0) {
         const ids = recent.map((b) => b.id);
@@ -414,7 +441,7 @@ async function status_summary() {
                 complete: c.COMPLETE,
                 failed: c.FAILED,
                 status: active ? 'running' : c.FAILED > 0 ? 'completed with errors' : 'completed',
-                actor: b.actor_name || b.actor || '',
+                actor: batch_actor_label(b, actor_names),
                 created_at: b.created_at,
             };
         });
@@ -430,7 +457,7 @@ async function status_summary() {
                   id: latest.id,
                   scope_type: latest.scope_type,
                   scope_label: latest.scope_type === 'object' ? latest.sip_uuid : latest.collection,
-                  actor: latest.actor_name || latest.actor || '',
+                  actor: batch_actor_label(latest, actor_names),
                   created_at: latest.created_at,
                   counts: latest_counts,
               }
