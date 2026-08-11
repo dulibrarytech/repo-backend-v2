@@ -107,14 +107,61 @@ function _apply_eligible_filter(q) {
 }
 
 /*
+ * sip_uuids that already have a LIVE Stage 6 queue row (PENDING or
+ * IN_PROGRESS, not complete). Objects matching these are excluded
+ * from eligibility so clicking Start while a prior batch is still
+ * draining cannot mint duplicate queue rows for the same AIPs
+ * (2026-08-07 — previously each re-click duplicated the in-flight
+ * set and the duplicates either drained as no-ops or, if the batch
+ * was cancelled, sat forever inflating the status counts).
+ *
+ * Deliberately NOT restricted to backfill batches: a real ingest
+ * currently at Stage 6 is about to copy its own AIP, so enqueuing a
+ * backfill row for it would be the same duplication. Deliberately
+ * NOT including AIP_STORE_FAILED rows (is_complete=0): those have
+ * exhausted their retries and never drain on their own — they must
+ * stay eligible or one failed batch would block its AIPs from every
+ * future backfill. Cancelled rows are is_complete=1, so a cancelled
+ * batch's AIPs become eligible again immediately — cancel + Start
+ * is the supported "re-run it" flow.
+ *
+ * Lives on the queue DB connection, so callers stitch it into the
+ * objects-DB query as a plain value list (no cross-DB join exists).
+ */
+async function _live_stage6_sip_uuids() {
+    const rows = await db_queue()(QUEUE)
+        .whereIn('pipeline_state', ['AIP_STORE_PENDING', 'AIP_STORE_IN_PROGRESS'])
+        .andWhere({ is_complete: 0 })
+        .distinct('sip_uuid');
+    return rows.map((r) => r.sip_uuid).filter(Boolean);
+}
+
+/*
+ * Mutate an eligible-rows query to also exclude the live-queue set —
+ * applied identically by count/preview/enqueue so the three can't
+ * disagree about what "eligible" means.
+ *
+ * Deliberately returns nothing: knex builders are thenables, so
+ * returning one from an async function makes the caller's `await`
+ * EXECUTE the query instead of receiving the builder.
+ */
+async function _apply_live_exclusion(q) {
+    const live = await _live_stage6_sip_uuids();
+    if (live.length > 0) q.whereNotIn('o.sip_uuid', live);
+}
+
+/*
  * Total count of eligible rows — drives the admin page's "N AIPs
- * missing" header before the operator clicks Start. Cheap: indexed
- * join + IS NULL filter. Returns a plain number.
+ * missing" header before the operator clicks Start. Excludes AIPs
+ * already queued or in flight (see _live_stage6_sip_uuids), so the
+ * headline is "missing AND not already being handled" — it matches
+ * exactly what the next Start click would take on. Returns a plain
+ * number.
  */
 async function count_missing_aips() {
-    const row = await _apply_eligible_filter(db()(OBJECTS))
-        .count({ n: 'o.id' })
-        .first();
+    const q = _apply_eligible_filter(db()(OBJECTS));
+    await _apply_live_exclusion(q);
+    const row = await q.count({ n: 'o.id' }).first();
     return row ? Number(row.n) : 0;
 }
 
@@ -126,7 +173,9 @@ async function count_missing_aips() {
  */
 async function preview_next_chunk(chunk_size) {
     const limit = _resolve_chunk_size(chunk_size);
-    return _apply_eligible_filter(db()(OBJECTS))
+    const q = _apply_eligible_filter(db()(OBJECTS));
+    await _apply_live_exclusion(q);
+    return q
         .select({ pid: 'o.pid', sip_uuid: 'o.sip_uuid' })
         .orderBy('o.id', 'asc')
         .limit(limit);
@@ -141,25 +190,20 @@ async function preview_next_chunk(chunk_size) {
  * batch_marker is the full `batch` column value written to each row
  * (`<BACKFILL_BATCH_PREFIX><batch_uuid>`); count is how many rows
  * landed.
- * 
- * Idempotent against an in-flight prior backfill: the eligibility
- * check uses `aip_store.is_migrated IN (5,6)` AS the "already done"
- * signal, NOT presence in the ingest_queue. So a row that's currently
- * AIP_STORE_PENDING in the queue (from a prior backfill chunk) is
- * STILL eligible. Two consequences:
- * 
- *   - Re-running Start before the prior chunk drains will create
- *     duplicate queue rows for the same pid. Stage 6 will copy the
- *     AIP once (idempotent on the Wasabi side via head_object),
- *     write tbl_aip_store, and the second queue row drains as a
- *     no-op via the "already_copied" short-circuit.
- * 
- *   - Worth flagging in the operator runbook: "wait until the
- *     current backfill finishes before starting another."
+ *
+ * Idempotent against an in-flight prior backfill (2026-08-07): the
+ * eligibility check excludes sip_uuids that already have a live
+ * Stage 6 queue row (see _live_stage6_sip_uuids), so re-clicking
+ * Start before the prior chunk drains enqueues only AIPs the queue
+ * is NOT already handling — never duplicates. AIPs whose rows were
+ * cancelled or exhausted their retries (AIP_STORE_FAILED) are NOT
+ * excluded; a new Start picks them up again by design.
  */
 async function enqueue_backfill_batch({ chunk_size, actor = '' } = {}) {
     const limit = _resolve_chunk_size(chunk_size);
-    const candidates = await _apply_eligible_filter(db()(OBJECTS))
+    const eligible = _apply_eligible_filter(db()(OBJECTS));
+    await _apply_live_exclusion(eligible);
+    const candidates = await eligible
         .select({ pid: 'o.pid', sip_uuid: 'o.sip_uuid' })
         .orderBy('o.id', 'asc')
         .limit(limit);
@@ -198,43 +242,71 @@ async function enqueue_backfill_batch({ chunk_size, actor = '' } = {}) {
 }
 
 /*
- * Counts for the admin page's status panel. Returns shape:
+ * Counts for the admin page's status panel, scoped to the LATEST
+ * batch (2026-08-07 — previously every historical batch was counted
+ * forever, so the total grew by chunk_size on each cancel + Start
+ * cycle and cancelled rows silently padded it without appearing in
+ * any per-state counter). Returns shape:
  *   {
- *     total_backfill_rows,
+ *     total_backfill_rows,        // rows in the latest batch
  *     pending,
  *     in_progress,
  *     complete,
  *     failed,
+ *     cancelled,
  *     latest_batch_marker | null,
  *     latest_batch_started_at | null,
  *     top_failure_reasons: [{ reason, count }, ...] (up to 3),
  *   }
- * 
- * One indexed GROUP BY on (batch LIKE prefix) + a tail query for
- * the most recent batch. Cheap enough to poll every 2s.
- * 
+ * with total = pending + in_progress + complete + failed + cancelled.
+ * With no batches yet, everything is zero/null.
+ *
+ * Two bounded queries: a LIMIT-1 tail for the latest marker + one
+ * GROUP BY over that batch's rows. Cheap enough to poll every 2s.
+ *
  * top_failure_reasons is the dominant signal an operator needs when
  * triaging a failed backfill — "is curation reachable", "is AIP_BUCKET
  * configured", "is AM responding". We bucket queue.error text and
- * surface the top three.
+ * surface the top three — also scoped to the latest batch, so stale
+ * reasons from long-fixed problems don't haunt the panel.
  */
 async function get_status() {
-    const rows = await db_queue()(QUEUE)
-        .where('batch', 'like', `${BACKFILL_BATCH_PREFIX}%`)
-        .select('pipeline_state', 'is_complete')
-        .select(db_queue().raw('COUNT(*) as n'))
-        .groupBy('pipeline_state', 'is_complete');
-
     const summary = {
         total_backfill_rows: 0,
         pending: 0,
         in_progress: 0,
         complete: 0,
         failed: 0,
+        cancelled: 0,
         latest_batch_marker: null,
         latest_batch_started_at: null,
         top_failure_reasons: [],
     };
+
+    /*
+     * Find the most recent batch_marker first — it scopes everything
+     * else. Bounded by LIMIT 1 so this stays O(1) on the (batch,
+     * created) index even with hundreds of historical batches; id is
+     * the tiebreaker for same-second inserts across batches.
+     */
+    const latest = await db_queue()(QUEUE)
+        .where('batch', 'like', `${BACKFILL_BATCH_PREFIX}%`)
+        .orderBy([
+            { column: 'created', order: 'desc' },
+            { column: 'id', order: 'desc' },
+        ])
+        .select('batch', 'created')
+        .first();
+    if (!latest) return summary;
+    summary.latest_batch_marker = latest.batch;
+    summary.latest_batch_started_at = latest.created;
+
+    const rows = await db_queue()(QUEUE)
+        .where({ batch: latest.batch })
+        .select('pipeline_state', 'is_complete')
+        .select(db_queue().raw('COUNT(*) as n'))
+        .groupBy('pipeline_state', 'is_complete');
+
     for (const r of rows) {
         const n = Number(r.n);
         summary.total_backfill_rows += n;
@@ -246,36 +318,14 @@ async function get_status() {
             summary.in_progress += n;
         } else if (r.pipeline_state === 'AIP_STORE_PENDING') {
             summary.pending += n;
+        } else if (r.pipeline_state === 'CANCELLED_BY_USER') {
+            summary.cancelled += n;
         }
     }
 
-    /*
-     * Find the most recent batch_marker (max created across rows in
-     * that batch). Bounded by LIMIT 1 so this stays O(1) on the
-     * (batch, created) index — even with hundreds of historical
-     * batches.
-     */
-    const latest = await db_queue()(QUEUE)
-        .where('batch', 'like', `${BACKFILL_BATCH_PREFIX}%`)
-        .orderBy('created', 'desc')
-        .select('batch', 'created')
-        .first();
-    if (latest) {
-        summary.latest_batch_marker = latest.batch;
-        summary.latest_batch_started_at = latest.created;
-    }
-
-    /*
-     * Top failure reasons across all backfill rows. We bucket on the
-     * FIRST 80 chars of error text so distinct AIP UUIDs in the same
-     * error message don't fragment the count (e.g. "AIP <uuid-A> not
-     * found" and "AIP <uuid-B> not found" share the same actionable
-     * diagnosis — they should aggregate). Cap at 3 to keep the status
-     * panel readable; the AIPs page filter shows the full set.
-     */
     if (summary.failed > 0) {
         const failed_rows = await db_queue()(QUEUE)
-            .where('batch', 'like', `${BACKFILL_BATCH_PREFIX}%`)
+            .where({ batch: latest.batch })
             .andWhere({ pipeline_state: 'AIP_STORE_FAILED' })
             .select('error');
         const buckets = new Map();

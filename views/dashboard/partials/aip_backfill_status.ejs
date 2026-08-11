@@ -16,7 +16,15 @@
     <dt class="col-5 text-muted">Missing AIPs</dt>
     <dd class="col-7">
         <strong><%= missing.toLocaleString() %></strong>
-        <% if (missing === 0) { %>
+        <%/* The missing count excludes AIPs a live queue row is
+             already handling, so it always equals what the next
+             Start click would take on. Say so while a batch is
+             draining, or "0" next to a busy queue reads as done. */%>
+        <% if (status.pending + status.in_progress > 0) { %>
+            <span class="text-muted small ms-2">
+                excludes <%= (status.pending + status.in_progress).toLocaleString() %> already queued below
+            </span>
+        <% } else if (missing === 0) { %>
             <span class="text-success ms-2">All caught up.</span>
         <% } %>
     </dd>
@@ -38,7 +46,11 @@
         <% } %>
     </dd>
 
-    <dt class="col-5 text-muted">Total backfill rows</dt>
+    <%/* All per-state counts (and the row total) are scoped to the
+         LATEST batch — get_status stopped counting historical batches
+         2026-08-07, so total = pending + in flight + complete +
+         failed + cancelled always holds. */%>
+    <dt class="col-5 text-muted">Batch rows</dt>
     <dd class="col-7"><%= status.total_backfill_rows.toLocaleString() %></dd>
 
     <dt class="col-5 text-muted">Pending</dt>
@@ -60,6 +72,11 @@
                 - see the AIPs page, filter status=failed, then Retry kabob
             </span>
         </dd>
+    <% } %>
+
+    <% if (status.cancelled > 0) { %>
+        <dt class="col-5 text-muted">Cancelled</dt>
+        <dd class="col-7 text-muted"><%= status.cancelled.toLocaleString() %></dd>
     <% } %>
 </dl>
 
@@ -86,14 +103,13 @@
     </div>
 <% } %>
 
-<%/* Progress bar — visible whenever there's any backfill activity
-     (pending or in-flight). Math: complete / total_backfill_rows of
-     the CURRENT batch series. We compute on the full backfill row
-     set rather than per-batch because the dashboard's primary signal
-     is "are we making progress" — per-batch breakdowns belong in the
-     timeline view, which we don't render here. */%>
-<% if (status.total_backfill_rows > 0) { %>
-    <% const pct = Math.min(100, Math.round((status.complete / status.total_backfill_rows) * 100)); %>
+<%/* Progress bar — complete / (batch rows - cancelled), so a
+     partially-cancelled batch can still reach 100%: cancelled rows
+     are work the operator withdrew, not work left to do. Hidden once
+     everything remaining is cancelled (denominator 0). */%>
+<% const progress_denom = status.total_backfill_rows - status.cancelled; %>
+<% if (progress_denom > 0) { %>
+    <% const pct = Math.min(100, Math.round((status.complete / progress_denom) * 100)); %>
     <div class="progress" style="height: 12px; margin-bottom: 12px;">
         <div class="progress-bar <%= status.failed > 0 ? 'bg-warning' : '' %>"
              role="progressbar"

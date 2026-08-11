@@ -153,16 +153,102 @@ describe('ingester/aip_backfill', () => {
                 chunk_size: 2,
             });
             expect(result.count).toBe(2);
-            // 3 still missing after the first chunk.
-            expect(await aip_backfill.count_missing_aips()).toBe(5);
             /*
-             * The 2 rows just enqueued are still in the queue, but
-             * count_missing_aips is based on the aip_store table —
-             * they only drop out once Stage 6 runs and writes a
-             * success row. (This is the documented "wait for the
-             * current backfill to finish before starting another"
-             * operator caveat.)
+             * The 2 rows just enqueued are excluded from the missing
+             * count while their queue rows are live (2026-08-07) —
+             * the headline always equals what the NEXT Start click
+             * would take on, so a second click here enqueues the
+             * remaining 3, never duplicates of the pending 2.
              */
+            expect(await aip_backfill.count_missing_aips()).toBe(3);
+            const second = await aip_backfill.enqueue_backfill_batch({
+                chunk_size: 10,
+            });
+            expect(second.count).toBe(3);
+        });
+    });
+
+    describe('eligibility vs. the live queue (no duplicate minting)', () => {
+        it('a second Start while the first batch is pending enqueues nothing new', async () => {
+            /*
+             * Regression (2026-08-07): eligibility ignored the queue,
+             * so each Start re-enqueued the same in-flight AIPs —
+             * total grew by chunk_size per click and cancelled
+             * duplicates never drained.
+             */
+            await db_helper.seed_object({ sip_uuid: 'aip-x' });
+            await db_helper.seed_object({ sip_uuid: 'aip-y' });
+            const first = await aip_backfill.enqueue_backfill_batch();
+            expect(first.count).toBe(2);
+
+            expect(await aip_backfill.count_missing_aips()).toBe(0);
+            expect(await aip_backfill.preview_next_chunk(10)).toEqual([]);
+            const second = await aip_backfill.enqueue_backfill_batch();
+            expect(second.count).toBe(0);
+            expect(second.batch_marker).toBeNull();
+        });
+
+        it('only the not-yet-queued AIPs are enqueued by a second Start', async () => {
+            await db_helper.seed_object({ sip_uuid: 'aip-x' });
+            await aip_backfill.enqueue_backfill_batch();
+            // A new object becomes eligible after the first batch.
+            const later = await db_helper.seed_object({ sip_uuid: 'aip-z' });
+
+            expect(await aip_backfill.count_missing_aips()).toBe(1);
+            const second = await aip_backfill.enqueue_backfill_batch();
+            expect(second.count).toBe(1);
+            const queued = await db_queue()(QUEUE)
+                .where({ batch: second.batch_marker })
+                .select('sip_uuid');
+            expect(queued.map((r) => r.sip_uuid)).toEqual([later.sip_uuid]);
+        });
+
+        it('cancelled rows do NOT block re-enqueue (cancel + Start = re-run)', async () => {
+            await db_helper.seed_object({ sip_uuid: 'aip-x' });
+            const first = await aip_backfill.enqueue_backfill_batch();
+            await aip_backfill.cancel_backfill(first.batch_marker);
+
+            expect(await aip_backfill.count_missing_aips()).toBe(1);
+            const second = await aip_backfill.enqueue_backfill_batch();
+            expect(second.count).toBe(1);
+        });
+
+        it('AIP_STORE_FAILED rows (retries exhausted) do NOT block re-enqueue', async () => {
+            /*
+             * Failed rows rest at is_complete=0 forever — if they
+             * counted as "live" they'd permanently exclude their AIPs
+             * from every future backfill.
+             */
+            await db_helper.seed_object({ sip_uuid: 'aip-x' });
+            const first = await aip_backfill.enqueue_backfill_batch();
+            await db_queue()(QUEUE).where({ batch: first.batch_marker }).update({
+                status: 'AIP_STORE_FAILED',
+                pipeline_state: 'AIP_STORE_FAILED',
+                is_complete: 0,
+            });
+
+            expect(await aip_backfill.count_missing_aips()).toBe(1);
+            const second = await aip_backfill.enqueue_backfill_batch();
+            expect(second.count).toBe(1);
+        });
+
+        it('a live NON-backfill Stage 6 row also excludes its AIP', async () => {
+            /*
+             * A real ingest already at Stage 6 is about to copy its
+             * own AIP — a backfill row for it would be the same
+             * duplication the live-queue check exists to prevent.
+             */
+            const obj = await db_helper.seed_object({ sip_uuid: 'aip-real' });
+            await db_queue()(QUEUE).insert({
+                package: 'real',
+                batch: 'real-batch',
+                collection_uuid: 'cf',
+                sip_uuid: obj.sip_uuid,
+                status: 'AIP_STORE_PENDING',
+                pipeline_state: 'AIP_STORE_PENDING',
+                is_complete: 0,
+            });
+            expect(await aip_backfill.count_missing_aips()).toBe(0);
         });
     });
 
@@ -174,7 +260,47 @@ describe('ingester/aip_backfill', () => {
             expect(status.in_progress).toBe(0);
             expect(status.complete).toBe(0);
             expect(status.failed).toBe(0);
+            expect(status.cancelled).toBe(0);
             expect(status.latest_batch_marker).toBeNull();
+        });
+
+        it('scopes counts to the LATEST batch and counts cancelled rows', async () => {
+            /*
+             * Regression (2026-08-07): counts previously spanned every
+             * historical batch, so the total grew by chunk_size per
+             * cancel + Start cycle and cancelled rows padded it
+             * without appearing in any per-state bucket.
+             */
+            await db_helper.seed_object({ sip_uuid: 'aip-x' });
+            await db_helper.seed_object({ sip_uuid: 'aip-y' });
+            const first = await aip_backfill.enqueue_backfill_batch();
+            await aip_backfill.cancel_backfill(first.batch_marker);
+            const second = await aip_backfill.enqueue_backfill_batch();
+            expect(second.count).toBe(2);
+            // Cancel ONE of the second batch's rows too.
+            const rows = await db_queue()(QUEUE)
+                .where({ batch: second.batch_marker })
+                .orderBy('id', 'asc');
+            await db_queue()(QUEUE).where({ id: rows[0].id }).update({
+                status: 'CANCELLED_BY_USER',
+                pipeline_state: 'CANCELLED_BY_USER',
+                is_complete: 1,
+            });
+
+            const status = await aip_backfill.get_status();
+            expect(status.latest_batch_marker).toBe(second.batch_marker);
+            // First batch's 2 cancelled rows are NOT counted anywhere.
+            expect(status.total_backfill_rows).toBe(2);
+            expect(status.pending).toBe(1);
+            expect(status.cancelled).toBe(1);
+            // The invariant the panel renders: total = sum of buckets.
+            expect(
+                status.pending +
+                    status.in_progress +
+                    status.complete +
+                    status.failed +
+                    status.cancelled
+            ).toBe(status.total_backfill_rows);
         });
 
         it('aggregates counts by pipeline_state for backfill rows only', async () => {
