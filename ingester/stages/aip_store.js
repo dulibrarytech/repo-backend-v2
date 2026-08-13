@@ -475,6 +475,18 @@ async function _resolve_repo_pid(deps, row) {
  * A match is NOT immediately terminal — see the not-found attempt budget in
  * _record_failure.
  */
+/*
+ * AM reports status=DELETED for an AIP removed via the Storage
+ * Service. Terminal by definition — no retry can resurrect it. The
+ * row is dead-lettered into the permanently-decided orphan class
+ * (is_migrated=8) with message AM_DELETED, which the backfill's
+ * eligibility filter excludes, so a deleted AIP is enqueued at most
+ * once ever (2026-08-11: one burned "will retry" cycles forever).
+ */
+function _is_am_deleted_error(error_text) {
+    return /AM status is DELETED/i.test(error_text || '');
+}
+
 function _is_am_not_found_error(error_text) {
     /*
      * Two ambiguous not-found shapes share the generous retry budget:
@@ -521,6 +533,49 @@ async function _record_failure({
     }
     const prior_attempts = existing && Number.isFinite(existing.attempts) ? existing.attempts : 0;
     const next_attempts = prior_attempts + 1;
+
+    if (_is_am_deleted_error(truncated)) {
+        try {
+            await aip_store_model.upsert_by_uuid(pid, {
+                aip_uuid: row.sip_uuid,
+                source: aip_store_model.SOURCE.INGEST_V2,
+                is_migrated: aip_store_model.STATUS.AM_NOT_FOUND,
+                attempts: next_attempts,
+                next_attempt_at: null,
+                error: truncated,
+                message: 'AM_DELETED',
+            });
+        } catch (err) {
+            log.warn({
+                event: 'aip_store_upsert_failed',
+                queue_id: row.id,
+                pid,
+                err: err.message,
+            });
+        }
+        await model.update_queue(
+            { id: row.id },
+            { status: 'AIP_STORE_FAILED', is_complete: 1, error: truncated },
+            {
+                actor: 'worker',
+                event_type: 'state_change',
+                payload: {
+                    stage: 'aip_store',
+                    step: 'am_deleted',
+                    pid,
+                    wire_status,
+                    error: truncated,
+                },
+            }
+        );
+        return {
+            ok: false,
+            pid,
+            am_deleted: true,
+            final_state: 'AIP_STORE_FAILED',
+            error: truncated,
+        };
+    }
     /*
      * A not-found gets its own, more generous attempt budget
      * (not_found_max_attempts, default 8) because the message is ambiguous

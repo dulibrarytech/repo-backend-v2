@@ -360,6 +360,36 @@ describe('ingester/stages/aip_store — Stage 6', () => {
         expect(after.pipeline_state).toBe('AIP_STORE_COMPLETE');
     });
 
+    it('AM status DELETED dead-letters immediately into the permanently-decided class', async () => {
+        /*
+         * 2026-08-11 backfill: a DELETED AIP retried forever as "will
+         * retry". DELETED is terminal by definition — dead-letter into
+         * the orphan class (is_migrated=8, message AM_DELETED) so the
+         * backfill eligibility filter never re-enqueues it, and close
+         * the queue row (is_complete=1: nothing staff can do).
+         */
+        const { queue_id, pid } = await seed_pipeline_at_stage_6();
+        const row = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        const client = make_fake_client({
+            copy_to_wasabi: async () => ({
+                status: 200,
+                data: {
+                    ok: false,
+                    error: 'AM status is DELETED — the AIP was deleted from Archivematica; skipping permanently',
+                },
+            }),
+        });
+        const result = await aip_store_stage.run(row, { client });
+        expect(result.ok).toBe(false);
+        expect(result.am_deleted).toBe(true);
+        const stored = await aip_store_model.get_by_uuid(pid);
+        expect(stored.is_migrated).toBe(aip_store_model.STATUS.AM_NOT_FOUND);
+        expect(stored.message).toBe('AM_DELETED');
+        const after = await db_queue()(QUEUE).where({ id: queue_id }).first();
+        expect(after.pipeline_state).toBe('AIP_STORE_FAILED');
+        expect(after.is_complete).toBe(1);
+    });
+
     it('abort mid-copy returns aborted WITHOUT recording a failure (staff Stop / shutdown)', async () => {
         /*
          * The row's AbortSignal now rides into the copy HTTP call. On
