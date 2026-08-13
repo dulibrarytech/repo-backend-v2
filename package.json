@@ -1,6 +1,6 @@
 {
   "name": "repo-backend-v2",
-  "version": "2.0.4.55-beta",
+  "version": "2.0.5.56-beta",
   "description": "Digital DU Repository dashboard (ingest-service)",
   "main": "repo-backend-v2.js",
   "private": true,
