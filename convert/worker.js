@@ -206,10 +206,20 @@ function create_worker({ client = client_default } = {}) {
                 await model.mark_complete(row.id, { http_status: status, body });
                 log.info({ event: 'convert_ok', id: row.id, object: row.object_name, status });
             } else {
+                /*
+                 * Carry the service's own message into last_error so the
+                 * dashboard names the condition ("source TIFF is
+                 * undecodable — dip-store copy likely corrupt or
+                 * truncated") instead of a bare status code.
+                 */
+                const detail =
+                    body && typeof body.message === 'string' && body.message.trim() !== ''
+                        ? ` — ${body.message.trim()}`
+                        : '';
                 const res = await model.mark_failed(row, {
                     http_status: status,
                     body,
-                    error: `HTTP ${status}`,
+                    error: `HTTP ${status}${detail}`,
                 });
                 log.warn({
                     event: 'convert_http_error',

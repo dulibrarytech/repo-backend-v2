@@ -185,6 +185,40 @@ describe('convert/worker — deferred verification', () => {
         expect(completed).toHaveLength(1);
     });
 
+    it('a non-2xx conversion records the service message in last_error', async () => {
+        /*
+         * The curation service names damaged sources (422 "source TIFF
+         * is undecodable — …corrupt or truncated…"). That verdict must
+         * reach the dashboard, not collapse to a bare "HTTP 422".
+         */
+        const client = make_client({
+            converts: [{
+                status: 422,
+                body: { error: true, message: 'source TIFF is undecodable — dip-store copy likely corrupt' },
+            }],
+        });
+        const worker = create_worker({ client });
+        claim_queue.push(make_row(11));
+
+        await worker.tick();
+        expect(completed).toHaveLength(0);
+        expect(failed).toHaveLength(1);
+        expect(failed[0].http_status).toBe(422);
+        expect(failed[0].error).toBe(
+            'HTTP 422 — source TIFF is undecodable — dip-store copy likely corrupt'
+        );
+    });
+
+    it('a non-2xx conversion without a message falls back to the bare status', async () => {
+        const client = make_client({ converts: [{ status: 500, body: {} }] });
+        const worker = create_worker({ client });
+        claim_queue.push(make_row(12));
+
+        await worker.tick();
+        expect(failed).toHaveLength(1);
+        expect(failed[0].error).toBe('HTTP 500');
+    });
+
     it('CONVERT_VERIFY_ENABLED=false restores the old ACK-completes behavior', async () => {
         const saved = process.env.CONVERT_VERIFY_ENABLED;
         process.env.CONVERT_VERIFY_ENABLED = 'false';
