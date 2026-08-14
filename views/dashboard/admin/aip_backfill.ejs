@@ -11,9 +11,10 @@
 <p class="page-subtitle">
     Each click of <em>Start backfill</em> enqueues up to
     <code><%= chunk_size %></code> AIPs from the missing set into the
-    ingest worker, which copies them from Archivematica Storage Service
-    to Wasabi via the curation API. Run repeatedly until the missing
-    count is zero.
+    ingest worker, which copies them to Wasabi via the curation API —
+    sourced from DuraCloud for large AIPs (1&nbsp;GB and up) and from
+    Archivematica Storage Service for smaller ones. Run repeatedly
+    until the missing count is zero.
 </p>
 
 <% if (!aip_store_enabled) { %>
