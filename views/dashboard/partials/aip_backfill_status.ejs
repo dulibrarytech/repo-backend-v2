@@ -81,13 +81,24 @@
 </dl>
 
 <%/* Top failure reasons. Visible only when there's something to
-     show. The dominant cause of a failed backfill is almost always
-     a configuration issue at the curation/AM/Wasabi boundary
-     (WASABI_AIP_BUCKET unset, curation unreachable, AM 404 on the
-     sip_uuid). Surfacing the top reasons inline saves the operator
-     a trip to the AIPs page + per-row hover. UUIDs are token-
-     normalized so per-row variation doesn't fragment buckets. */%>
-<% if (status.top_failure_reasons && status.top_failure_reasons.length > 0) { %>
+     show AND something to act on. The dominant cause of a failed
+     backfill is almost always a configuration issue at the
+     curation/AM/Wasabi boundary (WASABI_AIP_BUCKET unset, curation
+     unreachable, AM 404 on the sip_uuid). Surfacing the top reasons
+     inline saves the operator a trip to the AIPs page + per-row
+     hover. UUIDs are token-normalized so per-row variation doesn't
+     fragment buckets.
+
+     Hidden once the process is COMPLETE and caught up (batch settled
+     + missing === 0): retry-recoverable failures re-enter the missing
+     set, so at missing 0 every remaining failure is permanently
+     decided (AM_DELETED / orphan) — nothing actionable, and a warning
+     box under "All caught up." reads as a false alarm (2026-08-13). */%>
+<% const batch_settled = status.pending + status.in_progress === 0; %>
+<% const show_failure_reasons = status.top_failure_reasons
+    && status.top_failure_reasons.length > 0
+    && !(batch_settled && missing === 0); %>
+<% if (show_failure_reasons) { %>
     <div class="alert alert-warning" role="alert" style="margin-bottom: 12px;">
         <div style="font-weight: 600; margin-bottom: 4px;">
             Top failure reasons
