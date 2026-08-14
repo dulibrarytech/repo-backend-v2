@@ -196,6 +196,55 @@ describe('libs/object_projection', () => {
             expect(projection.enrich({ pid: 'p-id4' }).identifier).toBeNull();
         });
 
+        it('derives the identifier from a raw ASpace record when no identifiers array exists', () => {
+            /*
+             * Most collection rows store the UNtransformed ASpace JSON
+             * under display_record.display_record (no identifiers array).
+             * The call number must still surface: id_0..id_3 joined for
+             * resources, component_id for archival objects.
+             */
+            const resource = projection.enrich({
+                pid: 'p-id5',
+                display_record: JSON.stringify({
+                    title: 'Raw resource',
+                    display_record: {
+                        jsonmodel_type: 'resource',
+                        id_0: 'D009',
+                    },
+                }),
+            });
+            expect(resource.identifier).toBe('D009');
+            const multi = projection.enrich({
+                pid: 'p-id6',
+                display_record: JSON.stringify({
+                    display_record: {
+                        jsonmodel_type: 'resource',
+                        id_0: 'B002',
+                        id_1: '01',
+                    },
+                }),
+            });
+            expect(multi.identifier).toBe('B002.01');
+            const archival = projection.enrich({
+                pid: 'p-id7',
+                display_record: JSON.stringify({
+                    display_record: {
+                        jsonmodel_type: 'archival_object',
+                        component_id: 'U212.02',
+                    },
+                }),
+            });
+            expect(archival.identifier).toBe('U212.02');
+            // Raw record with no ids at all still nulls out cleanly.
+            const bare = projection.enrich({
+                pid: 'p-id8',
+                display_record: JSON.stringify({
+                    display_record: { jsonmodel_type: 'resource' },
+                }),
+            });
+            expect(bare.identifier).toBeNull();
+        });
+
         it('exposes media_category derived from the row mime_type', () => {
             expect(projection.enrich({ pid: 'a', mime_type: 'audio/mpeg' }).media_category).toBe('audio');
             expect(projection.enrich({ pid: 'b', mime_type: 'application/pdf' }).media_category).toBe('pdf');

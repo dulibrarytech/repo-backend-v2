@@ -36,11 +36,32 @@
                     </a>
                 </div>
             <% } %>
-            <div class="font-monospace text-muted"
-                 style="font-size: 12px;"
-                 title="<%= item.pid %>">
-                <%= item.pid %>
-            </div>
+            <% if (!item.handle) { %>
+                <%/* PID fallback — every minted handle embeds the PID, so
+                     the standalone line is redundant when a handle renders
+                     above. Same rule as object_row.ejs. */%>
+                <div class="font-monospace text-muted"
+                     style="font-size: 12px;"
+                     title="<%= item.pid %>">
+                    <%= item.pid %>
+                </div>
+            <% } %>
+            <% if (item.identifier) { %>
+                <%/* ASpace call number (id_0..id_3 for resources, e.g.
+                     D009) — same line style and ordering (call number
+                     above URI) as object_row.ejs. */%>
+                <div class="font-monospace text-muted"
+                     style="font-size: 12px; word-break: break-all;"
+                     title="ArchivesSpace identifier">
+                    <%= item.identifier %>
+                </div>
+            <% } %>
+            <% if (item.uri) { %>
+                <div class="font-monospace text-muted"
+                     style="font-size: 12px; word-break: break-all;">
+                    <%= item.uri %>
+                </div>
+            <% } %>
         </div>
     </td>
     <td>

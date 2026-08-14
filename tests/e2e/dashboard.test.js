@@ -2694,6 +2694,37 @@ describe('dashboard — e2e', () => {
             expect(apple).toBeLessThan(zebra); // A before Z
         });
 
+        it('GET /collections/list rows show handle, call number, and ASpace uri — not the pid', async () => {
+            /*
+             * Same identity block as object rows: handle first, then the
+             * call number (derived from the raw ASpace record's id_0),
+             * then the ArchivesSpace URI. The bare pid only renders as a
+             * fallback when no handle exists.
+             */
+            const cookie = await cookie_for('coll-row-ids');
+            const c = await db_helper.seed_object({
+                object_type: 'collection',
+                uri: '/repositories/2/resources/496',
+                handle: 'https://hdl.invalid/10176/coll-row-1',
+                display_record: JSON.stringify({
+                    title: 'Row Identity Papers',
+                    display_record: { jsonmodel_type: 'resource', id_0: 'D009' },
+                }),
+            });
+            const res = await supertest(app)
+                .get('/repo/dashboard/collections/list')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            const row = res.text.split(`id="collection-${c.pid}"`)[1].split('</tr>')[0];
+            expect(row).toContain('hdl.invalid/10176/coll-row-1');
+            expect(row).toContain('D009');
+            expect(row).toContain('/repositories/2/resources/496');
+            // pid appears only in attribute plumbing (links/hx URLs), not
+            // as its own identity line — the title cell must not carry it.
+            const identity_cell = row.split('package-sub')[1].split('</div>\n    </td>')[0];
+            expect(identity_cell).not.toContain(c.pid);
+        });
+
         it('GET /collections pre-selects the Title (A–Z) sort option', async () => {
             const cookie = await cookie_for('coll-sort-page');
             const res = await supertest(app).get('/repo/dashboard/collections').set('Cookie', cookie);

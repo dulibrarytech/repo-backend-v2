@@ -12,6 +12,7 @@
  */
 
 const app_config = require('../config/app');
+const { _build_identifiers } = require('./archivesspace_transform');
 
 function parse_display_record(raw) {
     if (raw === null || raw === undefined || raw === '') return {};
@@ -120,7 +121,18 @@ function enrich(row) {
         (dr.display_record && Array.isArray(dr.display_record.identifiers)
             ? dr.display_record.identifiers
             : null) ||
-        (Array.isArray(dr.identifiers) ? dr.identifiers : null);
+        (Array.isArray(dr.identifiers) ? dr.identifiers : null) ||
+        /*
+         * Raw-ASpace fallback: most collection rows store the untransformed
+         * resource/archival_object JSON under display_record.display_record
+         * (no identifiers array). _build_identifiers derives the same
+         * {type:'local', identifier} shape from id_0..id_3 / component_id
+         * that the transform emits, so call numbers (e.g. D009) surface
+         * for those rows too.
+         */
+        (dr.display_record && typeof dr.display_record === 'object'
+            ? _build_identifiers(dr.display_record)
+            : null);
     const first_id = ids && ids.length > 0 ? ids[0] : null;
     return {
         ...rest,

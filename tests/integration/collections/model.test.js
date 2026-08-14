@@ -41,6 +41,26 @@ describe('collections/model — DB integration', () => {
             expect(r.items[0].title).toBe('Collection One');
         });
 
+        it('carries the ASpace uri and call number for the list row', async () => {
+            /*
+             * The collections list renders handle → call number → uri
+             * (same as object rows). uri comes from the DB column;
+             * the call number derives from the raw ASpace record most
+             * collection display_records carry (id_0, no identifiers
+             * array — see libs/object_projection).
+             */
+            await db_helper.seed_object({
+                object_type: 'collection',
+                uri: '/repositories/2/resources/496',
+                display_record: dr('With URI', {
+                    display_record: { jsonmodel_type: 'resource', id_0: 'D009' },
+                }),
+            });
+            const r = await collections_model.list_collections();
+            expect(r.items[0].uri).toBe('/repositories/2/resources/496');
+            expect(r.items[0].identifier).toBe('D009');
+        });
+
         it('enriches each collection with member counts', async () => {
             const a = await db_helper.seed_object({
                 object_type: 'collection',

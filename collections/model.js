@@ -29,6 +29,7 @@ const COLLECTION_FIELDS = [
     'id',
     'pid',
     'handle',
+    'uri',
     'object_type',
     'is_member_of_collection',
     'is_published',
