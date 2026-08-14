@@ -243,10 +243,20 @@
     </div>
 
     <%/* aria-live="polite" announces filter/search updates to SR
-         users without interrupting whatever they're doing. */%>
+         users without interrupting whatever they're doing.
+
+         Filters ride in via hx-include (the hidden collection/is_active/
+         exclude_collections inputs above), NOT baked into the hx-get URL.
+         The pagination buttons inside the swapped-in objects_table partial
+         only carry page/page_size and INHERIT this div's hx-include — with
+         the filters in the URL instead, page 2+ would silently drop the
+         collection scope and list the whole corpus (same hazard note as
+         objects.ejs; params in both places would also duplicate into
+         req.query arrays). */%>
     <div id="objects-table"
-         hx-get="<%= dashboard_base %>/objects/list?collection=<%= collection.pid %>&is_active=1&exclude_collections=1"
+         hx-get="<%= dashboard_base %>/objects/list"
          hx-trigger="load, objects:refresh from:body"
+         hx-include="[name=q], [name=is_published], [name=collection], [name=is_active], [name=exclude_collections]"
          hx-swap="innerHTML"
          aria-live="polite"
          aria-atomic="false">

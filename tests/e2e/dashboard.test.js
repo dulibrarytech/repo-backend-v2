@@ -2792,6 +2792,39 @@ describe('dashboard — e2e', () => {
             expect(subtitle).toContain(c.pid);
         });
 
+        it('member-objects table scopes filters via hx-include, not the hx-get URL', async () => {
+            /*
+             * Regression: the pagination buttons inside the swapped-in
+             * objects_table partial carry only page/page_size and INHERIT
+             * the #objects-table div's hx-include. With the collection
+             * filter baked into the div's hx-get URL instead (and no
+             * hx-include), page 2+ dropped the scope and listed the whole
+             * corpus. Pin the wiring: bare list URL + hx-include that
+             * names every filter input.
+             */
+            const cookie = await cookie_for('coll-hdr-hxinclude');
+            const c = await db_helper.seed_object({
+                object_type: 'collection',
+                display_record: dr('Paged Papers'),
+            });
+            const res = await supertest(app)
+                .get(`/repo/dashboard/collections/${c.pid}`)
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            const div = res.text.split('id="objects-table"')[1].split('>')[0];
+            expect(div).toMatch(/hx-get="[^"]*\/objects\/list"/); // no query params
+            expect(div).not.toContain('collection=');
+            for (const name of ['q', 'is_published', 'collection', 'is_active', 'exclude_collections']) {
+                expect(div).toContain(`[name=${name}]`);
+            }
+            // The hidden inputs the hx-include selectors point at exist.
+            expect(res.text).toMatch(
+                new RegExp(`name="collection"[^>]*value="${c.pid}"`)
+            );
+            expect(res.text).toMatch(/name="is_active"[^>]*value="1"/);
+            expect(res.text).toMatch(/name="exclude_collections"[^>]*value="1"/);
+        });
+
         it('Details panel no longer carries a Handle row (moved to subtitle)', async () => {
             const cookie = await cookie_for('coll-hdr-details');
             const c = await db_helper.seed_object({

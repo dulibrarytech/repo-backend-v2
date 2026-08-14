@@ -619,8 +619,15 @@ describe('collections — e2e', () => {
             // Sub-collections section + the child collection's title.
             expect(res.text).toMatch(/Sub-collections/);
             expect(res.text).toContain('Nested Child Coll');
-            // Member list embed carries the exclude_collections flag.
-            expect(res.text).toMatch(/exclude_collections=1/);
+            /*
+             * Member list embed carries the exclude_collections flag — as a
+             * hidden input pulled in via the #objects-table div's hx-include
+             * (NOT baked into its hx-get URL, which would drop the filter on
+             * pagination; see dashboard.test.js "scopes filters via
+             * hx-include").
+             */
+            expect(res.text).toMatch(/name="exclude_collections"[^>]*value="1"/);
+            expect(res.text).toContain('[name=exclude_collections]');
         });
 
         it('member list partial excludes nested collections when exclude_collections=1', async () => {
