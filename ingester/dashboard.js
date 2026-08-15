@@ -19,6 +19,7 @@ const model = require('./model');
 const workspace = require('./workspace');
 const jobs = require('./jobs');
 const qa_service = require('./libs/qa_service');
+const aip_store_client = require('./libs/aip_store_client');
 const archivematica = require('../libs/archivematica');
 const duracloud = require('../libs/duracloud');
 const aspace = require('../libs/archivesspace');
@@ -1139,13 +1140,47 @@ async function services_wasabi_partial(req, res) {
         transport_error = err.message;
         log.warn({ event: 'services_wasabi_partial_unreachable', err: err.message });
     }
+    /*
+     * Storage-utilization readout: cached numbers from the curation
+     * side (a live listing of the batch bucket can take minutes, so
+     * the curation service walks it in the background and this call
+     * is always an instant cache read). Best-effort — an error here
+     * must not take down the health card.
+     */
+    let usage = null;
+    let usage_computing = false;
+    try {
+        const u = await aip_store_client.bucket_usage();
+        if (u.status === 200 && u.data && u.data.ok) {
+            usage = u.data.usage || null;
+            usage_computing = u.data.computing === true;
+        }
+    } catch (err) {
+        log.warn({ event: 'services_wasabi_usage_unavailable', err: err.message });
+    }
     render_partial(req, res, 'dashboard/partials/services_wasabi', {
         reachable,
         body,
         transport_error,
+        usage,
+        usage_computing,
         // Server-side stamp; the view renders it as a relative time client-side.
         checked_at: new Date().toISOString(),
     });
+}
+
+/*
+ * Force a bucket-usage recompute on the curation side, then re-render
+ * the Wasabi card (which will show "recalculating" until the walk
+ * finishes — the card's normal 30s poll picks up the fresh numbers).
+ */
+async function services_wasabi_usage_refresh(req, res) {
+    try {
+        await aip_store_client.bucket_usage_refresh();
+    } catch (err) {
+        log.warn({ event: 'services_wasabi_usage_refresh_failed', err: err.message });
+    }
+    return services_wasabi_partial(req, res);
 }
 
 // --- Internal --------------------------------------------------------
@@ -1221,6 +1256,7 @@ module.exports = {
     services_page,
     services_health_partial,
     services_wasabi_partial,
+    services_wasabi_usage_refresh,
     services_banner_partial,
     // exported for tests
     _run_probe,

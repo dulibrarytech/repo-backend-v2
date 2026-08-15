@@ -166,6 +166,46 @@ function create_client(http = http_default) {
         },
 
         /*
+         * Cached Wasabi bucket-utilization readout (batch backups +
+         * AIP store). Instant — the curation side serves a cache and
+         * recomputes in the background when stale; `computing: true`
+         * means poll again shortly. `refresh` forces a recompute.
+         */
+        async bucket_usage() {
+            const cfg = app_config().curation_api;
+            const url = build_url('bucket-usage');
+            try {
+                const res = await http.get(url, {
+                    timeout: Math.min(cfg.timeout_ms || 15_000, 15_000),
+                    headers: default_headers(),
+                    validateStatus: () => true,
+                });
+                return { status: res.status, data: res.data };
+            } catch (err) {
+                throw new UpstreamError(
+                    `curation /aip/bucket-usage failed: ${err.message}`
+                );
+            }
+        },
+
+        async bucket_usage_refresh() {
+            const cfg = app_config().curation_api;
+            const url = build_url('bucket-usage/refresh');
+            try {
+                const res = await http.post(url, {}, {
+                    timeout: Math.min(cfg.timeout_ms || 15_000, 15_000),
+                    headers: default_headers(),
+                    validateStatus: () => true,
+                });
+                return { status: res.status, data: res.data };
+            } catch (err) {
+                throw new UpstreamError(
+                    `curation /aip/bucket-usage/refresh failed: ${err.message}`
+                );
+            }
+        },
+
+        /*
          * Read live byte progress for an in-flight copy. The curation
          * side persists {bytes_sent, total_bytes, updated_at} to a
          * per-AIP progress file while its upload streams; this GET is

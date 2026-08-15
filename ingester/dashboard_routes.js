@@ -105,6 +105,17 @@ module.exports = function mount(app) {
      */
     app.get(`${admin_base}/health`, require_dashboard_auth, controller.services_health_partial);
     app.get(`${admin_base}/wasabi`, require_dashboard_auth, controller.services_wasabi_partial);
+    /*
+     * Storage-utilization refresh: forces the curation side to re-walk
+     * both buckets in the background, then re-renders the card.
+     */
+    app.post(
+        `${admin_base}/wasabi/usage-refresh`,
+        require_dashboard_auth,
+        can_ingest,
+        write_limiter(),
+        controller.services_wasabi_usage_refresh
+    );
 
     /*
      * Post-sign-in degraded-services banner. Lazy-loaded by the home page

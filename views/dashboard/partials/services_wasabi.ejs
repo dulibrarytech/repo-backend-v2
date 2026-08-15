@@ -90,6 +90,106 @@
         </div>
     <% } %>
 
+    <%/* Storage utilization — cached numbers from the curation side
+         (a live listing of the batch bucket takes minutes, so the
+         curation service walks both buckets in a background thread and
+         this card only ever reads the cache). Completed objects only:
+         in-progress/abandoned multipart parts don't appear in listings
+         but DO count on Wasabi's bill — the Wasabi console is the
+         billing-grade number. */%>
+    <%
+        const usage_buckets = [];
+        if (typeof usage !== 'undefined' && usage && usage.buckets) {
+            if (usage.buckets.aip_store) {
+                usage_buckets.push({ label: 'AIP store', data: usage.buckets.aip_store });
+            }
+            if (usage.buckets.batch_backups) {
+                usage_buckets.push({ label: 'Batch backups', data: usage.buckets.batch_backups });
+            }
+        }
+        const usage_is_computing = typeof usage_computing !== 'undefined' && usage_computing;
+        function fmt_bytes(n) {
+            const v = Number(n);
+            if (!isFinite(v) || v < 0) return '—';
+            if (v < 1024) return Math.round(v) + ' B';
+            const units = ['KB', 'MB', 'GB', 'TB', 'PB'];
+            let i = -1;
+            let x = v;
+            do { x /= 1024; i += 1; } while (x >= 1024 && i < units.length - 1);
+            return x.toFixed(2) + ' ' + units[i];
+        }
+        function fmt_usage_age(epoch_s) {
+            const t = Number(epoch_s);
+            if (!isFinite(t) || t <= 0) return null;
+            const m = Math.max(0, Math.round((Date.now() / 1000 - t) / 60));
+            if (m < 60) return m + 'm ago';
+            const h = Math.round(m / 60);
+            if (h < 48) return h + 'h ago';
+            return Math.round(h / 24) + 'd ago';
+        }
+        const usage_age = usage ? fmt_usage_age(usage.computed_at) : null;
+    %>
+    <div class="col-12">
+        <div class="text-muted small mb-1" style="margin-top: 8px;">
+            Storage utilization
+            <% if (usage_is_computing) { %>
+                <span class="text-muted">· recalculating…</span>
+            <% } else if (usage_age) { %>
+                <span class="text-muted">· as of <%= usage_age %></span>
+            <% } %>
+        </div>
+        <% if (usage_buckets.length > 0) { %>
+            <table class="table table-sm mb-1" style="max-width: 560px;">
+                <thead>
+                    <tr class="text-muted small">
+                        <th style="font-weight: 500;">Bucket</th>
+                        <th style="font-weight: 500;" class="text-end">Objects</th>
+                        <th style="font-weight: 500;" class="text-end">Size</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <% usage_buckets.forEach(function (b) { %>
+                        <tr>
+                            <td>
+                                <%= b.label %>
+                                <% if (b.data.bucket) { %>
+                                    <div class="text-muted small font-monospace">
+                                        <%= b.data.bucket %><%= b.data.prefix ? '/' + b.data.prefix : '' %>
+                                    </div>
+                                <% } %>
+                            </td>
+                            <% if (b.data.error) { %>
+                                <td colspan="2" class="text-warning small">
+                                    listing failed: <code><%= b.data.error %></code>
+                                </td>
+                            <% } else { %>
+                                <td class="text-end"><%= Number(b.data.objects).toLocaleString() %></td>
+                                <td class="text-end fw-semibold"><%= fmt_bytes(b.data.bytes) %></td>
+                            <% } %>
+                        </tr>
+                    <% }); %>
+                </tbody>
+            </table>
+        <% } else if (usage_is_computing) { %>
+            <div class="text-muted small">First calculation in progress — numbers appear on the next refresh.</div>
+        <% } else { %>
+            <div class="text-muted small">Not available (curation API older than this feature, or unreachable).</div>
+        <% } %>
+        <div class="d-flex align-items-center gap-3">
+            <button type="button" class="btn btn-sm btn-outline-secondary"
+                    hx-post="<%= dashboard_base %>/admin/services/wasabi/usage-refresh"
+                    hx-target="#wasabi-status"
+                    hx-swap="innerHTML"
+                    <%= usage_is_computing ? 'disabled' : '' %>>
+                Recalculate
+            </button>
+            <span class="text-muted small">
+                Completed objects only — the Wasabi console shows the billing view
+                (includes retained deleted data and any in-progress uploads).
+            </span>
+        </div>
+    </div>
+
     <div class="col-12">
         <div class="text-muted small" style="margin-top: 4px;">
             Last checked: <%= checked_at %>
