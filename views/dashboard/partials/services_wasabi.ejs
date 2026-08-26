@@ -25,16 +25,17 @@
                 <span class="sev-badge sev-fatal">FAILED</span>
             <% } %>
         </div>
-        <div class="text-muted small" style="margin-top: 4px;">
-            <% if (!reachable) { %>
-                Curation-API isn't responding. Check
-                <code>systemctl status curation-api</code> on the curation host.
-            <% } else if (body && body.ok) { %>
-                boto3 <code>head_bucket</code> succeeded.
-            <% } else { %>
-                boto3 <code>head_bucket</code> failed. Details below.
-            <% } %>
-        </div>
+        <%/* No caption in the OK state — the green badge says it all. */%>
+        <% if (!reachable || !(body && body.ok)) { %>
+            <div class="text-muted small" style="margin-top: 4px;">
+                <% if (!reachable) { %>
+                    Curation-API isn't responding. Check
+                    <code>systemctl status curation-api</code> on the curation host.
+                <% } else { %>
+                    boto3 <code>head_bucket</code> failed. Details below.
+                <% } %>
+            </div>
+        <% } %>
     </div>
 
     <div class="col-md-4">
@@ -46,9 +47,6 @@
                 <span class="text-muted">—</span>
             <% } %>
         </div>
-        <div class="text-muted small" style="margin-top: 4px;">
-            From <code>WASABI_BUCKET</code> on the curation host.
-        </div>
     </div>
 
     <div class="col-md-4">
@@ -59,9 +57,6 @@
             <% } else { %>
                 <span class="text-muted">—</span>
             <% } %>
-        </div>
-        <div class="text-muted small" style="margin-top: 4px;">
-            Single <code>head_bucket</code> round-trip.
         </div>
     </div>
 
