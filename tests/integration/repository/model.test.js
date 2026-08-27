@@ -97,6 +97,98 @@ describe('repository/model — DB integration', () => {
         expect(updated.is_published).toBe(0);
     });
 
+    describe('publish gate — unpublished parent collection', () => {
+        function seed_collection({ published, title = 'Gate Test Collection' } = {}) {
+            return db_helper.seed_object({
+                object_type: 'collection',
+                is_published: published ? 1 : 0,
+                display_record: JSON.stringify({ title }),
+            });
+        }
+
+        it('refuses to publish an object whose collection is unpublished, naming it', async () => {
+            const col = await seed_collection({ published: false });
+            const obj = await db_helper.seed_object({
+                is_published: 0,
+                is_member_of_collection: col.pid,
+            });
+            await expect(repo_model.publish(obj.pid)).rejects.toThrow(
+                /Gate Test Collection.*Publish the collection first/
+            );
+            const row = await repo_model.get(obj.pid);
+            expect(row.is_published).toBe(0);
+        });
+
+        it('publishes once the collection is published', async () => {
+            const col = await seed_collection({ published: true });
+            const obj = await db_helper.seed_object({
+                is_published: 0,
+                is_member_of_collection: col.pid,
+            });
+            const updated = await repo_model.publish(obj.pid);
+            expect(updated.is_published).toBe(1);
+        });
+
+        it('is not blocked by a dangling collection reference (legacy rows)', async () => {
+            const obj = await db_helper.seed_object({
+                is_published: 0,
+                is_member_of_collection: randomUUID(), // no such row
+            });
+            const updated = await repo_model.publish(obj.pid);
+            expect(updated.is_published).toBe(1);
+        });
+
+        it('gates nested sub-collections on their parent collection too', async () => {
+            const parent = await seed_collection({ published: false, title: 'Parent Col' });
+            const sub = await db_helper.seed_object({
+                object_type: 'collection',
+                is_published: 0,
+                is_member_of_collection: parent.pid,
+            });
+            await expect(repo_model.publish(sub.pid)).rejects.toThrow(/Parent Col/);
+        });
+
+        it('never gates suppress, even inside an unpublished collection', async () => {
+            const col = await seed_collection({ published: false });
+            const obj = await db_helper.seed_object({
+                is_published: 1,
+                is_member_of_collection: col.pid,
+            });
+            const updated = await repo_model.suppress(obj.pid);
+            expect(updated.is_published).toBe(0);
+        });
+
+        it('bulk_publish rejects the WHOLE batch when any pid is blocked', async () => {
+            const ok_col = await seed_collection({ published: true, title: 'Open Col' });
+            const bad_col = await seed_collection({ published: false, title: 'Closed Col' });
+            const ok = await db_helper.seed_object({
+                is_published: 0,
+                is_member_of_collection: ok_col.pid,
+            });
+            const blocked = await db_helper.seed_object({
+                is_published: 0,
+                is_member_of_collection: bad_col.pid,
+            });
+            await expect(repo_model.bulk_publish([ok.pid, blocked.pid])).rejects.toThrow(
+                /Closed Col.*Nothing was published/
+            );
+            // The whole batch was refused — the publishable row stayed put too.
+            expect((await repo_model.get(ok.pid)).is_published).toBe(0);
+            expect((await repo_model.get(blocked.pid)).is_published).toBe(0);
+        });
+
+        it('bulk_publish passes when every parent is published or codu:root', async () => {
+            const col = await seed_collection({ published: true });
+            const a = await db_helper.seed_object({
+                is_published: 0,
+                is_member_of_collection: col.pid,
+            });
+            const b = await db_helper.seed_object({ is_published: 0 }); // codu:root
+            const result = await repo_model.bulk_publish([a.pid, b.pid]);
+            expect(result.affected).toBe(2);
+        });
+    });
+
     it('soft_delete marks is_active=0 and stamps a delete_id', async () => {
         const seeded = await db_helper.seed_object({ is_active: 1, is_published: 0 });
         const result = await repo_model.soft_delete(seeded.pid, {

@@ -273,9 +273,15 @@ describe('collections/model — DB integration', () => {
         async function seed_collection_with_members({
             active_count = 3,
             nested_collection = false,
+            collection_published = true,
         }) {
+            /*
+             * Published by default: publish_members is gated on the
+             * collection itself being published (see the gate tests).
+             */
             const collection = await db_helper.seed_object({
                 object_type: 'collection',
+                is_published: collection_published ? 1 : 0,
                 display_record: dr('Parent Collection'),
             });
             for (let i = 0; i < active_count; i++) {
@@ -338,10 +344,33 @@ describe('collections/model — DB integration', () => {
         it('returns affected=0 for a collection with no members', async () => {
             const c = await db_helper.seed_object({
                 object_type: 'collection',
+                is_published: 1,
                 display_record: dr('Empty'),
             });
             const result = await collections_model.publish_members(c.pid);
             expect(result.affected).toBe(0);
+        });
+
+        it('refuses publish_members when the collection itself is unpublished', async () => {
+            const c = await seed_collection_with_members({
+                active_count: 2,
+                collection_published: false,
+            });
+            await expect(collections_model.publish_members(c.pid)).rejects.toThrow(
+                /Parent Collection.*Publish the collection first/
+            );
+            // Nothing flipped.
+            const members = await collections_model.members(c.pid, {});
+            for (const m of members.items) expect(m.is_published).toBe(0);
+        });
+
+        it('never gates suppress_members, even on an unpublished collection', async () => {
+            const c = await seed_collection_with_members({
+                active_count: 2,
+                collection_published: false,
+            });
+            const result = await collections_model.suppress_members(c.pid);
+            expect(result.affected).toBe(2);
         });
 
         it('throws NotFoundError when the collection pid does not exist', async () => {

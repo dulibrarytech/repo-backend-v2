@@ -57,11 +57,13 @@ afterEach(() => {
 describe('images/gateway — auth', () => {
     it('401s without a key and with a wrong key', async () => {
         const app = make_app(fake_http([]));
-        await supertest(app).get('/repo/api/v2/image/x.jpg').expect(401);
-        await supertest(app)
+        const bare = await supertest(app).get('/repo/api/v2/image/x.jpg').expect(401);
+        expect(bare.body.message).toBe('Unauthorized request');
+        const wrong = await supertest(app)
             .get('/repo/api/v2/image/x.jpg')
             .set('X-API-Key', 'nope')
             .expect(401);
+        expect(wrong.body.message).toBe('Unauthorized request');
     });
 
     it('accepts the key via header or query param', async () => {
@@ -70,21 +72,26 @@ describe('images/gateway — auth', () => {
             { status: 200, headers: { 'content-type': 'image/jpeg' }, body: Buffer.from('b') },
         ]);
         const app = make_app(http);
-        await supertest(app)
+        const via_header = await supertest(app)
             .get('/repo/api/v2/image/x.jpg')
             .set('X-API-Key', KEY)
             .expect(200);
-        await supertest(app).get(`/repo/api/v2/image/x.jpg?api_key=${KEY}`).expect(200);
+        expect(via_header.body.toString()).toBe('a');
+        const via_query = await supertest(app)
+            .get(`/repo/api/v2/image/x.jpg?api_key=${KEY}`)
+            .expect(200);
+        expect(via_query.body.toString()).toBe('b');
     });
 
     it('503s (fail closed) when IMAGES_API_KEY is not configured', async () => {
         const app = make_app(fake_http([]));
         delete process.env.IMAGES_API_KEY;
         require('../../../config/app')._reset();
-        await supertest(app)
+        const res = await supertest(app)
             .get('/repo/api/v2/image/x.jpg')
             .set('X-API-Key', KEY)
             .expect(503);
+        expect(res.body.message).toBe('Image service is not configured');
     });
 
     it('key comparison is length-guarded and exact', () => {
@@ -168,14 +175,16 @@ describe('images/gateway — streaming + passthrough', () => {
             { status: 400, headers: {}, body: Buffer.from('{"errors":["File is empty"]}') },
         ]);
         const app = make_app(http);
-        await supertest(app)
+        const missing = await supertest(app)
             .get('/repo/api/v2/image/x.jpg')
             .set('X-API-Key', KEY)
             .expect(404);
-        await supertest(app)
+        expect(missing.body.message).toBe('Resource not found');
+        const empty = await supertest(app)
             .get('/repo/api/v2/image/x.jpg')
             .set('X-API-Key', KEY)
             .expect(404);
+        expect(empty.body.message).toBe('Resource not found');
     });
 
     it('maps upstream 5xx and transport failures to 502', async () => {
@@ -184,13 +193,15 @@ describe('images/gateway — streaming + passthrough', () => {
             new Error('ECONNREFUSED'),
         ]);
         const app = make_app(http);
-        await supertest(app)
+        const upstream_5xx = await supertest(app)
             .get('/repo/api/v2/image/x.jpg')
             .set('X-API-Key', KEY)
             .expect(502);
-        await supertest(app)
+        expect(upstream_5xx.body.message).toBe('Image source unavailable');
+        const transport = await supertest(app)
             .get('/repo/api/v2/image/x.jpg')
             .set('X-API-Key', KEY)
             .expect(502);
+        expect(transport.body.message).toBe('Image source unavailable');
     });
 });

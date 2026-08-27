@@ -476,8 +476,10 @@ describe('ingest dashboard — e2e', () => {
                     .post(`/repo/dashboard/ingest/${uploading}/cancel-batch`)
                     .set('Cookie', cookie);
                 expect(res.status).toBe(200);
-                // Both rows cancelled; only the UPLOADING one triggers
-                // a curation-side upload cancel.
+                /*
+                 * Both rows cancelled; only the UPLOADING one triggers
+                 * a curation-side upload cancel.
+                 */
                 expect((await model.get_queue_row({ id: uploading })).status).toBe(
                     'CANCELLED_BY_USER'
                 );

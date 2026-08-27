@@ -48,8 +48,10 @@ describe('scripts/backfill_display_record_from_v1', () => {
             expect(l2.parts).toEqual([{ order: '1' }]);
         });
         it('does not mistake a raw AS record (which has parts) for an L2 envelope', () => {
-            // 2-level doc whose display_record carries parts but no L2 markers:
-            // the parts must surface via normalization, not via envelope passthrough.
+            /*
+             * 2-level doc whose display_record carries parts but no L2 markers:
+             * the parts must surface via normalization, not via envelope passthrough.
+             */
             const src = { type: 'still image', display_record: { parts: [{ order: '1' }] } };
             const l2 = v1_level2(src);
             expect(l2.type).toBe('still image');

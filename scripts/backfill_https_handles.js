@@ -90,7 +90,7 @@ function rewrite_row(handle, display_record_raw) {
                 typeof display_record_raw === 'string'
                     ? JSON.parse(display_record_raw)
                     : display_record_raw;
-        } catch (_e) {
+        } catch {
             dr = null; // corrupt JSON — column-only rewrite still applies
         }
         if (dr && typeof dr === 'object') {
@@ -154,7 +154,7 @@ async function main() {
             if (row.display_record && typeof row.display_record === 'string') {
                 try {
                     JSON.parse(row.display_record);
-                } catch (_e) {
+                } catch {
                     counts.corrupt_json++;
                 }
             }

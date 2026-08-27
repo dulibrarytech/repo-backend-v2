@@ -24,6 +24,7 @@ const { db } = require('../config/db');
 const tables = require('../config/db_tables');
 const archivematica = require('../libs/archivematica');
 const log = require('../libs/log');
+const projection = require('../libs/object_projection');
 const { ConflictError, NotFoundError, ValidationError } = require('../libs/errors');
 
 const PUBLIC_FIELDS = [
@@ -192,14 +193,59 @@ async function list_pids_by_display_record_match(q, limit = 500) {
 }
 
 /*
+ * Publish gate: a row must not go public while its parent collection is
+ * unpublished — public search would list it with a collection link that
+ * 404s (three such orphans were live when this gate was added). Applies
+ * to objects AND nested sub-collections alike: anything whose parent is
+ * a real collection pid. Two parents pass unchecked — 'codu:root'
+ * (top-level collections have no gated parent) and a parent pid with no
+ * row (legacy rows with dangling references must stay publishable).
+ *
+ * Takes the target rows' parent pids; returns Map<parent_pid, title>
+ * of the parents that block publishing (empty Map = allowed).
+ */
+async function _unpublished_parents(parent_pids) {
+    const real = [...new Set(parent_pids.filter((p) => p && validator.isUUID(String(p))))];
+    if (real.length === 0) return new Map();
+    const rows = await db()(tables.objects)
+        .select('pid', 'display_record')
+        .whereIn('pid', real)
+        .where({ object_type: 'collection', is_published: 0 });
+    const blocked = new Map();
+    for (const r of rows) {
+        const title = projection.parse_display_record(r.display_record).title;
+        blocked.set(r.pid, title || r.pid);
+    }
+    return blocked;
+}
+
+/*
  * Publish and suppress BOTH set is_updated=1, so the indexer claims the row on
  * its next tick. Its eligibility check (is_published=1 AND is_active=1) then
  * decides what to do:
  *   - publish  → eligible   → INDEX with the current display_record
  *   - suppress → ineligible → DELETE from ES
+ *
+ * Publishing is gated on the parent collection being published (see
+ * _unpublished_parents); suppress has no gate.
  */
 async function set_publish_state(pid, value) {
     require_pid(pid);
+    if (value) {
+        const row = await db()(tables.objects)
+            .select('pid', 'is_member_of_collection')
+            .where({ pid })
+            .first();
+        if (!row) throw new NotFoundError(`Object ${pid} not found`);
+        const blocked = await _unpublished_parents([row.is_member_of_collection]);
+        if (blocked.size > 0) {
+            const [title] = blocked.values();
+            throw new ValidationError(
+                `Cannot publish: this item's collection ("${title}") is unpublished. ` +
+                    'Publish the collection first, then its items.'
+            );
+        }
+    }
     const affected = await db()(tables.objects)
         .where({ pid })
         .update({ is_published: value ? 1 : 0, is_updated: 1 });
@@ -386,6 +432,38 @@ function require_pid_array(pids) {
 
 async function set_publish_state_bulk(pids, value) {
     const unique = require_pid_array(pids);
+    if (value) {
+        /*
+         * Same gate as the single path, whole-batch semantics matching
+         * bulk_soft_delete: if ANY selected row sits in an unpublished
+         * collection, reject the entire batch — a partial publish would
+         * leave staff guessing which rows went through.
+         */
+        const rows = await db()(tables.objects)
+            .select('pid', 'is_member_of_collection')
+            .whereIn('pid', unique)
+            .andWhere('is_active', 1);
+        const blocked = await _unpublished_parents(rows.map((r) => r.is_member_of_collection));
+        if (blocked.size > 0) {
+            const affected_count = rows.filter((r) =>
+                blocked.has(r.is_member_of_collection)
+            ).length;
+            const titles = [...blocked.values()];
+            const shown = titles
+                .slice(0, 3)
+                .map((t) => `"${t}"`)
+                .join(', ');
+            const more = titles.length > 3 ? ` and ${titles.length - 3} more` : '';
+            throw new ValidationError(
+                `Cannot publish: ${affected_count} of the selected item${
+                    affected_count === 1 ? ' belongs' : 's belong'
+                } to unpublished collection${titles.length === 1 ? '' : 's'} ` +
+                    `(${shown}${more}). Publish the collection${
+                        titles.length === 1 ? '' : 's'
+                    } first. Nothing was published.`
+            );
+        }
+    }
     // is_updated=1 on both paths — see set_publish_state above.
     const affected = await db()(tables.objects)
         .whereIn('pid', unique)

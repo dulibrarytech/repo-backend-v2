@@ -172,7 +172,7 @@ async function main() {
                         typeof row.display_record === 'string'
                             ? JSON.parse(row.display_record)
                             : row.display_record;
-                } catch (_e) {
+                } catch {
                     row_dr = null; // invalid JSON column -> treat as missing envelope
                 }
             }

@@ -114,8 +114,8 @@ describe('ingester/aip_backfill', () => {
 
     describe('enqueue_backfill_batch', () => {
         it('inserts one queue row per eligible object, stamped with batch marker', async () => {
-            const a = await db_helper.seed_object({ sip_uuid: 'aip-a' });
-            const b = await db_helper.seed_object({ sip_uuid: 'aip-b' });
+            await db_helper.seed_object({ sip_uuid: 'aip-a' });
+            await db_helper.seed_object({ sip_uuid: 'aip-b' });
             const result = await aip_backfill.enqueue_backfill_batch({
                 actor: 'tester@du.edu',
             });
@@ -304,8 +304,8 @@ describe('ingester/aip_backfill', () => {
         });
 
         it('aggregates counts by pipeline_state for backfill rows only', async () => {
-            const a = await db_helper.seed_object({ sip_uuid: 'aip-x' });
-            const b = await db_helper.seed_object({ sip_uuid: 'aip-y' });
+            await db_helper.seed_object({ sip_uuid: 'aip-x' });
+            await db_helper.seed_object({ sip_uuid: 'aip-y' });
             const result = await aip_backfill.enqueue_backfill_batch();
             // Flip one of the two to AIP_STORE_COMPLETE + is_complete=1.
             const rows = await db_queue()(QUEUE).where({ batch: result.batch_marker });
@@ -354,8 +354,8 @@ describe('ingester/aip_backfill', () => {
         });
 
         it('leaves IN_PROGRESS rows alone (worker finishes them)', async () => {
-            const a = await db_helper.seed_object({ sip_uuid: 'aip-x' });
-            const b = await db_helper.seed_object({ sip_uuid: 'aip-y' });
+            await db_helper.seed_object({ sip_uuid: 'aip-x' });
+            await db_helper.seed_object({ sip_uuid: 'aip-y' });
             const result = await aip_backfill.enqueue_backfill_batch();
             // Mark one as in-flight; cancel must NOT touch it.
             const rows = await db_queue()(QUEUE)

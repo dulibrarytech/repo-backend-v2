@@ -69,8 +69,10 @@ describe('indexer/model — DB integration', () => {
             });
             const [claimed] = await model.claim_dirty(1);
             expect(claimed.mods).toBeUndefined();
-            // transcript columns feed project_for_index (indexed as
-            // transcript/transcript_search) so they must be selected.
+            /*
+             * transcript columns feed project_for_index (indexed as
+             * transcript/transcript_search) so they must be selected.
+             */
             expect(claimed.transcript).toBe('spoken words');
         });
     });

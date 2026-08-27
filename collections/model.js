@@ -502,10 +502,25 @@ async function set_members_publish_state(collection_pid, value) {
      * staff occasionally typo a PID, and a no-op UPDATE on a bad id
      * would silently succeed.
      */
-    const exists = await db()(tables.objects)
+    const collection = await db()(tables.objects)
         .where({ pid: collection_pid, object_type: 'collection', is_active: 1 })
-        .first('id');
-    if (!exists) throw new NotFoundError(`Collection ${collection_pid} not found`);
+        .first('id', 'is_published', 'display_record');
+    if (!collection) throw new NotFoundError(`Collection ${collection_pid} not found`);
+
+    /*
+     * Publish gate, matching repository/model.js set_publish_state:
+     * members must not go public while the collection itself is
+     * unpublished — they'd surface in search with a collection link
+     * that 404s. Suppress has no gate.
+     */
+    if (value && collection.is_published !== 1) {
+        const title =
+            projection.parse_display_record(collection.display_record).title || collection_pid;
+        throw new ValidationError(
+            `Cannot publish members: the collection itself ("${title}") is unpublished. ` +
+                'Publish the collection first, then its members.'
+        );
+    }
 
     /*
      * Both publish and suppress dirty: keep the staff workflow

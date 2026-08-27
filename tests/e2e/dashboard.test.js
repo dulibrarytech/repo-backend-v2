@@ -2613,8 +2613,10 @@ describe('dashboard — e2e', () => {
         describe('bulk actions — collection-scoped', () => {
             it('POST /collections/:pid/bulk/publish flips every member', async () => {
                 const cookie = await cookie_for('o-bulk-col-pub');
+                // Published collection — member publish is gated on it.
                 const c = await db_helper.seed_object({
                     object_type: 'collection',
+                    is_published: 1,
                     display_record: JSON.stringify({ title: 'My collection' }),
                 });
                 for (let i = 0; i < 3; i++) {
@@ -2630,6 +2632,25 @@ describe('dashboard — e2e', () => {
                 const trigger = JSON.parse(res.headers['hx-trigger']);
                 expect(trigger.toast.message).toMatch(/Published 3 member/);
                 expect(trigger['objects:refresh'].kind).toBe('publish');
+            });
+
+            it('refuses member publish while the collection is unpublished (400 names it)', async () => {
+                const cookie = await cookie_for('o-bulk-col-gate');
+                const c = await db_helper.seed_object({
+                    object_type: 'collection',
+                    is_published: 0,
+                    display_record: JSON.stringify({ title: 'Draft collection' }),
+                });
+                await db_helper.seed_object({
+                    is_member_of_collection: c.pid,
+                    is_published: 0,
+                });
+                const res = await supertest(app)
+                    .post(`/repo/dashboard/collections/${c.pid}/bulk/publish`)
+                    .set('Cookie', cookie);
+                expect(res.status).toBe(400);
+                expect(res.body.error).toMatch(/Draft collection/);
+                expect(res.body.error).toMatch(/Publish the collection first/);
             });
 
             it('POST /collections/:pid/bulk/suppress is symmetric', async () => {
@@ -2719,8 +2740,10 @@ describe('dashboard — e2e', () => {
             expect(row).toContain('hdl.invalid/10176/coll-row-1');
             expect(row).toContain('D009');
             expect(row).toContain('/repositories/2/resources/496');
-            // pid appears only in attribute plumbing (links/hx URLs), not
-            // as its own identity line — the title cell must not carry it.
+            /*
+             * pid appears only in attribute plumbing (links/hx URLs), not
+             * as its own identity line — the title cell must not carry it.
+             */
             const identity_cell = row.split('package-sub')[1].split('</div>\n    </td>')[0];
             expect(identity_cell).not.toContain(c.pid);
         });
