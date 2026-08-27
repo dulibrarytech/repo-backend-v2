@@ -58,21 +58,34 @@ describe('convert/model build_payload', () => {
 });
 
 describe('convert/model eligible_mime', () => {
-    it('accepts TIFF variants and unknown mimes, rejects everything else', () => {
+    it('accepts TIFF/JPG variants and unknown mimes, rejects everything else', () => {
         expect(model.eligible_mime('image/tiff')).toBe(true);
         expect(model.eligible_mime('image/tif')).toBe(true);
         expect(model.eligible_mime('IMAGE/TIFF')).toBe(true);
+        /*
+         * A handful of DuraCloud masters are .JPG — the service
+         * re-encodes them to access derivatives like any TIFF. 
+         */
+        expect(model.eligible_mime('image/jpeg')).toBe(true);
+        expect(model.eligible_mime('image/jpg')).toBe(true);
+        expect(model.eligible_mime('IMAGE/JPEG')).toBe(true);
         expect(model.eligible_mime(null)).toBe(true);
         expect(model.eligible_mime('')).toBe(true);
         expect(model.eligible_mime('video/quicktime')).toBe(false);
         expect(model.eligible_mime('application/pdf')).toBe(false);
-        expect(model.eligible_mime('image/jpeg')).toBe(false);
+        /*
+         * PNG stays ineligible: the service's RGB convert composites
+         * transparency onto black (no flatten-white pass). 
+         */
+        expect(model.eligible_mime('image/png')).toBe(false);
     });
 });
 
 describe('convert/model expand_row', () => {
-    /* A compound row shaped like prod post-repair: merged manifest in
-       both compound_parts and display_record. */
+    /*
+     * A compound row shaped like prod post-repair: merged manifest in
+     * both compound_parts and display_record. 
+     */
     function compound_row(overrides = {}) {
         const parts = [
             {
@@ -125,7 +138,7 @@ describe('convert/model expand_row', () => {
         expect(entries).toHaveLength(2);
     });
 
-    it('skips non-TIFF parts (A/V, PDFs) instead of wasting paced POSTs', () => {
+    it('skips non-image parts (A/V, PDFs) instead of wasting paced POSTs', () => {
         const parts = [
             { order: '1', title: 'a.tif', type: 'image/tiff', object: 'dip/objects/u1-a.tif' },
             { order: '2', title: 'b.mov', type: 'video/quicktime', object: 'dip/objects/u2-b.mov' },
@@ -138,6 +151,24 @@ describe('convert/model expand_row', () => {
         );
         expect(entries).toHaveLength(1);
         expect(entries[0].file_name).toBe('dip/objects/u1-a.tif');
+    });
+
+    it('keeps JPG parts (a handful of DuraCloud masters are .JPG)', () => {
+        const parts = [
+            { order: '1', title: 'a.tif', type: 'image/tiff', object: 'dip/objects/u1-a.tif' },
+            { order: '2', title: 'b.JPG', type: 'image/jpeg', object: 'dip/objects/u2-b.JPG' },
+        ];
+        const entries = model.expand_row(
+            compound_row({ compound_parts: JSON.stringify(parts), display_record: null })
+        );
+        expect(entries).toHaveLength(2);
+        expect(entries[1]).toEqual({
+            pid: 'pid-1',
+            sip_uuid: 'pid-1',
+            collection: 'col-1',
+            file_name: 'dip/objects/u2-b.JPG',
+            mime_type: 'image/jpeg',
+        });
     });
 
     it('keeps parts with an unknown mime (sparse legacy metadata)', () => {
@@ -194,7 +225,7 @@ describe('convert/model expand_row', () => {
         expect(entries[0].file_name).toBe('dip/objects/u-x.tif');
     });
 
-    it('returns nothing for a non-TIFF simple object (e.g. a video master)', () => {
+    it('returns nothing for a non-image simple object (e.g. a video master)', () => {
         const entries = model.expand_row({
             pid: 'p',
             file_name: 'dip/objects/u-x.mov',
@@ -203,6 +234,20 @@ describe('convert/model expand_row', () => {
             display_record: null,
         });
         expect(entries).toEqual([]);
+    });
+
+    it('queues a simple all-JPG object from file_name (the .JPG-master gap)', () => {
+        const entries = model.expand_row({
+            pid: 'p',
+            sip_uuid: 'p',
+            is_member_of_collection: 'c',
+            file_name: 'dip/objects/u-x.JPG',
+            mime_type: 'image/jpeg',
+            compound_parts: null,
+            display_record: null,
+        });
+        expect(entries).toHaveLength(1);
+        expect(entries[0].file_name).toBe('dip/objects/u-x.JPG');
     });
 
     it('survives unparsable JSON in either source column', () => {

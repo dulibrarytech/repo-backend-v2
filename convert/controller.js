@@ -192,7 +192,7 @@ async function convert_object(req, res) {
     /*
      * ASCII-only header value — no Unicode ellipsis (same gotcha the
      * indexer publish toast hit). Count is FILES — a compound queues
-     * one conversion per TIFF part.
+     * one conversion per image part.
      */
     trigger_toast(
         res,

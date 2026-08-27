@@ -1,11 +1,11 @@
 <%/* Dry-run preview for a convert scope. Shows the exact FILE count
-     (compound objects expand to one entry per convertible TIFF part)
+     (compound objects expand to one entry per convertible image part)
      and a sample of the payloads that WOULD be POSTed — nothing is
      enqueued. Locals: preview { count, objects, sample[], truncated },
      scope. */%>
 <% if (preview.count === 0) { %>
     <div class="alert alert-warning small mb-0" role="alert">
-        No convertible TIFF files for <%= scope %> (non-TIFF parts are skipped automatically).
+        No convertible image files (TIFF/JPG) for <%= scope %> (other part types are skipped automatically).
     </div>
 <% } else { %>
     <div class="alert alert-info small" role="alert">
@@ -14,7 +14,7 @@
         across <%= preview.objects.toLocaleString() %>
         object<%= preview.objects === 1 ? '' : 's' %>
         would be converted for <%= scope %>.
-        Compound objects queue one conversion per TIFF part.
+        Compound objects queue one conversion per image part.
         Nothing has been queued yet — press <strong>Start conversion</strong> to begin.
     </div>
     <div class="table-responsive">

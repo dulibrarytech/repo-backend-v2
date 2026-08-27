@@ -274,13 +274,13 @@ async function run(row, deps = {}) {
      * compound_parts entry); the v2 port initially left it to the
      * dashboard's manual action, so freshly ingested images had no
      * derivatives until staff remembered to queue them. Restore the
-     * automatic behavior: enqueue the object's TIFF parts (the convert
-     * model expands compounds to one file per part) and let the paced
-     * convert worker drain them in the background.
+     * automatic behavior: enqueue the object's convertible image parts
+     * (the convert model expands compounds to one file per part) and
+     * let the paced convert worker drain them in the background.
      *
      * Best-effort — a convert-queue hiccup must not unwind a completed
-     * ingest. A scope with no TIFF parts (A/V objects) is the model's
-     * ValidationError, logged as a benign skip.
+     * ingest. A scope with no convertible image parts (A/V objects) is
+     * the model's ValidationError, logged as a benign skip.
      */
     try {
         const convert_result = await convert_model.enqueue({
@@ -297,7 +297,7 @@ async function run(row, deps = {}) {
         });
     } catch (err) {
         if (err instanceof ValidationError) {
-            // No convertible TIFF files in the object — nothing to do.
+            // No convertible image files in the object — nothing to do.
             log.info({
                 event: 'ingest_convert_skipped',
                 queue_id: row.id,

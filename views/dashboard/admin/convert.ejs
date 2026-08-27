@@ -9,9 +9,10 @@
      sent without enqueuing anything. */%>
 <h1 class="page-title">TIFF → JPG Conversion</h1>
 <p class="page-subtitle">
-    Generate JPG derivatives for archival TIFFs by submitting files to
-    the convert service. Compound objects queue <strong>one conversion per
-    TIFF part</strong> (non-TIFF parts are skipped). Work runs in the
+    Generate JPG derivatives for archival images (TIFF and JPG masters)
+    by submitting files to the convert service. Compound objects queue
+    <strong>one conversion per image part</strong> (other part types,
+    such as audio, video, and PDF, are skipped). Work runs in the
     background, <strong>one file at a time, paced ~20 seconds
     apart</strong> — the service doesn't tolerate heavy load — so a full
     collection can take a while. Use <strong>Preview</strong> first to

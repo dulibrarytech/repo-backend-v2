@@ -8,8 +8,8 @@
  *     collection (or one sip_uuid / pid) that have a non-empty
  *     file_name.
  *   - Expands each object to per-FILE work entries: compounds queue one
- *     conversion per TIFF part from the parts manifest (the legacy
- *     process_tiffs.js behavior), simple objects queue one.
+ *     conversion per convertible image part from the parts manifest
+ *     (the legacy process_tiffs.js behavior), simple objects queue one.
  *   - Writes the work + batch rollup into the `repo_queue` DB
  *     (tbl_convert_queue / tbl_convert_batches).
  * 
@@ -63,15 +63,19 @@ function build_payload(row) {
 }
 
 /*
- * Mime eligibility: TIFFs convert; a missing/blank mime passes through
- * for the service to judge (sparse legacy metadata); anything else —
- * A/V parts, PDFs, already-JPG derivatives — is skipped rather than
- * wasting a 20s paced POST the service will reject.
+ * Mime eligibility: TIFFs and JPGs convert (a handful of DuraCloud
+ * masters are .JPG — the service re-encodes them to access-derivative
+ * JPGs the same way); a missing/blank mime passes through for the
+ * service to judge (sparse legacy metadata); anything else — A/V
+ * parts, PDFs — is skipped rather than wasting a 20s paced POST the
+ * service will reject. PNG is deliberately NOT eligible: the service's
+ * plain RGB convert composites transparency onto black, and the corpus
+ * has no PNG masters to justify a flatten-white pass.
  */
-const TIFF_RE = /^image\/tiff?$/i;
+const CONVERTIBLE_RE = /^image\/(tiff?|jpe?g)$/i;
 function eligible_mime(m) {
     if (m === null || m === undefined || String(m).trim() === '') return true;
-    return TIFF_RE.test(String(m).trim());
+    return CONVERTIBLE_RE.test(String(m).trim());
 }
 
 /*
@@ -199,15 +203,15 @@ async function enqueue({ collection, sip_uuid, pid, limit, actor, actor_name } =
 
     /*
      * One queue row per FILE: compounds expand to every convertible
-     * part (non-TIFF parts are filtered out; see eligible_mime). The
+     * part (non-image parts are filtered out; see eligible_mime). The
      * per-batch cap counts files — that's what paces the service.
      */
     const entries = rows.flatMap(expand_row);
 
     if (entries.length === 0) {
         throw new ValidationError(
-            'No convertible TIFF files in the selected scope ' +
-                '(non-TIFF parts are skipped automatically).'
+            'No convertible image files (TIFF/JPG) in the selected scope ' +
+                '(other part types are skipped automatically).'
         );
     }
     if (entries.length > cfg.max_batch) {
