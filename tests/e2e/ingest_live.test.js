@@ -18,8 +18,8 @@
  *     accidentally would consume real test capacity.
  * 
  * Why a separate file: keeping live tests out of the default suite
- * preserves the existing 902-pass deterministic baseline. Operators
- * run this file explicitly via:
+ * keeps the deterministic baseline hermetic. Operators run this file
+ * explicitly via:
  *   INGEST_LIVE_E2E=1 npx vitest run tests/e2e/ingest_live.test.js
  * 
  * The expected env shape is the same as production (see .env-example).
@@ -30,9 +30,9 @@ const should_run = process.env.INGEST_LIVE_E2E === '1';
 const should_run_full = process.env.INGEST_LIVE_E2E_FULL === '1';
 
 /*
- * vitest's `describe.skipIf` would be cleaner but it's not in this
- * project's pinned major version. Instead we conditionally short-circuit
- * the suite body with a single placeholder `it.skip`.
+ * Conditional describe alias (equivalent to `describe.skipIf(!should_run)`)
+ * paired with the placeholder suite at the bottom so the file reports a
+ * passing test instead of zero tests when gated off.
  */
 const describeOrSkip = should_run ? describe : describe.skip;
 
