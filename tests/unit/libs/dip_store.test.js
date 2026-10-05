@@ -7,6 +7,7 @@
  * network or credentials are needed.
  */
 
+const http = require('node:http');
 const { Readable } = require('node:stream');
 
 const dip_store = require('../../../libs/dip_store');
@@ -152,9 +153,49 @@ describe('libs/dip_store', () => {
                 credentials: { accessKeyId: 'test-key', secretAccessKey: 'test-secret' },
                 requestChecksumCalculation: 'WHEN_REQUIRED',
                 responseChecksumValidation: 'WHEN_REQUIRED',
-                requestHandler: { requestTimeout: 15000, connectionTimeout: 5000 },
+                requestHandler: {
+                    requestTimeout: 15000,
+                    throwOnRequestTimeout: true,
+                    connectionTimeout: 5000,
+                },
             });
         });
+    });
+
+    /*
+     * The real SDK against a local server that takes each request and never
+     * answers. The fake client can't show whether the configured timeout
+     * actually ends a request; this can.
+     */
+    describe('timeouts (real SDK client, silent local server)', () => {
+        let server;
+        let requests;
+
+        beforeEach(async () => {
+            requests = 0;
+            server = http.createServer(() => {
+                requests += 1;
+            });
+            await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+            process.env.DIP_STORE_ENDPOINT = `http://127.0.0.1:${server.address().port}`;
+            process.env.DIP_STORE_TIMEOUT_MS = '200';
+            app_config._reset();
+            dip_store._reset();
+        });
+
+        afterEach(async () => {
+            server.closeAllConnections();
+            await new Promise((resolve) => server.close(resolve));
+        });
+
+        it('ends a request that gets no response headers within DIP_STORE_TIMEOUT_MS', async () => {
+            const started = Date.now();
+            await expect(dip_store.head(`${FOLDER}/objects/a.pdf`)).rejects.toThrow(
+                /requestTimeout/
+            );
+            expect(requests).toBeGreaterThan(0);
+            expect(Date.now() - started).toBeLessThan(5000);
+        }, 10000);
     });
 
     describe('head', () => {

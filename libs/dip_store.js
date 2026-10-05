@@ -145,8 +145,17 @@ function client_options(c) {
         requestChecksumCalculation: 'WHEN_REQUIRED',
         responseChecksumValidation: 'WHEN_REQUIRED',
         maxAttempts: 3,
+        /*
+         * requestTimeout bounds the wait for response headers; the SDK
+         * only logs it unless throwOnRequestTimeout is set. Nothing here
+         * bounds a body once it streams: the SDK's socketTimeout counts a
+         * stream paused by a slow downstream client as idle, so it would
+         * cut healthy transfers short. A streaming caller handles body
+         * stalls itself (abortSignal).
+         */
         requestHandler: {
             requestTimeout: c.timeout_ms,
+            throwOnRequestTimeout: true,
             connectionTimeout: Math.min(c.timeout_ms, 5000),
         },
     };
