@@ -13,7 +13,6 @@
  *
  *   is_configured()                      → boolean
  *   fetch_text(path, { signal })         → { status, data, headers }
- *   get_thumbnail_stream(path)           → { status, data, headers }
  *   mets_path(sip_uuid, dip_path)        → stored path of the DIP's METS
  *   ping()                               → boolean, never throws
  *
@@ -21,15 +20,18 @@
  *
  *   key_for(path)                        → the S3 key for a stored path
  *   head(path, { signal })               → { status, data: null, headers }
- *   get_stream(path, { range, signal })  → { status, data, headers }
+ *   get_stream(path, { signal })         → { status, data, headers }
+ *
+ * Thumbnails use get_stream too: the caller pipes `data` on a 200 and
+ * shows the placeholder on any other status.
  *
  * `path` is a stored DB path, relative to the location prefix, e.g.
  * `<dip folder>/objects/<file>` or `<dip folder>/thumbnails/<uuid>.jpg`.
  *
- * Status semantics: 200/206 = found (`data` is a readable stream for
- * GETs), 404 = missing, 403 = the key exists but the policy denies it,
- * 416 = unsatisfiable range. Transport failures (DNS, TLS, timeout,
- * abort) throw UpstreamError, as libs/duracloud.js does.
+ * Status semantics: 200 = found (`data` is a readable stream for GETs),
+ * 404 = missing, 403 = the key exists but the policy denies it.
+ * Transport failures (DNS, TLS, timeout, abort) throw UpstreamError, as
+ * libs/duracloud.js does.
  *
  * The reader key is scoped to the dip-store/ folder: s3:GetObject on
  * <bucket>/dip-store/*, and s3:ListBucket only under an s3:prefix
@@ -52,16 +54,6 @@ const {
 const app_config = require('../config/app');
 const log = require('./log');
 const { UpstreamError, ValidationError } = require('./errors');
-
-const DURA_MANIFEST_SUFFIX = '.dura-manifest';
-const DURA_ARTIFACT_RE = /\.dura-(chunk-\d+|manifest)$/;
-
-/*
- * tbl_objects.file_name and .thumbnail are varchar(255). A stored path
- * of that length may have been cut off, so a miss on one gets the slower
- * resolve_truncated() lookup.
- */
-const DB_PATH_MAX = 255;
 
 let cached = null;
 let client_override = null;
@@ -97,21 +89,16 @@ function parse_location(raw) {
 
 /*
  * The S3 key for a stored path: the location prefix plus the path, with
- * leading slashes and a trailing `.dura-manifest` removed. v1 recorded
- * masters over 1 GB that way (they were DuraCloud chunk sets); DuraCloud
- * Preserve, and so the Wasabi copy, holds them as one object at the bare
- * name. `.` and `..` segments are refused so a path can never be
- * normalized out of the prefix by anything between here and the bucket.
+ * leading slashes removed. `.` and `..` segments are refused so a path
+ * can never be normalized out of the prefix by anything between here and
+ * the bucket.
  */
 function key_for(path) {
     const { prefix } = parse_location(cfg().location);
-    let tail = String(path || '').replace(/^\/+/, '');
+    const tail = String(path || '').replace(/^\/+/, '');
     if (!tail) throw new ValidationError('A DIP path is required');
     if (tail.split('/').some((seg) => seg === '.' || seg === '..')) {
         throw new ValidationError('A DIP path may not contain . or .. segments');
-    }
-    if (tail.endsWith(DURA_MANIFEST_SUFFIX)) {
-        tail = tail.slice(0, -DURA_MANIFEST_SUFFIX.length);
     }
     return prefix + tail;
 }
@@ -183,8 +170,6 @@ function headers_from(out) {
     const h = {};
     if (out.ContentType) h['content-type'] = out.ContentType;
     if (out.ContentLength !== undefined) h['content-length'] = String(out.ContentLength);
-    if (out.ContentRange) h['content-range'] = out.ContentRange;
-    if (out.AcceptRanges) h['accept-ranges'] = out.AcceptRanges;
     if (out.ETag) h.etag = out.ETag;
     if (out.LastModified) h['last-modified'] = new Date(out.LastModified).toUTCString();
     if (out.CacheControl) h['cache-control'] = out.CacheControl;
@@ -211,47 +196,12 @@ async function key_exists(bucket, key, signal) {
 }
 
 /*
- * A stored path cut off at the 255-character column. Mirrors the
- * inventory tool's check_content() (repo/scripts/dcp_inventory.py):
- *   1. The cut landed inside `.dura-manifest`: strip each partial
- *      suffix, longest first, and keep the first candidate that exists.
- *   2. The cut landed inside the file name: list keys that start with
- *      the truncated key and take the first whole object, never a
- *      leftover DuraCloud chunk or manifest.
- * Returns the resolved key, or null.
- */
-async function resolve_truncated(bucket, path, signal) {
-    const raw = String(path).replace(/^\/+/, '');
-    for (let n = DURA_MANIFEST_SUFFIX.length - 1; n > 0; n -= 1) {
-        if (raw.endsWith(DURA_MANIFEST_SUFFIX.slice(0, n))) {
-            const candidate = key_for(raw.slice(0, -n));
-            if ((await key_exists(bucket, candidate, signal)) === true) return candidate;
-        }
-    }
-    const base = key_for(raw);
-    try {
-        const out = await client().send(
-            new ListObjectsV2Command({ Bucket: bucket, Prefix: base, MaxKeys: 50 }),
-            { abortSignal: signal }
-        );
-        const whole = (out.Contents || [])
-            .map((o) => o.Key)
-            .filter((k) => k !== base && !DURA_ARTIFACT_RE.test(k));
-        return whole[0] || null;
-    } catch (err) {
-        log.warn({ event: 'dip_store_resolve_failed', path: raw, err: err.message });
-        return null;
-    }
-}
-
-/*
  * One HEAD or GET against one key, mapped to { status, data, headers }.
  * HTTP errors become statuses (a 403 confirmed as missing becomes 404);
  * only transport failures throw.
  */
-async function send_one(kind, bucket, key, { range, signal } = {}) {
+async function send_one(kind, bucket, key, { signal } = {}) {
     const input = { Bucket: bucket, Key: key };
-    if (kind === 'get' && range) input.Range = range;
     const command = kind === 'head' ? new HeadObjectCommand(input) : new GetObjectCommand(input);
     try {
         const out = await client().send(command, { abortSignal: signal });
@@ -275,28 +225,15 @@ async function request(kind, path, opts = {}) {
         throw new UpstreamError('DIP store is not configured');
     }
     const { bucket } = parse_location(cfg().location);
-    const result = await send_one(kind, bucket, key_for(path), opts);
-    if (result.status !== 404 || String(path).length < DB_PATH_MAX) return result;
-
-    const resolved = await resolve_truncated(bucket, path, opts.signal);
-    return resolved ? send_one(kind, bucket, resolved, opts) : result;
+    return send_one(kind, bucket, key_for(path), opts);
 }
 
 async function head(path, { signal } = {}) {
     return request('head', path, { signal });
 }
 
-// `range` is an HTTP Range header value, e.g. 'bytes=0-1023'.
-async function get_stream(path, { range, signal } = {}) {
-    return request('get', path, { range, signal });
-}
-
-/*
- * Stream a thumbnail. The caller pipes `data` on a 200; any other status
- * means "use the placeholder". Throws UpstreamError on transport failure.
- */
-async function get_thumbnail_stream(path) {
-    return request('get', path);
+async function get_stream(path, { signal } = {}) {
+    return request('get', path, { signal });
 }
 
 /*
@@ -350,14 +287,12 @@ function _reset() {
 }
 
 module.exports = {
-    DB_PATH_MAX,
     is_configured,
     parse_location,
     key_for,
     mets_path,
     head,
     get_stream,
-    get_thumbnail_stream,
     fetch_text,
     ping,
     _client_options: client_options,

@@ -57,12 +57,6 @@ function body_of(text) {
     return stream;
 }
 
-// A 255-character stored path ending with `tail`, inside FOLDER/objects/.
-function long_path(tail) {
-    const head = `${FOLDER}/objects/`;
-    return head + 'x'.repeat(dip_store.DB_PATH_MAX - head.length - tail.length) + tail;
-}
-
 describe('libs/dip_store', () => {
     let original_env;
 
@@ -118,12 +112,6 @@ describe('libs/dip_store', () => {
         it('prefixes the stored path and drops leading slashes', () => {
             expect(dip_store.key_for(`/${FOLDER}/thumbnails/a.jpg`)).toBe(
                 `dip-store/${FOLDER}/thumbnails/a.jpg`
-            );
-        });
-
-        it('strips a whole .dura-manifest suffix (v1 chunked masters)', () => {
-            expect(dip_store.key_for(`${FOLDER}/objects/big.mov.dura-manifest`)).toBe(
-                `dip-store/${FOLDER}/objects/big.mov`
             );
         });
 
@@ -289,106 +277,41 @@ describe('libs/dip_store', () => {
     });
 
     describe('get_stream', () => {
-        it('passes Range through and reports 206 with Content-Range', async () => {
-            const body = body_of('0123');
+        it('returns the body stream and headers, and forwards the abort signal', async () => {
+            const body = body_of('%PDF');
             const client = fake_client({
                 GetObjectCommand: () => ({
-                    $metadata: { httpStatusCode: 206 },
+                    $metadata: { httpStatusCode: 200 },
                     Body: body,
-                    ContentRange: 'bytes 0-3/10',
+                    ContentType: 'application/pdf',
                     ContentLength: 4,
-                    AcceptRanges: 'bytes',
                 }),
             });
             dip_store._set_client(client);
             const signal = new AbortController().signal;
-            const res = await dip_store.get_stream(`${FOLDER}/objects/a.pdf`, {
-                range: 'bytes=0-3',
-                signal,
-            });
-            expect(res.status).toBe(206);
+            const res = await dip_store.get_stream(`${FOLDER}/objects/a.pdf`, { signal });
+            expect(res.status).toBe(200);
             expect(res.data).toBe(body);
-            expect(res.headers['content-range']).toBe('bytes 0-3/10');
-            expect(res.headers['accept-ranges']).toBe('bytes');
-            expect(client.calls[0].input.Range).toBe('bytes=0-3');
+            expect(res.headers).toEqual({
+                'content-type': 'application/pdf',
+                'content-length': '4',
+            });
+            expect(client.calls[0].input).toEqual({
+                Bucket: 'library-repository',
+                Key: `dip-store/${FOLDER}/objects/a.pdf`,
+            });
             expect(client.calls[0].opts.abortSignal).toBe(signal);
         });
 
-        it('reports an unsatisfiable range as 416', async () => {
-            dip_store._set_client(
-                fake_client({
-                    GetObjectCommand: () => {
-                        throw s3_error(416, 'InvalidRange');
-                    },
-                })
-            );
-            const res = await dip_store.get_stream(`${FOLDER}/objects/a.pdf`, {
-                range: 'bytes=99-',
-            });
-            expect(res.status).toBe(416);
-        });
-    });
-
-    describe('truncated stored paths (255-character column)', () => {
-        it('recovers a path cut inside the .dura-manifest suffix', async () => {
-            const stored = long_path('.mov.dura-man');
-            const whole = dip_store.key_for(stored.slice(0, -'.dura-man'.length));
-            const client = fake_client({
-                GetObjectCommand: (input) => {
-                    if (input.Key !== whole) throw s3_error(404, 'NoSuchKey');
-                    return { $metadata: { httpStatusCode: 200 }, Body: body_of('ok') };
-                },
-                ListObjectsV2Command: (input) => ({
-                    Contents: input.Prefix === whole ? [{ Key: whole }] : [],
-                }),
-            });
-            dip_store._set_client(client);
-            const res = await dip_store.get_stream(stored);
-            expect(res.status).toBe(200);
-            const gets = client.calls.filter((c) => c.name === 'GetObjectCommand');
-            expect(gets.at(-1).input.Key).toBe(whole);
-        });
-
-        it('recovers a path cut inside the file name, skipping DuraCloud leftovers', async () => {
-            const stored = long_path('abcx');
-            const base = dip_store.key_for(stored);
-            const real = `${base}yz.tif`;
-            const client = fake_client({
-                GetObjectCommand: (input) => {
-                    if (input.Key !== real) throw s3_error(404, 'NoSuchKey');
-                    return { $metadata: { httpStatusCode: 200 }, Body: body_of('ok') };
-                },
-                ListObjectsV2Command: () => ({
-                    Contents: [{ Key: `${base}yz.tif.dura-chunk-0000` }, { Key: real }],
-                }),
-            });
-            dip_store._set_client(client);
-            const res = await dip_store.get_stream(stored);
-            expect(res.status).toBe(200);
-            expect(client.calls.at(-1).input.Key).toBe(real);
-        });
-
-        it('does not try to resolve short paths', async () => {
+        it('maps a missing key to 404 with one call', async () => {
             const client = fake_client({
                 GetObjectCommand: () => {
                     throw s3_error(404, 'NoSuchKey');
                 },
             });
             dip_store._set_client(client);
-            expect((await dip_store.get_stream(`${FOLDER}/objects/x.tif`)).status).toBe(404);
+            expect((await dip_store.get_stream(`${FOLDER}/objects/x.pdf`)).status).toBe(404);
             expect(client.calls).toHaveLength(1);
-        });
-
-        it('stays 404 when nothing matches', async () => {
-            dip_store._set_client(
-                fake_client({
-                    GetObjectCommand: () => {
-                        throw s3_error(404, 'NoSuchKey');
-                    },
-                    ListObjectsV2Command: () => ({ Contents: [] }),
-                })
-            );
-            expect((await dip_store.get_stream(long_path('abcx'))).status).toBe(404);
         });
     });
 
@@ -421,25 +344,6 @@ describe('libs/dip_store', () => {
                 data: '',
                 headers: {},
             });
-        });
-    });
-
-    describe('get_thumbnail_stream', () => {
-        it('returns the duracloud.js shape: status, data stream, headers', async () => {
-            const body = body_of('jpeg');
-            dip_store._set_client(
-                fake_client({
-                    GetObjectCommand: () => ({
-                        $metadata: { httpStatusCode: 200 },
-                        Body: body,
-                        ContentType: 'image/jpeg',
-                    }),
-                })
-            );
-            const res = await dip_store.get_thumbnail_stream(`${FOLDER}/thumbnails/a.jpg`);
-            expect(res.status).toBe(200);
-            expect(res.data).toBe(body);
-            expect(res.headers['content-type']).toBe('image/jpeg');
         });
     });
 
