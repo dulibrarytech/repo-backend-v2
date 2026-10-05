@@ -41,6 +41,15 @@ describe('Services Health — DIP store card', () => {
         const dip = res.text.indexOf('DIP store (Wasabi)');
         expect(dip).toBeGreaterThan(-1);
         expect(res.text.indexOf('DuraCloud')).toBeLessThan(dip);
-        expect(res.text.slice(dip)).toMatch(/not configured/);
+        /*
+         * Only the DIP card's own markup: the next card (ArchivesSpace)
+         * is unconfigured here too, so a match on the rest of the page
+         * would prove nothing.
+         */
+        const next_card = res.text.indexOf('class="col-md-3', dip);
+        const card = res.text.slice(dip, next_card === -1 ? undefined : next_card);
+        expect(card).not.toContain('ArchivesSpace');
+        expect(card).toMatch(/not configured/);
+        expect(card).not.toMatch(/FAILED|>OK</);
     });
 });

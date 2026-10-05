@@ -47,6 +47,21 @@ function integer(name, fallback) {
     return n;
 }
 
+/*
+ * An integer from 1 to 2^31-1, for timeouts: 0 would switch the SDK's
+ * timeouts off (and abort a probe at once), and anything larger
+ * overflows setTimeout.
+ */
+function positive_integer(name, fallback) {
+    const n = integer(name, fallback);
+    if (n < 1 || n > 2147483647) {
+        throw new Error(
+            `Env var ${name} must be a positive integer up to 2147483647 (got "${process.env[name]}")`
+        );
+    }
+    return n;
+}
+
 function boolean(name, fallback = false) {
     const v = process.env[name];
     if (v === undefined || v === '') return fallback;
@@ -402,10 +417,12 @@ function build() {
             access_key_id: optional('DIP_STORE_ACCESS_KEY_ID', ''),
             secret_access_key: optional('DIP_STORE_SECRET_ACCESS_KEY', ''),
             /*
-             * Per-request timeout. The Services probe is bounded by this
-             * too, so it must stay at or under the banner deadline.
+             * Total wait for a response's headers, retries included; a
+             * METS read gets the same again for its body. The Services
+             * probe is bounded by this too, so it must stay at or under
+             * the banner deadline.
              */
-            timeout_ms: integer('DIP_STORE_TIMEOUT_MS', 15000),
+            timeout_ms: positive_integer('DIP_STORE_TIMEOUT_MS', 15000),
         },
 
         /*

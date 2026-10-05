@@ -101,7 +101,8 @@ module.exports = function mount(app) {
     app.get(`${admin_base}`, require_dashboard_auth, controller.services_page);
     /*
      * Combined upstream-services panel: curation-API, Archivematica,
-     * DuraCloud, ArchivesSpace — each a single reachability/auth probe.
+     * DuraCloud, the DIP store, ArchivesSpace — each a single
+     * reachability/auth probe (SERVICE_PROBES in the controller).
      */
     app.get(`${admin_base}/health`, require_dashboard_auth, controller.services_health_partial);
     app.get(`${admin_base}/wasabi`, require_dashboard_auth, controller.services_wasabi_partial);

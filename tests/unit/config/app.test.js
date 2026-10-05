@@ -83,6 +83,21 @@ describe('config/app', () => {
         });
     });
 
+    it('DIP_STORE_TIMEOUT_MS must be a positive integer', () => {
+        // 0 would switch the SDK timeouts off and make the probe fail at once.
+        for (const bad of ['0', '-5', '2147483648']) {
+            with_env({ DIP_STORE_TIMEOUT_MS: bad }, () => {
+                expect(() => app_config(), bad).toThrow(/DIP_STORE_TIMEOUT_MS/);
+            });
+        }
+        with_env({ DIP_STORE_TIMEOUT_MS: '2500' }, () => {
+            expect(app_config().dip_store.timeout_ms).toBe(2500);
+        });
+        with_env({ DIP_STORE_TIMEOUT_MS: null }, () => {
+            expect(app_config().dip_store.timeout_ms).toBe(15000);
+        });
+    });
+
     it('defaults APP_PORT to 8000', () => {
         with_env({ APP_PORT: null }, () => {
             expect(app_config().port).toBe(8000);
