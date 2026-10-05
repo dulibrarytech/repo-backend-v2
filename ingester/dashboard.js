@@ -22,6 +22,7 @@ const qa_service = require('./libs/qa_service');
 const aip_store_client = require('./libs/aip_store_client');
 const archivematica = require('../libs/archivematica');
 const duracloud = require('../libs/duracloud');
+const dip_store = require('../libs/dip_store');
 const aspace = require('../libs/archivesspace');
 const es = require('../libs/elasticsearch');
 const worker_registry = require('./worker');
@@ -915,13 +916,16 @@ async function services_page(req, res) {
 }
 
 /*
- * The four upstream services the ingest pipeline depends on, each with one
- * non-throwing reachability/auth probe. Array order is render order.
+ * The upstream services the ingest pipeline depends on, each with one
+ * non-throwing reachability/auth probe. Array order is render order. The
+ * DIP store (the Wasabi copy of every DIP) replaces DuraCloud as the DIP
+ * source during the DuraCloud Preserve cutover; both cards show until then.
  */
 const SERVICE_PROBES = [
     { key: 'curation_api', label: 'Curation API', probe: _probe_curation },
     { key: 'archivematica', label: 'Archivematica', probe: _probe_archivematica },
     { key: 'duracloud', label: 'DuraCloud', probe: _probe_duracloud },
+    { key: 'dip_store', label: 'DIP store (Wasabi)', probe: _probe_dip_store },
     { key: 'archivesspace', label: 'ArchivesSpace', probe: _probe_archivesspace },
 ];
 
@@ -950,6 +954,7 @@ const SERVICE_CAPABILITY = {
     curation_api: 'ingest / QA moves',
     archivematica: 'ingest pipeline',
     duracloud: 'preservation storage',
+    dip_store: 'access copies',
     archivesspace: 'metadata sync',
 };
 
@@ -964,9 +969,9 @@ const BANNER_PROBES = [
 
 /*
  * Per-probe deadline for the banner. Must exceed the slowest HEALTHY probe, or
- * a live service is false-flagged as down: ArchivesSpace and DuraCloud are 15s,
- * Elasticsearch 10s. The invariant is guarded in tests against
- * ARCHIVESPACE_TIMEOUT_MS.
+ * a live service is false-flagged as down: ArchivesSpace, DuraCloud and the
+ * DIP store are 15s, Elasticsearch 10s. The invariant is guarded in tests
+ * against each of those client timeouts.
  */
 const BANNER_PROBE_TIMEOUT_MS = 20000;
 
@@ -1093,6 +1098,20 @@ async function _probe_duracloud() {
         configured: true,
         reachable: ok,
         detail: ok ? 'dip-store reachable' : 'dip-store unreachable or auth rejected',
+    };
+}
+
+/*
+ * DIP store — list one key under the dip-store/ prefix (reachability, the
+ * read-only key, and its folder-scoped policy). An empty folder is healthy.
+ */
+async function _probe_dip_store() {
+    if (!dip_store.is_configured()) return { configured: false };
+    const ok = await dip_store.ping();
+    return {
+        configured: true,
+        reachable: ok,
+        detail: ok ? 'dip-store/ listing OK' : 'dip-store/ unreachable or access denied',
     };
 }
 
@@ -1261,5 +1280,7 @@ module.exports = {
     // exported for tests
     _run_probe,
     _with_deadline,
+    _probe_dip_store,
+    SERVICE_PROBES,
     BANNER_PROBE_TIMEOUT_MS,
 };

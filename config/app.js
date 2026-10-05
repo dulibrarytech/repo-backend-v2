@@ -383,6 +383,32 @@ function build() {
         },
 
         /*
+         * DIP store — the Wasabi access copy of every DIP, read through
+         * libs/dip_store.js. The curation service copies each DIP there
+         * from DuraCloud Preserve; repov2 only reads it, with a key scoped
+         * to the dip-store/ folder of library-repository. Unset → the
+         * client reports not configured and the Services card is gray.
+         */
+        dip_store: {
+            /*
+             * Bucket + key prefix, s3://<bucket>/<prefix>/, e.g.
+             * s3://library-repository/dip-store/. Stored DB paths are
+             * relative to the prefix.
+             */
+            location: optional('DIP_STORE_LOCATION', ''),
+            // Full endpoint URL, e.g. https://s3.us-west-1.wasabisys.com.
+            endpoint: optional('DIP_STORE_ENDPOINT', ''),
+            region: optional('DIP_STORE_REGION', ''),
+            access_key_id: optional('DIP_STORE_ACCESS_KEY_ID', ''),
+            secret_access_key: optional('DIP_STORE_SECRET_ACCESS_KEY', ''),
+            /*
+             * Per-request timeout. The Services probe is bounded by this
+             * too, so it must stay at or under the banner deadline.
+             */
+            timeout_ms: integer('DIP_STORE_TIMEOUT_MS', 15000),
+        },
+
+        /*
          * Archivematica — preservation pipeline. Two APIs with separate
          * credentials:
          *   - dashboard API (transfer/ingest), auth via username +

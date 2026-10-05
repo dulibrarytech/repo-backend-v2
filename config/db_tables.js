@@ -28,6 +28,12 @@ module.exports = {
      * knex/migrations/repo/20260731000001_handles.js.
      */
     handles: process.env.REPO_HANDLES || 'tbl_handles',
+    /*
+     * tbl_dip_store — one row per object tracking the copy of its DIP from
+     * DuraCloud Preserve to the Wasabi DIP store. See
+     * knex/migrations/repo/20261005000001_dip_store.js.
+     */
+    dip_store: process.env.REPO_DIP_STORE || 'tbl_dip_store',
 
     // repo_queue DB
     ingest_queue: process.env.REPO_INGEST_QUEUE || 'tbl_ingest_queue',

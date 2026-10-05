@@ -33,6 +33,8 @@ async function reset_data() {
      * every reset.
      */
     await db()(tables.aip_store).del();
+    // tbl_dip_store: repo DB, no FK.
+    await db()(tables.dip_store).del();
     /*
      * ingest_events first — FK-by-convention into ingest_queue, must
      * not outlive its parent rows in test fixtures.
