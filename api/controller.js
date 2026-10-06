@@ -18,6 +18,7 @@ const log = require('../libs/log');
 const { create_model, make_thumbnail_url_for } = require('./model');
 const tn_service = require('../libs/tn_service');
 const duracloud = require('../libs/duracloud');
+const dip_store = require('../libs/dip_store');
 const projection = require('../libs/object_projection');
 const repo_model = require('../repository/model');
 const { NotFoundError } = require('../libs/errors');
@@ -50,6 +51,13 @@ function send_json(req, res, status, body, { max_age = 300 } = {}) {
 }
 
 function send_thumbnail_placeholder(res) {
+    /*
+     * A client that cancelled the request (a page navigation) has
+     * nothing to receive: a write to its destroyed response is dropped,
+     * and the file stream behind it would then wait forever for a
+     * 'drain', one open descriptor per cancel.
+     */
+    if (res.destroyed || res.writableEnded) return;
     res.status(200);
     res.set('Content-Type', 'image/svg+xml');
     /*
@@ -163,8 +171,24 @@ async function get_thumbnail(req, res) {
         }
     }
 
-    // Case 3: DuraCloud fallback.
-    if (stored && duracloud.is_configured()) {
+    /*
+     * Case 3: the DIP store once serving has switched to it
+     * (DIP_GATEWAY_ENABLED); DuraCloud until then.
+     */
+    if (stored && dip_store.is_serving()) {
+        try {
+            const status = await dip_store.pipe_to(res, stored, {
+                on_200: (headers) => {
+                    res.status(200);
+                    res.set('Content-Type', headers['content-type'] || 'image/jpeg');
+                    res.set('Cache-Control', 'public, max-age=3600');
+                },
+            });
+            if (status === 200) return;
+        } catch {
+            return send_thumbnail_placeholder(res);
+        }
+    } else if (stored && duracloud.is_configured()) {
         let upstream;
         try {
             upstream = await duracloud.get_thumbnail_stream(stored);

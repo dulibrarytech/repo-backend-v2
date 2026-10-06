@@ -19,8 +19,14 @@
  * plus:
  *
  *   key_for(path)                        → the S3 key for a stored path
- *   head(path, { signal })               → { status, data: null, headers }
- *   get_stream(path, { signal })         → { status, data, headers }
+ *   head(path, { signal, s3 })           → { status, data: null, headers }
+ *   get_stream(path, { signal, s3 })     → { status, data, headers }
+ *   pipe_to(res, path, { on_200, s3 })   → upstream status; pipes a 200
+ *   create_client()                      → a new S3Client with its own pool
+ *   is_serving()                         → DIP_GATEWAY_ENABLED and configured
+ *
+ * `s3` is an optional client of the caller's own (from create_client);
+ * without it, calls share this module's client.
  *
  * `path` is a stored DB path, relative to the location prefix, e.g.
  * `<dip folder>/objects/<file>` or `<dip folder>/thumbnails/<uuid>.jpg`.
@@ -49,6 +55,7 @@
  *     up BEFORE awaiting get_stream (aborting destroys the connection), and
  *   - pipe `data` and handle its 'error' event, or destroy it when it
  *     decides not to send it.
+ * pipe_to does all of that for an HTTP response; prefer it.
  * head, fetch_text and ping share the pool, so leaked bodies eventually
  * fail every call with a connection timeout while Wasabi is healthy.
  *
@@ -63,6 +70,7 @@
  *     present → 403.
  */
 
+const { pipeline } = require('node:stream');
 const {
     GetObjectCommand,
     HeadObjectCommand,
@@ -94,6 +102,14 @@ function is_configured() {
     return Boolean(
         c && c.location && c.endpoint && c.region && c.access_key_id && c.secret_access_key
     );
+}
+
+/*
+ * Has serving switched to the DIP store (DIP_GATEWAY_ENABLED, plan P2)?
+ * From then on the thumbnail chains read it instead of DuraCloud.
+ */
+function is_serving() {
+    return Boolean(cfg().gateway_enabled) && is_configured();
 }
 
 /*
@@ -202,6 +218,15 @@ function client_options(c) {
 }
 
 /*
+ * A new client, with its own pool of MAX_SOCKETS connections. For a
+ * caller whose open downloads must not starve everyone else (the
+ * gateway); pass it back as `s3`.
+ */
+function create_client(c = cfg()) {
+    return new S3Client(client_options(c));
+}
+
+/*
  * One S3 client per config object. app_config() returns the same object
  * until a reload, so tests that reset config also get a fresh client.
  */
@@ -209,7 +234,7 @@ function client() {
     if (client_override) return client_override;
     const c = cfg();
     if (!cached || cached.config !== c) {
-        cached = { config: c, client: new S3Client(client_options(c)) };
+        cached = { config: c, client: create_client(c) };
     }
     return cached.client;
 }
@@ -293,9 +318,9 @@ function release_body(err) {
  * key that shares it. Returns true/false, or null when the listing itself
  * fails, so the caller keeps whatever status it had.
  */
-async function key_exists(bucket, key, signal) {
+async function key_exists(bucket, key, signal, s3) {
     try {
-        const out = await client().send(
+        const out = await s3.send(
             new ListObjectsV2Command({ Bucket: bucket, Prefix: key, MaxKeys: 1 }),
             { abortSignal: signal }
         );
@@ -313,11 +338,11 @@ async function key_exists(bucket, key, signal) {
  * HTTP errors become statuses (a 403 confirmed as missing becomes 404);
  * a timeout, an abort, a transport failure or an undecodable 2xx throw.
  */
-async function send_one(kind, bucket, key, dl, signal) {
+async function send_one(kind, bucket, key, dl, signal, s3) {
     const input = { Bucket: bucket, Key: key };
     const command = kind === 'head' ? new HeadObjectCommand(input) : new GetObjectCommand(input);
     try {
-        const out = await client().send(command, { abortSignal: dl.signal });
+        const out = await s3.send(command, { abortSignal: dl.signal });
         const status = (out.$metadata && out.$metadata.httpStatusCode) || 200;
         return { status, data: kind === 'get' ? out.Body : null, headers: headers_from(out) };
     } catch (err) {
@@ -329,7 +354,7 @@ async function send_one(kind, bucket, key, dl, signal) {
             throw new UpstreamError(`DIP store request failed: ${err.message}`);
         }
         if (status === 403) {
-            const exists = await key_exists(bucket, key, dl.signal);
+            const exists = await key_exists(bucket, key, dl.signal, s3);
             if (exists === null) throw_if_ended(dl, signal, 'request', key);
             if (exists === false) return { status: 404, data: null, headers: {} };
         }
@@ -342,7 +367,7 @@ async function send_one(kind, bucket, key, dl, signal) {
  * are in (or the call failed); the returned `dl` lets fetch_text re-arm
  * it for the body.
  */
-async function request(kind, path, { signal } = {}) {
+async function request(kind, path, { signal, s3 } = {}) {
     if (!is_configured()) {
         throw new UpstreamError('DIP store is not configured');
     }
@@ -350,18 +375,86 @@ async function request(kind, path, { signal } = {}) {
     const key = key_for(path);
     const dl = deadline(signal, cfg().timeout_ms);
     try {
-        return { res: await send_one(kind, bucket, key, dl, signal), dl };
+        return { res: await send_one(kind, bucket, key, dl, signal, s3 || client()), dl };
     } finally {
         dl.clear();
     }
 }
 
-async function head(path, { signal } = {}) {
-    return (await request('head', path, { signal })).res;
+async function head(path, { signal, s3 } = {}) {
+    return (await request('head', path, { signal, s3 })).res;
 }
 
-async function get_stream(path, { signal } = {}) {
-    return (await request('get', path, { signal })).res;
+async function get_stream(path, { signal, s3 } = {}) {
+    return (await request('get', path, { signal, s3 })).res;
+}
+
+// The client of an HTTP response has gone, or the response is over.
+function gone(res) {
+    return res.destroyed || res.writableEnded;
+}
+
+/*
+ * GET `path` and pipe it into `res`, an HTTP response: the safe way to
+ * own a 200 (see the header). The abort is wired to `res` closing before
+ * the request goes out, so a client that leaves at any point, before the
+ * call included, releases the connection. On a 200, on_200(headers) runs
+ * before the first byte (set the status and headers there), and the body
+ * then streams with no time limit; a failure mid-body destroys `res` and
+ * is logged. Any other status is returned with nothing written to `res`.
+ * Throws like get_stream; a client that has already left is an
+ * UpstreamError "aborted by the caller", as during the request.
+ */
+async function pipe_to(res, path, { on_200, s3 } = {}) {
+    const aborted = () => new UpstreamError('DIP store request aborted by the caller');
+    if (gone(res)) throw aborted();
+    const controller = new AbortController();
+    let upstream_error = null;
+    let client_left = false;
+    const on_close = () => {
+        /*
+         * `res` also closes when pipeline destroys it after an upstream
+         * failure; that one is logged below, a client leaving is not.
+         */
+        if (!upstream_error) client_left = true;
+        controller.abort();
+    };
+    res.once('close', on_close);
+    let out;
+    try {
+        out = await get_stream(path, { signal: controller.signal, s3 });
+    } catch (err) {
+        res.off('close', on_close);
+        throw err;
+    }
+    const release = () => {
+        res.off('close', on_close);
+        if (out.data && typeof out.data.destroy === 'function') out.data.destroy();
+    };
+    if (out.status !== 200 || !out.data) {
+        release();
+        return out.status;
+    }
+    if (gone(res)) {
+        release();
+        throw aborted();
+    }
+    out.data.once('error', (err) => {
+        upstream_error = err;
+    });
+    try {
+        if (on_200) on_200(out.headers);
+        pipeline(out.data, res, (err) => {
+            res.off('close', on_close);
+            if (err && !client_left) {
+                log.warn({ event: 'dip_store_stream_failed', path, err: err.message });
+            }
+        });
+    } catch (err) {
+        release();
+        throw new UpstreamError(`DIP store stream failed: ${err.message}`);
+    }
+    return 200;
 }
 
 /*
@@ -432,13 +525,16 @@ function _reset() {
 
 module.exports = {
     is_configured,
+    is_serving,
     parse_location,
     key_for,
     mets_path,
     head,
     get_stream,
+    pipe_to,
     fetch_text,
     ping,
+    create_client,
     MAX_SOCKETS,
     _client_options: client_options,
     _set_client,

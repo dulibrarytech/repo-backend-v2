@@ -11,9 +11,12 @@
 
 const http = require('node:http');
 const { Readable } = require('node:stream');
+const express = require('express');
+const supertest = require('supertest');
 
 const dip_store = require('../../../libs/dip_store');
 const app_config = require('../../../config/app');
+const log = require('../../../libs/log');
 const { UpstreamError, ValidationError } = require('../../../libs/errors');
 
 const ENV = {
@@ -541,6 +544,327 @@ describe('libs/dip_store', () => {
             await expect(dip_store.fetch_text(`${FOLDER}/METS.x.xml`)).rejects.toThrow(
                 /DIP store read failed/
             );
+        });
+    });
+
+    describe('is_serving', () => {
+        it('needs DIP_GATEWAY_ENABLED and a configured store', () => {
+            expect(dip_store.is_serving()).toBe(false);
+            process.env.DIP_GATEWAY_ENABLED = 'true';
+            app_config._reset();
+            expect(dip_store.is_serving()).toBe(true);
+            process.env.DIP_STORE_ACCESS_KEY_ID = '';
+            app_config._reset();
+            expect(dip_store.is_serving()).toBe(false);
+        });
+    });
+
+    describe('the s3 option and create_client', () => {
+        it('sends through the given client, never the shared one', async () => {
+            const shared = fake_client({});
+            const own = fake_client({
+                HeadObjectCommand: () => ({ $metadata: { httpStatusCode: 200 }, ContentLength: 3 }),
+            });
+            dip_store._set_client(shared);
+            const res = await dip_store.head(`${FOLDER}/thumbnails/a.jpg`, { s3: own });
+            expect(res.status).toBe(200);
+            expect(own.calls).toHaveLength(1);
+            expect(shared.calls).toHaveLength(0);
+        });
+
+        it('confirms a 403 through the same given client', async () => {
+            const shared = fake_client({});
+            const own = fake_client({
+                GetObjectCommand: () => {
+                    throw s3_error(403, 'AccessDenied');
+                },
+                ListObjectsV2Command: () => ({ Contents: [] }),
+            });
+            dip_store._set_client(shared);
+            const res = await dip_store.get_stream(`${FOLDER}/objects/a.pdf`, { s3: own });
+            expect(res.status).toBe(404);
+            expect(own.calls.map((c) => c.name)).toEqual([
+                'GetObjectCommand',
+                'ListObjectsV2Command',
+            ]);
+            expect(shared.calls).toHaveLength(0);
+        });
+
+        it('create_client builds a new client, with its own pool, from the config', async () => {
+            const a = dip_store.create_client();
+            const b = dip_store.create_client();
+            try {
+                expect(a).not.toBe(b);
+                expect(await a.config.region()).toBe('us-west-1');
+            } finally {
+                a.destroy();
+                b.destroy();
+            }
+        });
+    });
+
+    describe('pipe_to', () => {
+        /*
+         * A one-route app around pipe_to. A non-200 answers 418 with the
+         * upstream status, which it could not do if pipe_to had already
+         * written anything; a throw answers 503 with the error's name.
+         */
+        function app_for(path, seen = []) {
+            const app = express();
+            app.get('/t', async (req, res) => {
+                const listeners = res.listenerCount('close');
+                try {
+                    const status = await dip_store.pipe_to(res, path, {
+                        on_200: (headers) => {
+                            seen.push(headers);
+                            res.status(200);
+                            res.set('Content-Type', headers['content-type']);
+                        },
+                    });
+                    if (status !== 200) {
+                        res.status(418).json({
+                            upstream: status,
+                            leaked_listeners: res.listenerCount('close') - listeners,
+                        });
+                    }
+                } catch (err) {
+                    res.status(503).json({ error: err.name });
+                }
+            });
+            return app;
+        }
+
+        it('streams a 200 after on_200 has set the status and headers', async () => {
+            const seen = [];
+            dip_store._set_client(
+                fake_client({
+                    GetObjectCommand: () => ({
+                        $metadata: { httpStatusCode: 200 },
+                        Body: body_of('%PDF-1.7'),
+                        ContentType: 'application/pdf',
+                        ContentLength: 8,
+                    }),
+                })
+            );
+            const res = await supertest(app_for(`${FOLDER}/objects/a.pdf`, seen))
+                .get('/t')
+                .buffer(true)
+                .parse((r, cb) => {
+                    const chunks = [];
+                    r.on('data', (c) => chunks.push(c));
+                    r.on('end', () => cb(null, Buffer.concat(chunks)));
+                });
+            expect(res.status).toBe(200);
+            expect(res.headers['content-type']).toBe('application/pdf');
+            expect(res.body.toString()).toBe('%PDF-1.7');
+            expect(seen).toEqual([{ 'content-type': 'application/pdf', 'content-length': '8' }]);
+        });
+
+        it('returns a non-200 without writing anything, and removes its listener', async () => {
+            dip_store._set_client(
+                fake_client({
+                    GetObjectCommand: () => {
+                        throw s3_error(404, 'NoSuchKey');
+                    },
+                })
+            );
+            const res = await supertest(app_for(`${FOLDER}/objects/x.pdf`)).get('/t');
+            expect(res.status).toBe(418);
+            expect(res.body).toEqual({ upstream: 404, leaked_listeners: 0 });
+        });
+
+        it('throws UpstreamError like get_stream, with nothing written', async () => {
+            dip_store._set_client(
+                fake_client({
+                    GetObjectCommand: () => {
+                        throw transport_error('socket hang up');
+                    },
+                })
+            );
+            const res = await supertest(app_for(`${FOLDER}/objects/x.pdf`)).get('/t');
+            expect(res.status).toBe(503);
+            expect(res.body.error).toBe('UpstreamError');
+        });
+
+        it('aborts the S3 request when the client goes away mid-body', async () => {
+            const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+            let signal;
+            const body = new Readable({ read() {} });
+            body.push('first chunk');
+            dip_store._set_client(
+                fake_client({
+                    GetObjectCommand: (input, index, opts) => {
+                        signal = opts.abortSignal;
+                        signal.addEventListener('abort', () =>
+                            body.destroy(
+                                Object.assign(new Error('aborted'), { name: 'AbortError' })
+                            )
+                        );
+                        return {
+                            $metadata: { httpStatusCode: 200 },
+                            Body: body,
+                            ContentType: 'application/pdf',
+                        };
+                    },
+                })
+            );
+            const server = app_for(`${FOLDER}/objects/big.pdf`).listen(0, '127.0.0.1');
+            await new Promise((resolve) => server.once('listening', resolve));
+            try {
+                await new Promise((resolve) => {
+                    const req = http.get(`http://127.0.0.1:${server.address().port}/t`, (res) => {
+                        res.once('data', () => {
+                            req.destroy();
+                            resolve();
+                        });
+                    });
+                    req.on('error', () => {});
+                });
+                await vi.waitFor(() => expect(signal.aborted).toBe(true), { timeout: 2000 });
+                expect(body.destroyed).toBe(true);
+                // A client leaving is not an upstream failure: nothing is logged.
+                await new Promise((resolve) => setTimeout(resolve, 50));
+                expect(warn.mock.calls.map((c) => c[0].event)).not.toContain(
+                    'dip_store_stream_failed'
+                );
+            } finally {
+                warn.mockRestore();
+                server.closeAllConnections();
+                await new Promise((resolve) => server.close(resolve));
+            }
+        });
+
+        /*
+         * A real response whose client has gone: the server waits for the
+         * client to leave before `handler` runs, so pipe_to sees a closed
+         * `res`. Resolves with whatever `handler` returns.
+         */
+        async function with_gone_client(handler) {
+            let settle;
+            const outcome = new Promise((resolve) => {
+                settle = resolve;
+            });
+            const server = http.createServer(async (req, res) => {
+                await vi.waitFor(() => expect(res.destroyed).toBe(true), { timeout: 2000 });
+                settle(await handler(res));
+            });
+            server.listen(0, '127.0.0.1');
+            await new Promise((resolve) => server.once('listening', resolve));
+            try {
+                const req = http.get(`http://127.0.0.1:${server.address().port}/t`);
+                req.on('error', () => {});
+                req.on('socket', () => setTimeout(() => req.destroy(), 20));
+                return await outcome;
+            } finally {
+                server.closeAllConnections();
+                await new Promise((resolve) => server.close(resolve));
+            }
+        }
+
+        it('throws "aborted by the caller" before any request when the client has already left', async () => {
+            const client = fake_client({
+                GetObjectCommand: () => ({ $metadata: { httpStatusCode: 200 } }),
+            });
+            dip_store._set_client(client);
+            const error = await with_gone_client((res) =>
+                dip_store.pipe_to(res, `${FOLDER}/objects/a.pdf`).then(
+                    () => null,
+                    (err) => err.message
+                )
+            );
+            expect(error).toMatch(/aborted by the caller/);
+            expect(client.calls).toHaveLength(0);
+        });
+
+        it('destroys the body and throws when the client leaves while the store is answering', async () => {
+            const body = new Readable({ read() {} });
+            body.push('jpeg');
+            // A store that ignores the abort and answers anyway.
+            dip_store._set_client(
+                fake_client({
+                    GetObjectCommand: () =>
+                        new Promise((resolve) =>
+                            setTimeout(
+                                () =>
+                                    resolve({
+                                        $metadata: { httpStatusCode: 200 },
+                                        Body: body,
+                                        ContentType: 'image/jpeg',
+                                    }),
+                                50
+                            )
+                        ),
+                })
+            );
+            let settle;
+            const outcome = new Promise((resolve) => {
+                settle = resolve;
+            });
+            const server = http.createServer((req, res) => {
+                const listeners = res.listenerCount('close');
+                dip_store.pipe_to(res, `${FOLDER}/thumbnails/a.jpg`).then(
+                    () => settle({ error: null }),
+                    (err) =>
+                        settle({
+                            error: err.message,
+                            leaked: res.listenerCount('close') - listeners,
+                        })
+                );
+            });
+            server.listen(0, '127.0.0.1');
+            await new Promise((resolve) => server.once('listening', resolve));
+            try {
+                const req = http.get(`http://127.0.0.1:${server.address().port}/t`);
+                req.on('error', () => {});
+                req.on('socket', () => setTimeout(() => req.destroy(), 10));
+                const out = await outcome;
+                expect(out.error).toMatch(/aborted by the caller/);
+                expect(body.destroyed).toBe(true);
+                expect(out.leaked).toBe(0);
+            } finally {
+                server.closeAllConnections();
+                await new Promise((resolve) => server.close(resolve));
+            }
+        });
+
+        it('logs dip_store_stream_failed when the upstream body fails mid-stream', async () => {
+            const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+            const body = new Readable({ read() {} });
+            body.push('first chunk');
+            dip_store._set_client(
+                fake_client({
+                    GetObjectCommand: () => ({
+                        $metadata: { httpStatusCode: 200 },
+                        Body: body,
+                        ContentType: 'application/pdf',
+                    }),
+                })
+            );
+            const server = app_for(`${FOLDER}/objects/cut.pdf`).listen(0, '127.0.0.1');
+            await new Promise((resolve) => server.once('listening', resolve));
+            try {
+                const outcome = await new Promise((resolve) => {
+                    http.get(`http://127.0.0.1:${server.address().port}/t`, (res) => {
+                        res.once('data', () =>
+                            body.destroy(new Error('connection reset by Wasabi'))
+                        );
+                        res.on('error', (err) => resolve(err.code));
+                        res.on('end', () => resolve('end'));
+                    }).on('error', (err) => resolve(err.code));
+                });
+                expect(outcome).not.toBe('end');
+                await vi.waitFor(
+                    () =>
+                        expect(warn.mock.calls.map((c) => c[0].event)).toContain(
+                            'dip_store_stream_failed'
+                        ),
+                    { timeout: 2000 }
+                );
+            } finally {
+                warn.mockRestore();
+                server.closeAllConnections();
+                await new Promise((resolve) => server.close(resolve));
+            }
         });
     });
 

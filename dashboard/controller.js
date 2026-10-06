@@ -20,6 +20,7 @@ const projection = require('../libs/object_projection');
 const jwt = require('../libs/jwt');
 const thumbnails = require('./thumbnails');
 const duracloud = require('../libs/duracloud');
+const dip_store = require('../libs/dip_store');
 const tn_service = require('../libs/tn_service');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -933,6 +934,12 @@ const THUMBNAIL_PLACEHOLDER = path.join(
 
 // 200, not 404 — a 404 would put the row's <img> into the broken-image state.
 function send_thumbnail_placeholder(res) {
+    /*
+     * Nothing for a client that cancelled the request: a write to its
+     * destroyed response is dropped, and the file stream would wait
+     * forever for a 'drain', leaking one descriptor per cancel.
+     */
+    if (res.destroyed || res.writableEnded) return;
     res.status(200);
     res.set('Content-Type', 'image/svg+xml');
     res.set('Cache-Control', 'private, max-age=60');
@@ -946,7 +953,8 @@ function send_thumbnail_placeholder(res) {
  *      302 redirect.
  *   2. TN service, by PID, when TN_SERVICE + TN_SERVICE_API_KEY are set.
  *      Disk-cached on success.
- *   3. DuraCloud, when the stored value is a dip-store path.
+ *   3. The DIP store (Wasabi) once DIP_GATEWAY_ENABLED is on, DuraCloud
+ *      until then, when the stored value is a dip-store path.
  *   4. Local SVG placeholder, as 200.
  *
  * Responses carry `Cache-Control: private, max-age=3600` — private because the
@@ -992,8 +1000,25 @@ async function object_thumbnail_raw(req, res) {
         }
     }
 
-    // Case 3: DuraCloud, for legacy rows whose stored value is a dip-store path.
-    if (stored && duracloud.is_configured()) {
+    /*
+     * Case 3: the DIP store once serving has switched to it
+     * (DIP_GATEWAY_ENABLED); DuraCloud until then. Either way, for rows
+     * whose stored value is a dip-store path.
+     */
+    if (stored && dip_store.is_serving()) {
+        try {
+            const status = await dip_store.pipe_to(res, stored, {
+                on_200: (headers) => {
+                    res.status(200);
+                    res.set('Content-Type', headers['content-type'] || 'image/jpeg');
+                    res.set('Cache-Control', 'private, max-age=3600');
+                },
+            });
+            if (status === 200) return;
+        } catch {
+            return send_thumbnail_placeholder(res);
+        }
+    } else if (stored && duracloud.is_configured()) {
         let upstream;
         try {
             upstream = await duracloud.get_thumbnail_stream(stored);

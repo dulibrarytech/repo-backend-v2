@@ -423,6 +423,21 @@ function build() {
              * the banner deadline.
              */
             timeout_ms: positive_integer('DIP_STORE_TIMEOUT_MS', 15000),
+            /*
+             * The serving cutover (plan P2). On: the dip-store gateway
+             * answers the frontend, and both thumbnail chains read the
+             * DIP store instead of DuraCloud. Off: the gateway answers
+             * 404 and the thumbnails keep reading DuraCloud.
+             */
+            gateway_enabled: boolean('DIP_GATEWAY_ENABLED', false),
+            /*
+             * The gateway's Basic credential, shared with the frontend's
+             * REPOSITORY_USER / REPOSITORY_PWD. Use URL-safe characters
+             * (letters, digits, -._~): the frontend puts them in the URL
+             * unencoded.
+             */
+            gateway_user: optional('DIP_GATEWAY_USER', ''),
+            gateway_password: optional('DIP_GATEWAY_PASSWORD', ''),
         },
 
         /*
