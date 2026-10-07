@@ -18,7 +18,7 @@ const PARTIAL = path.resolve(
 function render(over = {}) {
     return ejs.renderFile(PARTIAL, {
         reachable: true,
-        body: { ok: true, bucket: 'library-special-collections', elapsed_ms: 700 },
+        body: { ok: true, bucket: 'test-batch-backups', elapsed_ms: 700 },
         transport_error: null,
         checked_at: new Date().toISOString(),
         dashboard_base: '/repo/dashboard',
@@ -33,14 +33,14 @@ function usage_fixture() {
         computed_at: Math.floor(Date.now() / 1000) - 300, // 5 minutes ago
         buckets: {
             aip_store: {
-                bucket: 'library-repository',
+                bucket: 'test-aip-store',
                 prefix: 'aip-store/',
                 objects: 21051,
                 bytes: 9_345_678_901_234, // ~8.5 TB
                 duration_ms: 21000,
             },
             batch_backups: {
-                bucket: 'library-special-collections',
+                bucket: 'test-batch-backups',
                 prefix: '',
                 objects: 412345,
                 bytes: 7_200_000_000_000, // ~6.55 TB

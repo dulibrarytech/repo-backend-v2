@@ -52,10 +52,8 @@ function send_json(req, res, status, body, { max_age = 300 } = {}) {
 
 function send_thumbnail_placeholder(res) {
     /*
-     * A client that cancelled the request (a page navigation) has
-     * nothing to receive: a write to its destroyed response is dropped,
-     * and the file stream behind it would then wait forever for a
-     * 'drain', one open descriptor per cancel.
+     * Nothing for a client that cancelled: the write would be dropped and
+     * the file stream would wait forever, one open descriptor per cancel.
      */
     if (res.destroyed || res.writableEnded) return;
     res.status(200);
@@ -171,10 +169,7 @@ async function get_thumbnail(req, res) {
         }
     }
 
-    /*
-     * Case 3: the DIP store once serving has switched to it
-     * (DIP_GATEWAY_ENABLED); DuraCloud until then.
-     */
+    // Case 3: the DIP store once DIP_GATEWAY_ENABLED is on; DuraCloud until then.
     if (stored && dip_store.is_serving()) {
         try {
             const status = await dip_store.pipe_to(res, stored, {

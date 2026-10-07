@@ -935,9 +935,8 @@ const THUMBNAIL_PLACEHOLDER = path.join(
 // 200, not 404 — a 404 would put the row's <img> into the broken-image state.
 function send_thumbnail_placeholder(res) {
     /*
-     * Nothing for a client that cancelled the request: a write to its
-     * destroyed response is dropped, and the file stream would wait
-     * forever for a 'drain', leaking one descriptor per cancel.
+     * Nothing for a client that cancelled: the write would be dropped and
+     * the file stream would wait forever, one open descriptor per cancel.
      */
     if (res.destroyed || res.writableEnded) return;
     res.status(200);
@@ -1000,11 +999,7 @@ async function object_thumbnail_raw(req, res) {
         }
     }
 
-    /*
-     * Case 3: the DIP store once serving has switched to it
-     * (DIP_GATEWAY_ENABLED); DuraCloud until then. Either way, for rows
-     * whose stored value is a dip-store path.
-     */
+    // Case 3: the DIP store once DIP_GATEWAY_ENABLED is on; DuraCloud until then.
     if (stored && dip_store.is_serving()) {
         try {
             const status = await dip_store.pipe_to(res, stored, {

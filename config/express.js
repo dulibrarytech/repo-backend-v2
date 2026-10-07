@@ -186,9 +186,8 @@ module.exports = function create_app() {
      */
     require('../images/routes')(app);
     /*
-     * DIP store gateway — the public frontend's source for DIP files
-     * (thumbnails, JPG and PDF access copies) once serving switches to
-     * the Wasabi copy (DIP_GATEWAY_ENABLED). Basic-auth gated.
+     * DIP store gateway — the public frontend's DIP files once
+     * DIP_GATEWAY_ENABLED is on. Basic-auth gated.
      */
     require('../dip_store_gateway/routes')(app);
 

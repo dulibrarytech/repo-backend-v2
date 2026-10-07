@@ -1,13 +1,12 @@
 'use strict';
 
 /*
- * The two thumbnail proxies' third step after the serving cutover (plan
- * P2): with DIP_GATEWAY_ENABLED on, a dip-store path is read from the
- * DIP store (Wasabi) instead of DuraCloud. Covers the dashboard route
- * (cookie auth, row exists) and the public API route (the index says
- * published). A fake S3 client stands in for the store; the TN service
- * and DuraCloud are unconfigured, so the DIP store is the only source in
- * play.
+ * The two thumbnail proxies' third step after the serving cutover: with
+ * DIP_GATEWAY_ENABLED on, a dip-store path is read from the DIP store
+ * instead of DuraCloud. Covers the dashboard route (cookie auth, row
+ * exists) and the public API route (the index says published). A fake S3
+ * client stands in for the store; the TN service and DuraCloud are
+ * unconfigured, so the DIP store is the only source in play.
  *
  * app_config is one cached object per process, so each describe block
  * builds its app (and so its config) in beforeAll.
@@ -26,8 +25,8 @@ const dip_store = require('../../libs/dip_store');
 const es = require('../../libs/elasticsearch');
 
 const ENV = {
-    DIP_STORE_LOCATION: 's3://library-repository/dip-store/',
-    DIP_STORE_ENDPOINT: 'https://s3.us-west-1.wasabisys.com',
+    DIP_STORE_LOCATION: 's3://test-dip-store/dip-store/',
+    DIP_STORE_ENDPOINT: 'https://s3.test.example',
     DIP_STORE_REGION: 'us-west-1',
     DIP_STORE_ACCESS_KEY_ID: 'test-key',
     DIP_STORE_SECRET_ACCESS_KEY: 'test-secret',
@@ -83,10 +82,10 @@ function store_that_waits() {
 }
 
 /*
- * Issue `count` requests to `url` and cancel each after `after_ms`, like
- * a browser navigating away while thumbnails load. Resolves once the
- * store has seen every abort. Returns how many placeholder streams the
- * handler opened for them (none is right: the client is gone).
+ * Issue `count` requests to `url` and cancel each after 30 ms, like a
+ * browser navigating away while thumbnails load. Resolves once the store
+ * has seen every abort; returns how many placeholder streams the handler
+ * opened for them (none is right: the client is gone).
  */
 async function cancel_requests(app, url, headers, count, store) {
     const placeholders = vi.spyOn(fs, 'createReadStream');
@@ -153,7 +152,7 @@ describe('dashboard thumbnail — serving from the DIP store', () => {
         expect(res.headers['cache-control']).toMatch(/private/);
         expect(res.body.toString()).toBe('jpeg-bytes');
         expect(s3.calls[0].input).toEqual({
-            Bucket: 'library-repository',
+            Bucket: 'test-dip-store',
             Key: `dip-store/${STORED}`,
         });
         // The abort is wired before the request goes out (pipe_to).

@@ -47,11 +47,7 @@ function integer(name, fallback) {
     return n;
 }
 
-/*
- * An integer from 1 to 2^31-1, for timeouts: 0 would switch the SDK's
- * timeouts off (and abort a probe at once), and anything larger
- * overflows setTimeout.
- */
+// An integer from 1 to 2^31-1: 0 would switch a timeout off, more overflows setTimeout.
 function positive_integer(name, fallback) {
     const n = integer(name, fallback);
     if (n < 1 || n > 2147483647) {
@@ -398,18 +394,13 @@ function build() {
         },
 
         /*
-         * DIP store — the Wasabi access copy of every DIP, read through
-         * libs/dip_store.js. The curation service copies each DIP there
-         * from DuraCloud Preserve; repov2 only reads it, with a key scoped
-         * to the dip-store/ folder of library-repository. Unset → the
-         * client reports not configured and the Services card is gray.
+         * DIP store — the Wasabi copy of every DIP's served files, written
+         * by the curation service and read here (libs/dip_store.js) with a
+         * key scoped to the dip-store/ folder. Unset → not configured; the
+         * Services card is gray.
          */
         dip_store: {
-            /*
-             * Bucket + key prefix, s3://<bucket>/<prefix>/, e.g.
-             * s3://library-repository/dip-store/. Stored DB paths are
-             * relative to the prefix.
-             */
+            // s3://<bucket>/<prefix>/; stored DB paths are relative to the prefix.
             location: optional('DIP_STORE_LOCATION', ''),
             // Full endpoint URL, e.g. https://s3.us-west-1.wasabisys.com.
             endpoint: optional('DIP_STORE_ENDPOINT', ''),
@@ -417,24 +408,22 @@ function build() {
             access_key_id: optional('DIP_STORE_ACCESS_KEY_ID', ''),
             secret_access_key: optional('DIP_STORE_SECRET_ACCESS_KEY', ''),
             /*
-             * Total wait for a response's headers, retries included; a
-             * METS read gets the same again for its body. The Services
-             * probe is bounded by this too, so it must stay at or under
-             * the banner deadline.
+             * Total wait for a response's headers, retries included (a
+             * METS read gets the same again for its body). Must stay at
+             * or under the services-banner deadline, which bounds the probe.
              */
             timeout_ms: positive_integer('DIP_STORE_TIMEOUT_MS', 15000),
             /*
-             * The serving cutover (plan P2). On: the dip-store gateway
-             * answers the frontend, and both thumbnail chains read the
-             * DIP store instead of DuraCloud. Off: the gateway answers
-             * 404 and the thumbnails keep reading DuraCloud.
+             * The serving cutover. On: the gateway answers the
+             * frontend and both thumbnail chains read the DIP store. Off:
+             * the gateway refuses (404; 500 to the frontend's own
+             * credential) and the thumbnails keep reading DuraCloud.
              */
             gateway_enabled: boolean('DIP_GATEWAY_ENABLED', false),
             /*
-             * The gateway's Basic credential, shared with the frontend's
-             * REPOSITORY_USER / REPOSITORY_PWD. Use URL-safe characters
-             * (letters, digits, -._~): the frontend puts them in the URL
-             * unencoded.
+             * The gateway's Basic credential (the frontend's REPOSITORY_USER
+             * / REPOSITORY_PWD). URL-safe characters only (letters, digits,
+             * -._~): the frontend puts them in the URL unencoded.
              */
             gateway_user: optional('DIP_GATEWAY_USER', ''),
             gateway_password: optional('DIP_GATEWAY_PASSWORD', ''),

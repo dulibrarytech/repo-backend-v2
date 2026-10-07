@@ -10,8 +10,8 @@ const dip_store = require('../../../libs/dip_store');
 const app_config = require('../../../config/app');
 
 const ENV = {
-    DIP_STORE_LOCATION: 's3://library-repository/dip-store/',
-    DIP_STORE_ENDPOINT: 'https://s3.us-west-1.wasabisys.com',
+    DIP_STORE_LOCATION: 's3://test-dip-store/dip-store/',
+    DIP_STORE_ENDPOINT: 'https://s3.test.example',
     DIP_STORE_REGION: 'us-west-1',
     DIP_STORE_ACCESS_KEY_ID: 'test-key',
     DIP_STORE_SECRET_ACCESS_KEY: 'test-secret',
@@ -54,7 +54,7 @@ describe('DIP store service probe', () => {
         expect(await dashboard._probe_dip_store()).toEqual({
             configured: true,
             reachable: true,
-            detail: 'dip-store/ listing OK',
+            detail: 'dip-store/ list and read OK',
         });
     });
 

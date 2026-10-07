@@ -20,8 +20,8 @@ const log = require('../../../libs/log');
 const { UpstreamError, ValidationError } = require('../../../libs/errors');
 
 const ENV = {
-    DIP_STORE_LOCATION: 's3://library-repository/dip-store/',
-    DIP_STORE_ENDPOINT: 'https://s3.us-west-1.wasabisys.com',
+    DIP_STORE_LOCATION: 's3://test-dip-store/dip-store/',
+    DIP_STORE_ENDPOINT: 'https://s3.test.example',
     DIP_STORE_REGION: 'us-west-1',
     DIP_STORE_ACCESS_KEY_ID: 'test-key',
     DIP_STORE_SECRET_ACCESS_KEY: 'test-secret',
@@ -104,8 +104,8 @@ describe('libs/dip_store', () => {
 
     describe('parse_location', () => {
         it('splits s3://bucket/prefix/ into bucket and prefix', () => {
-            expect(dip_store.parse_location('s3://library-repository/dip-store/')).toEqual({
-                bucket: 'library-repository',
+            expect(dip_store.parse_location('s3://test-dip-store/dip-store/')).toEqual({
+                bucket: 'test-dip-store',
                 prefix: 'dip-store/',
             });
         });
@@ -124,7 +124,7 @@ describe('libs/dip_store', () => {
 
         it('refuses a URL with another scheme, or no bucket at all', () => {
             expect(() =>
-                dip_store.parse_location('https://s3.us-west-1.wasabisys.com/library-repository/')
+                dip_store.parse_location('https://s3.test.example/test-dip-store/')
             ).toThrow(/must be s3:\/\//);
             expect(() => dip_store.parse_location('s3://')).toThrow(/no bucket/);
             expect(() => dip_store.parse_location('')).toThrow(/DIP_STORE_LOCATION/);
@@ -189,11 +189,7 @@ describe('libs/dip_store', () => {
         });
     });
 
-    /*
-     * The real SDK against local servers. The fake client can't show
-     * whether the configured timeout actually ends a request, what a
-     * stalled body does, or how an undecodable response is handled.
-     */
+    // The real SDK against local servers: what the fake client can't show.
     describe('real SDK client against local servers', () => {
         let server;
         let requests;
@@ -305,7 +301,7 @@ describe('libs/dip_store', () => {
                 'last-modified': 'Mon, 05 Oct 2026 12:00:00 GMT',
             });
             expect(client.calls[0].input).toEqual({
-                Bucket: 'library-repository',
+                Bucket: 'test-dip-store',
                 Key: `dip-store/${FOLDER}/thumbnails/a.jpg`,
             });
         });
@@ -333,7 +329,7 @@ describe('libs/dip_store', () => {
             const res = await dip_store.head(`${FOLDER}/objects/missing.tif`);
             expect(res.status).toBe(404);
             expect(client.calls[1].input).toEqual({
-                Bucket: 'library-repository',
+                Bucket: 'test-dip-store',
                 Prefix: `dip-store/${FOLDER}/objects/missing.tif`,
                 MaxKeys: 1,
             });
@@ -462,7 +458,7 @@ describe('libs/dip_store', () => {
                 'content-length': '4',
             });
             expect(client.calls[0].input).toEqual({
-                Bucket: 'library-repository',
+                Bucket: 'test-dip-store',
                 Key: `dip-store/${FOLDER}/objects/a.pdf`,
             });
             // The SDK gets a signal that follows the caller's.
@@ -882,11 +878,11 @@ describe('libs/dip_store', () => {
                 'HeadObjectCommand',
             ]);
             expect(client.calls[0].input).toEqual({
-                Bucket: 'library-repository',
+                Bucket: 'test-dip-store',
                 Prefix: 'dip-store/',
                 MaxKeys: 1,
             });
-            expect(client.calls[1].input).toEqual({ Bucket: 'library-repository', Key: key });
+            expect(client.calls[1].input).toEqual({ Bucket: 'test-dip-store', Key: key });
             expect(client.calls[0].opts.abortSignal).toBeInstanceOf(AbortSignal);
             expect(client.calls[1].opts.abortSignal).toBe(client.calls[0].opts.abortSignal);
         });

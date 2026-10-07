@@ -918,8 +918,8 @@ async function services_page(req, res) {
 /*
  * The upstream services the ingest pipeline depends on, each with one
  * non-throwing reachability/auth probe. Array order is render order. The
- * DIP store (the Wasabi copy of every DIP) replaces DuraCloud as the DIP
- * source during the DuraCloud Preserve cutover; both cards show until then.
+ * DIP store replaces DuraCloud as the DIP source during the DuraCloud
+ * Preserve cutover; both cards show until then.
  */
 const SERVICE_PROBES = [
     { key: 'curation_api', label: 'Curation API', probe: _probe_curation },
@@ -1101,17 +1101,14 @@ async function _probe_duracloud() {
     };
 }
 
-/*
- * DIP store — list one key under the dip-store/ prefix (reachability, the
- * read-only key, and its folder-scoped policy). An empty folder is healthy.
- */
+// DIP store — list one key under dip-store/ and read it. An empty folder is healthy.
 async function _probe_dip_store() {
     if (!dip_store.is_configured()) return { configured: false };
     const ok = await dip_store.ping();
     return {
         configured: true,
         reachable: ok,
-        detail: ok ? 'dip-store/ listing OK' : 'dip-store/ unreachable or access denied',
+        detail: ok ? 'dip-store/ list and read OK' : 'dip-store/ unreachable or access denied',
     };
 }
 

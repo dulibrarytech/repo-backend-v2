@@ -1,73 +1,38 @@
 'use strict';
 
 /*
- * DIP store client: the Wasabi access copy of every DIP.
+ * DIP store client: the Wasabi copy of every DIP's served files
+ * (DIP_STORE_LOCATION), written by the curation service and only read
+ * here. See repo/notes/WASABI_DIP_SERVING_FINDINGS.md.
  *
- * Archivematica writes DIPs to DuraCloud Preserve; the curation service
- * copies each one's served files to Wasabi (DIP_STORE_LOCATION, e.g.
- * s3://library-repository/dip-store/), and repov2 reads only that copy.
- * See repo/notes/WASABI_DIP_SERVING_FINDINGS.md.
+ * is_configured, fetch_text, mets_path and ping mirror libs/duracloud.js,
+ * so a call site switches with a one-line change. head, get_stream and
+ * pipe_to are the gateway's and the thumbnail chains' reads; `s3` is an
+ * optional client of the caller's own (create_client), otherwise calls
+ * share this module's.
  *
- * Where the two overlap, the exports mirror libs/duracloud.js, so a call
- * site can switch with a one-line change:
+ * `path` is a stored DB path relative to the location prefix, e.g.
+ * `<dip folder>/thumbnails/<uuid>.jpg`, and must be a string (Express 5
+ * hands a `*key` wildcard over as an array; the route joins it).
  *
- *   is_configured()                      → boolean
- *   fetch_text(path, { signal })         → { status, data, headers }
- *   mets_path(sip_uuid, dip_path)        → stored path of the DIP's METS
- *   ping()                               → boolean, never throws
+ * Statuses: 200 found (`data` is a stream for GETs); 404 missing; 403
+ * denied, or the existence check failed (key_exists). A timeout, a
+ * transport failure, a caller's abort and a 2xx the SDK can't decode
+ * throw UpstreamError, which the central handler answers with 502: a
+ * route that needs another status (the gateway's 500) catches it.
  *
- * plus:
+ * DIP_STORE_TIMEOUT_MS bounds the whole wait for response headers,
+ * retries included; fetch_text gives its small body the same again. A
+ * streamed body is never limited: the frontend would cache a cut-off
+ * file as complete. A 200 body holds one of the client's MAX_SOCKETS
+ * connections until it is read to the end or destroyed, so the caller
+ * aborts on its client's disconnect and pipes or destroys `data`;
+ * pipe_to does that.
  *
- *   key_for(path)                        → the S3 key for a stored path
- *   head(path, { signal, s3 })           → { status, data: null, headers }
- *   get_stream(path, { signal, s3 })     → { status, data, headers }
- *   pipe_to(res, path, { on_200, s3 })   → upstream status; pipes a 200
- *   create_client()                      → a new S3Client with its own pool
- *   is_serving()                         → DIP_GATEWAY_ENABLED and configured
- *
- * `s3` is an optional client of the caller's own (from create_client);
- * without it, calls share this module's client.
- *
- * `path` is a stored DB path, relative to the location prefix, e.g.
- * `<dip folder>/objects/<file>` or `<dip folder>/thumbnails/<uuid>.jpg`.
- * It must be a string: Express 5 hands a `*key` wildcard over as an
- * array of segments, which the route joins with '/' first.
- *
- * Status semantics: 200 = found (`data` is a readable stream for GETs),
- * 404 = missing, 403 = the policy denied the key, or the check of
- * whether it exists failed (see key_exists). Transport failures (DNS,
- * TLS, a timeout, a caller's abort) and a 2xx the SDK can't decode
- * throw UpstreamError, as libs/duracloud.js does. The central error
- * handler answers an UpstreamError with 502; a route that must answer
- * something else (the gateway: 500) catches it itself.
- *
- * Timeouts: DIP_STORE_TIMEOUT_MS bounds the whole wait for the response
- * headers, retries included. Retries cover the quick failures (a stale
- * keep-alive socket, a 5xx); a store that stays silent is not tried
- * again. Nothing here limits a streamed body (the frontend would cache
- * a cut-off file as complete); fetch_text, which buffers a small text
- * body, gives the body the same budget again.
- *
- * Owning a 200 from get_stream: `data` holds one of this client's
- * MAX_SOCKETS connections until it is read to the end or destroyed, and
- * nothing here ends a body that stalls. The caller must therefore
- *   - pass a `signal` that aborts when its own client goes away, wired
- *     up BEFORE awaiting get_stream (aborting destroys the connection), and
- *   - pipe `data` and handle its 'error' event, or destroy it when it
- *     decides not to send it.
- * pipe_to does all of that for an HTTP response; prefer it.
- * head, fetch_text and ping share the pool, so leaked bodies eventually
- * fail every call with a connection timeout while Wasabi is healthy.
- *
- * The reader key is scoped to the dip-store/ folder: s3:GetObject on
- * <bucket>/dip-store/*, and s3:ListBucket only under an s3:prefix
- * condition. Two consequences:
- *   - HeadBucket carries no prefix, so the condition denies it. ping()
- *     lists the prefix instead, then HEADs the key it got back.
- *   - S3 may answer a missing key with 403 rather than 404, because the
- *     conditional ListBucket grant doesn't cover a plain GET. A 403 is
- *     therefore confirmed by listing the exact key: absent → 404,
- *     present → 403.
+ * The reader key is folder-scoped (s3:GetObject on <bucket>/dip-store/*,
+ * s3:ListBucket only under an s3:prefix condition), so HeadBucket is
+ * denied (ping lists instead) and a missing key may answer 403 rather
+ * than 404; key_exists tells the two apart by listing the exact key.
  */
 
 const { pipeline } = require('node:stream');
@@ -83,10 +48,9 @@ const log = require('./log');
 const { UpstreamError, ValidationError } = require('./errors');
 
 /*
- * Connections per client: the SDK's default, made explicit because every
- * open download holds one (see the header). A public gateway should
- * build its own client, so its downloads can't starve the thumbnails,
- * the METS reads and the Services probe.
+ * Connections per client (the SDK's default): every open download holds
+ * one, so the gateway builds its own client rather than sharing this
+ * module's with the thumbnails, the METS reads and the Services probe.
  */
 const MAX_SOCKETS = 50;
 
@@ -104,20 +68,15 @@ function is_configured() {
     );
 }
 
-/*
- * Has serving switched to the DIP store (DIP_GATEWAY_ENABLED, plan P2)?
- * From then on the thumbnail chains read it instead of DuraCloud.
- */
+// DIP_GATEWAY_ENABLED and configured: the thumbnail chains read the store.
 function is_serving() {
     return Boolean(cfg().gateway_enabled) && is_configured();
 }
 
 /*
- * Split `s3://<bucket>/<prefix>/` into { bucket, prefix }. The prefix is
- * '' or ends in '/'. Same rules as the curation service's
- * wasabi._parse_bucket, so both services read the setting the same way;
- * any scheme other than s3:// (an https URL pasted in) is refused rather
- * than taken as a bucket name.
+ * Split `s3://<bucket>/<prefix>/` into { bucket, prefix } (prefix '' or
+ * ending in '/'), with the same rules as curation's wasabi._parse_bucket.
+ * Any scheme but s3:// is refused rather than taken as a bucket name.
  */
 function parse_location(raw) {
     let s = String(raw || '').trim();
@@ -142,11 +101,10 @@ function parse_location(raw) {
 }
 
 /*
- * The S3 key for a stored path: the location prefix plus the path, with
- * leading slashes removed. `.` and `..` segments are refused so a path
- * can never be normalized out of the prefix by anything between here and
- * the bucket. Anything but a string is refused too: String() would turn
- * an array into a comma-joined key that quietly answers 404.
+ * The S3 key for a stored path: the location prefix plus the path minus
+ * leading slashes. `.` and `..` segments are refused so nothing between
+ * here and the bucket can normalize a path out of the prefix; a
+ * non-string is refused rather than coerced to a comma-joined key.
  */
 function key_for(path) {
     if (path === undefined || path === null || path === '') {
@@ -164,11 +122,7 @@ function key_for(path) {
     return prefix + tail;
 }
 
-/*
- * Conventional METS location inside a DIP folder (the slash-chunked UUID
- * folder AM's get_dip_path returns): a sibling of objects/ and
- * thumbnails/. Same as libs/duracloud.js mets_path.
- */
+// The METS sits at the top of the DIP folder; same as libs/duracloud.js.
 function mets_path(sip_uuid, dip_path) {
     if (!sip_uuid || !dip_path) {
         throw new Error('mets_path requires sip_uuid + dip_path');
@@ -185,27 +139,18 @@ function client_options(c) {
             accessKeyId: c.access_key_id,
             secretAccessKey: c.secret_access_key,
         },
-        /*
-         * Newer SDK defaults add request/response checksum behavior that
-         * some S3-compatible services reject. Only where an operation
-         * requires it.
-         */
+        // The SDK's newer checksum defaults are rejected by some S3-compatible stores.
         requestChecksumCalculation: 'WHEN_REQUIRED',
         responseChecksumValidation: 'WHEN_REQUIRED',
         /*
-         * Retries are for the quick failures (a stale keep-alive socket,
-         * a 5xx). The per-call deadline below bounds the whole wait for
-         * headers at timeout_ms, so a silent store is never tried three
-         * times over.
+         * Retries cover quick failures (a stale keep-alive socket, a
+         * 5xx); deadline() caps the total wait, so silence isn't retried.
          */
         maxAttempts: 3,
         /*
-         * requestTimeout bounds one attempt's wait for response headers;
-         * the SDK only logs it unless throwOnRequestTimeout is set.
-         * Nothing here bounds a body once it streams: the SDK's
-         * socketTimeout counts a stream paused by a slow downstream
-         * client as idle, so it would cut healthy transfers short. A
-         * streaming caller handles body stalls itself (abortSignal).
+         * requestTimeout is per attempt and only an error with
+         * throwOnRequestTimeout. No socketTimeout: it would count a body
+         * paused by a slow downstream client as idle.
          */
         requestHandler: {
             requestTimeout: c.timeout_ms,
@@ -217,19 +162,12 @@ function client_options(c) {
     };
 }
 
-/*
- * A new client, with its own pool of MAX_SOCKETS connections. For a
- * caller whose open downloads must not starve everyone else (the
- * gateway); pass it back as `s3`.
- */
+// A client with its own pool of MAX_SOCKETS connections (the gateway's).
 function create_client(c = cfg()) {
     return new S3Client(client_options(c));
 }
 
-/*
- * One S3 client per config object. app_config() returns the same object
- * until a reload, so tests that reset config also get a fresh client.
- */
+// One shared client per config object, so a config reset gives a fresh client.
 function client() {
     if (client_override) return client_override;
     const c = cfg();
@@ -257,11 +195,9 @@ function headers_from(out) {
 }
 
 /*
- * One call's time limit. The SDK's requestTimeout is per attempt, so
- * with retries a silent store would cost three of them; this bounds the
- * whole wait for the response headers at `ms`, retries included. Its
- * signal also follows the caller's own signal. The caller clears it once
- * the headers are in, and fetch_text re-arms it for the body.
+ * One call's time limit, retries included: the SDK's requestTimeout is
+ * per attempt. Its signal also follows the caller's. Cleared once the
+ * headers are in; fetch_text re-arms it for the body.
  */
 function deadline(signal, ms) {
     const controller = new AbortController();
@@ -287,10 +223,9 @@ function deadline(signal, ms) {
 }
 
 /*
- * After a failure: the deadline fired, or the caller aborted. Either
- * ends the call with an UpstreamError. A caller going away (a browser
- * cancelling a thumbnail, the worker stopping) is not an upstream
- * problem, so it is not logged as one.
+ * After a failure: a deadline that fired or a caller that aborted ends
+ * the call with an UpstreamError. A caller going away isn't logged as an
+ * upstream problem.
  */
 function throw_if_ended(dl, signal, phase, path) {
     if (dl.timed_out) {
@@ -303,9 +238,8 @@ function throw_if_ended(dl, signal, phase, path) {
 }
 
 /*
- * A 2xx the SDK could not decode (a header it can't parse) arrives as
- * an error that still carries the raw response; its body was never
- * read, and would hold a connection for good.
+ * A 2xx the SDK couldn't decode arrives as an error carrying the raw
+ * response, whose unread body would hold a connection for good.
  */
 function release_body(err) {
     const body = err && err.$response && err.$response.body;
@@ -313,10 +247,9 @@ function release_body(err) {
 }
 
 /*
- * Does exactly this key exist? Lists it as a prefix with MaxKeys=1, which
- * the folder-scoped policy allows; the exact key sorts before any longer
- * key that shares it. Returns true/false, or null when the listing itself
- * fails, so the caller keeps whatever status it had.
+ * Does exactly this key exist? A MaxKeys=1 listing of it as a prefix
+ * (which the folder-scoped policy allows; the exact key sorts first).
+ * null when the listing itself fails, so the caller keeps its status.
  */
 async function key_exists(bucket, key, signal, s3) {
     try {
@@ -362,11 +295,7 @@ async function send_one(kind, bucket, key, dl, signal, s3) {
     }
 }
 
-/*
- * A request with its deadline. The deadline is cleared once the headers
- * are in (or the call failed); the returned `dl` lets fetch_text re-arm
- * it for the body.
- */
+// A request under its deadline; `dl` is returned so fetch_text can re-arm it.
 async function request(kind, path, { signal, s3 } = {}) {
     if (!is_configured()) {
         throw new UpstreamError('DIP store is not configured');
@@ -395,15 +324,13 @@ function gone(res) {
 }
 
 /*
- * GET `path` and pipe it into `res`, an HTTP response: the safe way to
- * own a 200 (see the header). The abort is wired to `res` closing before
- * the request goes out, so a client that leaves at any point, before the
- * call included, releases the connection. On a 200, on_200(headers) runs
- * before the first byte (set the status and headers there), and the body
- * then streams with no time limit; a failure mid-body destroys `res` and
- * is logged. Any other status is returned with nothing written to `res`.
- * Throws like get_stream; a client that has already left is an
- * UpstreamError "aborted by the caller", as during the request.
+ * GET `path` and pipe it into `res`, an HTTP response. The abort follows
+ * `res` closing, wired before the request goes out, so a client that
+ * leaves at any point (before the call included) releases the
+ * connection. On a 200, on_200(headers) runs before the first byte; the
+ * body then streams with no time limit, and a mid-body failure destroys
+ * `res`. Any other status is returned with nothing written. Throws like
+ * get_stream; a client that has already left counts as an abort.
  */
 async function pipe_to(res, path, { on_200, s3 } = {}) {
     const aborted = () => new UpstreamError('DIP store request aborted by the caller');
@@ -458,10 +385,9 @@ async function pipe_to(res, path, { on_200, s3 } = {}) {
 }
 
 /*
- * Read a text resource (the METS) by stored path. On a 200, `data` is the
- * body as a UTF-8 string; on any other status it is ''. The body read
- * gets its own DIP_STORE_TIMEOUT_MS, so a download that stalls after the
- * headers fails instead of holding the ingest worker.
+ * Read a text resource (the METS) by stored path: `data` is the UTF-8
+ * body on a 200, '' otherwise. The body read gets its own
+ * DIP_STORE_TIMEOUT_MS, so a stalled download can't hold the worker.
  */
 async function fetch_text(path, { signal } = {}) {
     const { res, dl } = await request('get', path, { signal });
@@ -482,11 +408,9 @@ async function fetch_text(path, { signal } = {}) {
 }
 
 /*
- * Reachability + credential probe for the Services Health page: list one
- * key under the prefix, then HEAD the key it returned, so the card proves
- * the key can read, not only list. An empty folder still counts as
- * reachable. Bounded by DIP_STORE_TIMEOUT_MS in total, retries included.
- * Returns a boolean and never throws, like duracloud.ping().
+ * Services Health probe: list one key under the prefix and HEAD it, so
+ * a green card means the key can list and read. An empty folder is
+ * healthy. Bounded by DIP_STORE_TIMEOUT_MS in total; never throws.
  */
 async function ping() {
     if (!is_configured()) return false;

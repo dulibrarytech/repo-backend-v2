@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * The dip-store gateway (plan P2) through the real middleware stack: the
+ * The dip-store gateway through the real middleware stack: the
  * app from config/express.js, with a fake S3 client injected into the
  * gateway. Pins the contract the frontend depends on: Basic auth, the
  * path allow-list, HEAD answered with HeadObject, a whole-body GET that
@@ -27,8 +27,8 @@ const PASSWORD = 'Gateway-Pass_1.2~x';
 const AUTH = `Basic ${Buffer.from(`${USER}:${PASSWORD}`).toString('base64')}`;
 
 const ENV = {
-    DIP_STORE_LOCATION: 's3://library-repository/dip-store/',
-    DIP_STORE_ENDPOINT: 'https://s3.us-west-1.wasabisys.com',
+    DIP_STORE_LOCATION: 's3://test-dip-store/dip-store/',
+    DIP_STORE_ENDPOINT: 'https://s3.test.example',
     DIP_STORE_REGION: 'us-west-1',
     DIP_STORE_ACCESS_KEY_ID: 'test-key',
     DIP_STORE_SECRET_ACCESS_KEY: 'test-secret',
@@ -198,11 +198,7 @@ describe('dip-store gateway — enabled', () => {
                 '0000/f75f/3cf8/4b3d/b494/e0ec/2017/zzzz/pkg/objects/x.pdf',
                 '0000/f75f/3cf8/4b3d/b494/e0ec/2017/2508/../objects/x.pdf',
                 '0000/f75f/3cf8/4b3d/b494/e0ec/2017/2508/../../aip-store/x.7z',
-                /*
-                 * An encoded slash makes one decoded segment carry a '/':
-                 * the dot check must see the joined path, and any
-                 * decoded segment with a '/' is refused.
-                 */
+                // An encoded slash puts a '/' inside one decoded segment.
                 '0000/f75f/3cf8/4b3d/b494/e0ec/2017/2508%2F../objects/x.pdf',
                 `${FOLDER}/thumbnails/a%2Fb.jpg`,
                 `${FOLDER}/thumbnails/%2e%2e/x.jpg`,
@@ -239,7 +235,7 @@ describe('dip-store gateway — enabled', () => {
             expect(res.headers.etag).toBe('"abc123"');
             expect(s3.calls.map((c) => c.name)).toEqual(['HeadObjectCommand']);
             expect(s3.calls[0].input).toEqual({
-                Bucket: 'library-repository',
+                Bucket: 'test-dip-store',
                 Key: `dip-store/${FILE}`,
             });
         });
@@ -282,7 +278,7 @@ describe('dip-store gateway — enabled', () => {
             expect(res.headers['content-encoding']).toBeUndefined();
             expect(res.headers['accept-ranges']).toBeUndefined();
             expect(s3.calls[0].input).toEqual({
-                Bucket: 'library-repository',
+                Bucket: 'test-dip-store',
                 Key: `dip-store/${FILE}`,
             });
         });

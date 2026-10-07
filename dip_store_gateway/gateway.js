@@ -2,31 +2,27 @@
 
 /*
  * DIP store gateway: answers the public frontend the way DuraCloud did,
- * from the Wasabi DIP store (plan P2, the serving cutover).
+ * from the Wasabi DIP store.
  *
- *   GET  <path>/api/v2/dip-store/<dip folder>/objects|thumbnails/<file>
- *   HEAD <the same>
+ *   GET|HEAD <path>/api/v2/dip-store/<dip folder>/objects|thumbnails/<file>
  *
- * The frontend switches over by changing its REPOSITORY_* env values only:
- * it sends Basic credentials (DIP_GATEWAY_USER / DIP_GATEWAY_PASSWORD) and
- * reads the stored path back as the URL. nginx also admits only the
- * frontend host.
+ * The frontend switches by changing its REPOSITORY_* env values only: it
+ * sends Basic credentials (DIP_GATEWAY_USER / DIP_GATEWAY_PASSWORD) and
+ * the stored path as the URL. nginx admits only the frontend host.
  *
- * Statuses, matched to the frontend, whose cache purge keeps a cached file
+ * Statuses follow the frontend's cache purge, which keeps a cached file
  * on exactly 200 or 500 and deletes it on anything else:
- *   200  found. GET streams the whole body; a Range header is ignored.
- *   404  missing, or not a DIP file path. Also the answer to anyone but
- *        the frontend while the gateway is switched off.
+ *   200  found; GET streams the whole body (Range is ignored).
+ *   404  missing, or not a DIP file path; also anyone but the frontend
+ *        while the gateway is switched off.
  *   401  missing or wrong credentials.
  *   500  anything else: a policy 403, a timeout, a transport failure, the
- *        store or the credential not configured, or the frontend (its
- *        credential presented) reaching a switched-off gateway, which is
- *        a misrouted frontend, not a missing file. Never 502, the central
- *        error handler's answer for an UpstreamError.
+ *        store or credential unconfigured, or the frontend's own
+ *        credential reaching a switched-off gateway (misrouted, not
+ *        missing). Never the central handler's 502.
  *
- * The gateway has its own S3 client: every open download holds one of a
- * client's connections, and these must not use up the ones the
- * thumbnails, the METS reads and the Services probe need.
+ * The gateway has its own S3 client, so its open downloads can't use up
+ * the connections the thumbnails, the METS reads and the probe need.
  */
 
 const crypto = require('node:crypto');
@@ -34,11 +30,7 @@ const app_config = require('../config/app');
 const log = require('../libs/log');
 const dip_store = require('../libs/dip_store');
 
-/*
- * <eight 4-hex-digit segments>/<package folder>/objects|thumbnails/<file>:
- * the shape of every served file in the DIP store. Nothing else is
- * served: no listing, no METS.
- */
+// <eight 4-hex-digit segments>/<package folder>/objects|thumbnails/<file>: no listing, no METS.
 const PATH_RE =
     /^[0-9a-f]{4}(?:\/[0-9a-f]{4}){7}\/[^/]{1,250}\/(?:objects|thumbnails)\/[^/]{1,250}$/i;
 
@@ -64,20 +56,13 @@ function s3() {
     return cached.client;
 }
 
-/*
- * Constant-time string comparison. Both sides are hashed first, so the
- * time taken reveals neither the length nor the content of the
- * credential.
- */
+// Constant-time comparison; hashing first hides the credential's length too.
 function safe_equal(a, b) {
     const digest = (v) => crypto.createHash('sha256').update(String(v), 'utf8').digest();
     return crypto.timingSafeEqual(digest(a), digest(b));
 }
 
-/*
- * Basic credentials from the Authorization header. Both halves are always
- * compared, each in constant time for equal lengths.
- */
+// Basic credentials from the Authorization header; both halves are always compared.
 function credentials_match(header, user, password) {
     const m = /^Basic\s+([A-Za-z0-9+/=]+)\s*$/i.exec(header || '');
     if (!m) return false;
@@ -101,10 +86,7 @@ function unavailable(res, event, path, message) {
     }
 }
 
-/*
- * Upstream headers verbatim (res.setHeader, not res.set, which would add
- * a charset to text types), plus the one that keeps compression off.
- */
+// Upstream headers verbatim (res.set would add a charset), plus no-transform.
 function set_headers(res, headers) {
     for (const name of PASSTHROUGH) {
         if (headers[name] !== undefined) res.setHeader(name, headers[name]);
@@ -114,10 +96,7 @@ function set_headers(res, headers) {
 }
 
 function create_gateway() {
-    /*
-     * The checks every request passes before the store is asked. Returns
-     * the stored path, or null once it has answered.
-     */
+    // The checks before the store is asked: the stored path, or null once answered.
     function admit(req, res) {
         const c = app_config().dip_store;
         const configured = Boolean(c.gateway_user && c.gateway_password);
@@ -126,10 +105,9 @@ function create_gateway() {
             credentials_match(req.get('authorization'), c.gateway_user, c.gateway_password);
         if (!c.gateway_enabled) {
             /*
-             * The frontend reads a 404 as "file missing" and its purge
-             * then deletes the cached copy. A request carrying its
-             * credential is the frontend pointed at a switched-off
-             * gateway: a 500 keeps its cache. Everyone else gets nothing.
+             * The frontend's purge deletes a cached file on 404. A request
+             * carrying its credential is a misrouted frontend: 500 keeps
+             * its cache. Everyone else learns nothing.
              */
             if (authorized) {
                 unavailable(
@@ -158,11 +136,9 @@ function create_gateway() {
             return null;
         }
         /*
-         * Express 5 hands the `*key` wildcard over as decoded segments;
-         * the store takes the joined string. The router splits on the
-         * literal '/' before decoding, so a segment can carry an encoded
-         * slash ("2508%2F.."): refuse those, and check the dots on the
-         * joined path, which is what key_for sees.
+         * Express 5 gives `*key` as decoded segments, split on the literal
+         * '/' before decoding: a segment can carry an encoded slash, so
+         * those are refused and the dots are checked on the joined path.
          */
         const segments = [].concat(req.params.key || []);
         const path = segments.join('/');

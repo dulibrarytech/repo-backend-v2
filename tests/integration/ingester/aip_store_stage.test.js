@@ -44,7 +44,7 @@ function make_fake_client({ copy_to_wasabi } = {}) {
             status: 200,
             data: {
                 ok: true,
-                bucket: 'library-repository',
+                bucket: 'test-aip-store',
                 key: 'aip-store/pkg-abc.7z',
                 bytes: 4096,
                 elapsed_ms: 100,
@@ -131,7 +131,7 @@ describe('ingester/stages/aip_store — Stage 6', () => {
                     status: 200,
                     data: {
                         ok: true,
-                        bucket: 'library-repository',
+                        bucket: 'test-aip-store',
                         key: 'aip-store/pkg-abc.7z',
                         bytes: 4096,
                         elapsed_ms: 150,
@@ -239,7 +239,7 @@ describe('ingester/stages/aip_store — Stage 6', () => {
                 status: 200,
                 data: {
                     ok: true,
-                    bucket: 'library-repository',
+                    bucket: 'test-aip-store',
                     key: 'aip-store/pkg-abc.7z',
                     bytes: 4096,
                     elapsed_ms: 90,
@@ -272,7 +272,7 @@ describe('ingester/stages/aip_store — Stage 6', () => {
                 status: 200,
                 data: {
                     ok: true,
-                    bucket: 'library-repository',
+                    bucket: 'test-aip-store',
                     key: 'aip-store/pkg-abc.7z',
                     bytes: 4096,
                     elapsed_ms: 90,
