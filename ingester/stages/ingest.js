@@ -11,8 +11,10 @@
  *         | INGEST_STATUS_TIMEOUT      (6 hr — post-AM rollback)
  *         | FAILED                     (AM reported failure mid-ingest)
  *         | AS_METADATA_DRIFT          (re-validation failed)
- *         | DURACLOUD_TIMEOUT          (1 hr — post-AM rollback)
- *         | INGEST_HALTED              (transport-level halt)
+ *         | DURACLOUD_TIMEOUT          (access copy: budget ran out, or the
+ *                                      copy can't succeed; Retry, then
+ *                                      Rollback AIP)
+ *         | INGEST_HALTED              (flag off: get_dip_path failed)
  * 
  * Why so many entry states:
  *   Stage 4 has three substeps that each may take hours. Resume needs
@@ -46,6 +48,7 @@ const app_config = require('../../config/app');
 const log = require('../../libs/log');
 const { poll } = require('../lib/polling');
 const { fetch_record_with_retry } = require('../../libs/aspace_session');
+const { UpstreamError } = require('../../libs/errors');
 
 async function run(row, deps = {}) {
     const am = deps.am || am_default;
@@ -370,6 +373,51 @@ async function run(row, deps = {}) {
 }
 
 /*
+ * Storage Service statuses a DIP never comes back from: waiting on them
+ * only burns the budget. DEL_REQ is a deletion request awaiting an admin;
+ * DEL_FAIL and FAIL are a failed deletion and a failed store.
+ */
+const DIP_TERMINAL_STATUSES = {
+    DELETED: 'dip_deleted',
+    DEL_REQ: 'dip_deletion_requested',
+    DEL_FAIL: 'dip_deletion_failed',
+    FAIL: 'dip_failed',
+};
+
+/*
+ * The last segment of a stored path, without a `.7z` suffix: the DIP's
+ * folder, whether worked out from the AIP's name or read from the DIP's
+ * own record.
+ */
+function folder_of(stored_path) {
+    if (typeof stored_path !== 'string') return null;
+    const segments = stored_path.split('/').filter(Boolean);
+    const last = segments.length ? segments[segments.length - 1] : '';
+    return last.replace(/\.7z$/, '') || null;
+}
+
+/*
+ * The error text of a curation answer: `error` in a JSON object, else
+ * the body itself (its auth failure is a JSON array).
+ */
+function detail_of(res) {
+    const body = res.data;
+    if (Array.isArray(body)) return body.join(' ').trim() || 'no detail';
+    if (body && typeof body === 'object') return body.error || 'no detail';
+    if (typeof body === 'string' && body.trim()) return body.trim().slice(0, 200);
+    return 'no detail';
+}
+
+/*
+ * Errors the wait retries within its budget: the clients' UpstreamError,
+ * and anything carrying a code (a Node system error, a MySQL error such as
+ * ER_LOCK_DEADLOCK on the dip_path write). A TypeError has none.
+ */
+function is_retryable(err) {
+    return err instanceof UpstreamError || Boolean(err && typeof err.code === 'string');
+}
+
+/*
  * --- Substep 3 with DIP_COPY_ENABLED: wait for the DIP, then copy it ---
  *
  * Archivematica writes the DIP to DuraCloud Preserve; the public site reads
@@ -378,16 +426,19 @@ async function run(row, deps = {}) {
  *   (a) asks Archivematica for the AIP's DIP link until there is one (the
  *       old wait halts at once without it), once per run, so a resumed row
  *       asks again; records dip_path;
- *   (b) reads the DIP package record: not a DIP or DELETED → halt;
- *       UPLOADED with a size → go on; anything else → try again. Its
- *       current_path goes into the events, to compare with dip_path;
+ *   (b) reads the DIP package record: not a DIP, deleted, a deletion
+ *       request or a failure → halt; a folder other than dip_path's →
+ *       halt; UPLOADED with a size → go on; anything else → try again.
+ *       Its current_path goes into the events;
  *   (c) asks curation to check that the DIP is complete in DCP and copy its
  *       served files (copy_dip, with the package's size): 'incomplete' →
- *       try again; 'copied' → METADATA_PROCESSED.
- * Transport errors and curation 5xx are retried within the budget. Every
+ *       try once more a poll interval later, then halt (the folder is
+ *       final once the package is UPLOADED); 'copied' → METADATA_PROCESSED.
+ * Transport and database errors (is_retryable) and curation 5xx are retried
+ * within the budget, with a heartbeat; any other error halts at once. Every
  * halt is DURACLOUD_TIMEOUT: the AIP and the DIP are safe in DCP by then,
- * so the dashboard offers Retry (back to WAITING_FOR_DURACLOUD), never an
- * Archivematica rollback. The copy skips what already landed.
+ * so the dashboard offers Retry (back to WAITING_FOR_DURACLOUD) first and
+ * Rollback AIP second. The copy skips what already landed.
  */
 async function wait_and_copy_dip(row, { am, curation, dip_store, model, cfg, signal, sip_uuid }) {
     const missing = [
@@ -408,6 +459,9 @@ async function wait_and_copy_dip(row, { am, curation, dip_store, model, cfg, sig
     let dip_path = null;
     let dip_uuid = null;
     let dip_current_path = null;
+    let incomplete_answers = 0;
+    // The path, once known, rides on every later write, so no halt loses it.
+    const columns = () => (dip_path ? { dip_path } : {});
     if (row.pipeline_state !== 'WAITING_FOR_DURACLOUD') {
         await model.update_queue(
             { id: row.id },
@@ -452,12 +506,14 @@ async function wait_and_copy_dip(row, { am, curation, dip_store, model, cfg, sig
                         { am_status: dp.status }
                     );
                 }
+                if (dp.dip_path !== row.dip_path) {
+                    // No state change, so no event: the dip_copied event names it.
+                    await model.update_queue({ id: row.id }, { dip_path: dp.dip_path });
+                    row.dip_path = dp.dip_path;
+                }
+                // Set only once the path is stored: a failed write is retried next time.
                 dip_path = dp.dip_path;
                 dip_uuid = dp.dip_uuid;
-                if (dip_path !== row.dip_path) {
-                    // No state change, so no event: the dip_copied event names it.
-                    await model.update_queue({ id: row.id }, { dip_path });
-                }
             }
 
             const pkg = await am.get_dip_package(dip_uuid);
@@ -483,12 +539,28 @@ async function wait_and_copy_dip(row, { am, curation, dip_store, model, cfg, sig
                     },
                 };
             }
-            if (pkg.package_status === 'DELETED') {
+            const terminal = DIP_TERMINAL_STATUSES[pkg.package_status];
+            if (terminal) {
                 return {
                     done: true,
                     value: {
-                        halt: 'dip_deleted',
-                        error: 'Archivematica reports the DIP as DELETED',
+                        halt: terminal,
+                        error: `Archivematica reports the DIP as ${pkg.package_status}`,
+                    },
+                };
+            }
+            const recorded_folder = folder_of(dip_current_path);
+            if (recorded_folder && recorded_folder !== folder_of(dip_path)) {
+                /*
+                 * dip_path is worked out from the AIP's name (v1's rule);
+                 * the DIP's own record names its folder. If they differ,
+                 * the rule is wrong for this package: say so now.
+                 */
+                return {
+                    done: true,
+                    value: {
+                        halt: 'dip_path_mismatch',
+                        error: `The DIP's folder in Archivematica (${recorded_folder}) is not the one worked out from the AIP's name (${folder_of(dip_path)})`,
                     },
                 };
             }
@@ -519,19 +591,36 @@ async function wait_and_copy_dip(row, { am, curation, dip_store, model, cfg, sig
                     done: true,
                     value: {
                         halt: 'dip_copy_rejected',
-                        error: `The curation API refused the copy (HTTP ${res.status}): ${data.error || 'no detail'}`,
+                        error: `The curation API refused the copy (HTTP ${res.status}): ${detail_of(res)}`,
                     },
                 };
             }
             if (data.status === 'incomplete') {
+                const counts = {
+                    dcp_bytes: data.dcp_bytes,
+                    expected_bytes: data.expected_bytes,
+                    mets: data.mets,
+                };
+                incomplete_answers += 1;
+                if (incomplete_answers > 1) {
+                    /*
+                     * The package is UPLOADED, so the folder in DCP is
+                     * final: a second shortfall is a wrong path or size,
+                     * not a slow upload. Halt rather than wait the hour.
+                     */
+                    return {
+                        done: true,
+                        value: {
+                            halt: 'dip_incomplete',
+                            error: `Archivematica reports the DIP as stored, but ${data.error || 'it is not complete in DCP'}`,
+                            detail: counts,
+                        },
+                    };
+                }
                 return wait_again(
                     'dip_incomplete',
                     data.error || 'The DIP is not complete in DCP yet',
-                    {
-                        dcp_bytes: data.dcp_bytes,
-                        expected_bytes: data.expected_bytes,
-                        mets: data.mets,
-                    }
+                    counts
                 );
             }
             if (data.ok === true && data.status === 'copied') {
@@ -551,48 +640,92 @@ async function wait_and_copy_dip(row, { am, curation, dip_store, model, cfg, sig
             timeout_ms: cfg.duracloud_timeout_ms,
             signal,
             on_attempt: async ({ error }) => {
+                if (!is_retryable(error)) return false;
                 log.warn({ event: 'dip_wait_error', queue_id: row.id, err: error.message });
-                waiting = { reason: 'upstream_error', error: error.message };
+                await wait_again('upstream_error', error.message);
                 return true;
             },
         }
-    );
+    ).catch((err) => ({ unexpected: err }));
 
+    if (outcome.unexpected) {
+        /*
+         * Not a transport or database error: a bug or a changed client.
+         * Halt now, with the message, rather than retry it for an hour.
+         */
+        const err = outcome.unexpected;
+        log.error({
+            event: 'dip_wait_unexpected_error',
+            queue_id: row.id,
+            err: err.message,
+            stack: err.stack,
+        });
+        await halt(
+            model,
+            row,
+            'DURACLOUD_TIMEOUT',
+            {
+                stage: 'ingest',
+                step: 'dip_wait',
+                reason: 'unexpected_error',
+                error: `The access-copy wait failed: ${err.message}`,
+                sip_uuid,
+                dip_uuid,
+                dip_path,
+                dip_current_path,
+            },
+            columns()
+        );
+        return { ok: false, reason: 'unexpected_error' };
+    }
     if (outcome.aborted) return { ok: false, reason: 'aborted' };
     if (outcome.timed_out) {
-        await halt(model, row, 'DURACLOUD_TIMEOUT', {
-            stage: 'ingest',
-            step: 'dip_wait',
-            ...waiting,
-            error: `Still waiting when the budget ran out: ${waiting.error}`,
-            attempts: outcome.attempts,
-            elapsed_ms: outcome.elapsed_ms,
-            sip_uuid,
-            dip_uuid,
-            dip_path,
-            dip_current_path,
-        });
+        await halt(
+            model,
+            row,
+            'DURACLOUD_TIMEOUT',
+            {
+                stage: 'ingest',
+                step: 'dip_wait',
+                ...waiting,
+                error: `Still waiting when the budget ran out: ${waiting.error}`,
+                attempts: outcome.attempts,
+                elapsed_ms: outcome.elapsed_ms,
+                sip_uuid,
+                dip_uuid,
+                dip_path,
+                dip_current_path,
+            },
+            columns()
+        );
         return { ok: false, reason: 'duracloud_timeout' };
     }
     if (outcome.result.halt) {
-        await halt(model, row, 'DURACLOUD_TIMEOUT', {
-            stage: 'ingest',
-            step: 'dip_copy',
-            reason: outcome.result.halt,
-            error: outcome.result.error,
-            failures: outcome.result.failures,
-            sip_uuid,
-            dip_uuid,
-            dip_path,
-            dip_current_path,
-        });
+        await halt(
+            model,
+            row,
+            'DURACLOUD_TIMEOUT',
+            {
+                stage: 'ingest',
+                step: 'dip_copy',
+                reason: outcome.result.halt,
+                error: outcome.result.error,
+                failures: outcome.result.failures,
+                ...(outcome.result.detail || {}),
+                sip_uuid,
+                dip_uuid,
+                dip_path,
+                dip_current_path,
+            },
+            columns()
+        );
         return { ok: false, reason: outcome.result.halt };
     }
 
     const copied = outcome.result.copied;
     await model.update_queue(
         { id: row.id },
-        { status: 'METADATA_PROCESSED' },
+        { status: 'METADATA_PROCESSED', ...columns() },
         {
             actor: 'worker',
             payload: {
@@ -662,13 +795,13 @@ async function check_for_drift(row, { aspace, validator, session, sleep }) {
     }
 }
 
-async function halt(model, row, terminal_state, payload) {
+async function halt(model, row, terminal_state, payload, columns = {}) {
     const error_text = payload.errors
         ? payload.errors.slice(0, 5).join('; ').slice(0, 1000)
         : payload.error || payload.reason || 'halted';
     await model.update_queue(
         { id: row.id },
-        { status: terminal_state, error: error_text },
+        { status: terminal_state, error: error_text, ...columns },
         { actor: 'worker', event_type: 'state_change', payload }
     );
 }

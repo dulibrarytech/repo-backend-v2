@@ -193,9 +193,9 @@
         <ul class="mt-2 mb-0">
             <li><strong>Timeline</strong> — every state change for the package, with timestamps and who did it.</li>
             <li><strong>Cancel</strong> — stop an in-flight package. After cancelling, a <strong>Return to Packaging</strong> action appears for the cleanup.</li>
-            <li><strong>Return to Packaging</strong> — for cancelled or halted packages: moves the folder back to the Packaging and Ingesting view so it can be re-submitted after the issue is addressed.</li>
-            <li><strong>Retry</strong> — for a package whose access copy didn't finish: the files are safe. Retry sends it back to wait for its access copy and finish the ingest. Nothing changes in Archivematica.</li>
-            <li><strong>Rollback AIP</strong> — for packages that failed after Archivematica stored them: submits an AIP deletion request (an Archivematica admin must approve it before removal).</li>
+            <li><strong>Return to Packaging</strong> — for cancelled or halted packages, and after Rollback AIP (set Show to "Closed only" to find the row): moves the folder back to the Packaging and Ingesting view so it can be re-submitted after the issue is addressed.</li>
+            <li><strong>Retry</strong> — for a package whose access copy didn't finish: the files are safe. Retry sends it back to wait for its access copy and finish the ingest. Nothing changes in Archivematica. If the package can never finish that way (for example Archivematica no longer has its access copy), <strong>Rollback AIP</strong> is offered just below Retry.</li>
+            <li><strong>Rollback AIP</strong> — for packages that failed after Archivematica stored them: submits an AIP deletion request (an Archivematica admin must approve it before removal). Once approved, use Return to Packaging on the row to put the folder back for a re-submit.</li>
             <li><strong>Stop preservation copy</strong> — for packages in the final preservation-copy step: stops the backup copy to cloud storage. The ingest itself is already complete, so nothing is rolled back; the copy can be retried any time from the AIPs dashboard.</li>
             <li><strong>Dismiss from queue</strong> — for a failed preservation copy: clears the row from the queue view once you've seen it. The AIPs dashboard keeps tracking it and offers Retry.</li>
             <li><strong>Reset</strong> — clears a halted row that never reached any outside system, so the package can be re-submitted.</li>

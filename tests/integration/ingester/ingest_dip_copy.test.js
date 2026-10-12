@@ -138,7 +138,13 @@ async function seed_row(overrides = {}) {
 
 function run(
     row,
-    { am = make_am(), curation = make_curation(), dip_store_configured = true } = {}
+    {
+        am = make_am(),
+        curation = make_curation(),
+        dip_store_configured = true,
+        model: model_in = model,
+        signal,
+    } = {}
 ) {
     return stage.run(row, {
         am,
@@ -147,7 +153,8 @@ function run(
         duracloud: UNUSED_DURACLOUD,
         curation,
         dip_store: { is_configured: () => dip_store_configured },
-        model,
+        model: model_in,
+        signal,
     });
 }
 
@@ -233,6 +240,8 @@ describe('ingester/stages/ingest with DIP_COPY_ENABLED', () => {
         expect(am._calls.get_dip_path).toEqual([SIP]);
         expect(am._calls.get_dip_package).toEqual([DIP_UUID]);
         expect((await fresh(row)).dip_path).toBe(DIP_PATH);
+        const events = await db_queue()(tables.ingest_events).where({ queue_id: row.id });
+        expect(events.map((e) => JSON.parse(e.payload).step)).not.toContain('dip_wait_started');
     });
 
     it('halts at once when the related package is not a DIP', async () => {
@@ -248,8 +257,9 @@ describe('ingester/stages/ingest with DIP_COPY_ENABLED', () => {
         expect(curation._calls).toHaveLength(0);
     });
 
-    it('retries a transport error from the copy', async () => {
+    it('retries a transport error from the copy, with a heartbeat', async () => {
         const row = await seed_row();
+        expect(row.last_poll_at).toBeNull();
         const curation = make_curation([
             new UpstreamError('curation /dip/copy-to-wasabi failed: ECONNRESET'),
             COPIED,
@@ -257,6 +267,75 @@ describe('ingester/stages/ingest with DIP_COPY_ENABLED', () => {
         const out = await run(row, { curation });
         expect(out.ok).toBe(true);
         expect(curation._calls).toHaveLength(2);
+        expect((await fresh(row)).last_poll_at).not.toBeNull();
+    });
+
+    it('waits through a 429 from curation', async () => {
+        const row = await seed_row();
+        const curation = make_curation([{ status: 429, data: 'slow down' }, COPIED]);
+        const out = await run(row, { curation });
+        expect(out.ok).toBe(true);
+        expect(curation._calls).toHaveLength(2);
+    });
+
+    it('retries a dip_path write that fails, and stores the path before finishing', async () => {
+        const row = await seed_row();
+        let failed = false;
+        const flaky = {
+            ...model,
+            async update_queue(where, data, opts) {
+                if (data.dip_path !== undefined && !failed) {
+                    failed = true;
+                    const err = new Error('Deadlock found when trying to get lock');
+                    err.code = 'ER_LOCK_DEADLOCK';
+                    throw err;
+                }
+                return model.update_queue(where, data, opts);
+            },
+        };
+        const am = make_am();
+        const out = await run(row, { am, model: flaky });
+        expect(out.ok).toBe(true);
+        expect(failed).toBe(true);
+        expect(am._calls.get_dip_path).toHaveLength(2);
+        expect((await fresh(row)).dip_path).toBe(DIP_PATH);
+    });
+
+    it('an error that is not a transport error halts at once instead of being retried', async () => {
+        const row = await seed_row();
+        const curation = make_curation();
+        const am = make_am({ get_dip_package: () => null });
+        const out = await run(row, { am, curation });
+        expect(out.reason).toBe('unexpected_error');
+        expect(am._calls.get_dip_package).toHaveLength(1);
+        expect(curation._calls).toHaveLength(0);
+        const row_now = await fresh(row);
+        expect(row_now.pipeline_state).toBe('DURACLOUD_TIMEOUT');
+        expect(row_now.error).toMatch(/^The access-copy wait failed: /);
+        expect(row_now.dip_path).toBe(DIP_PATH);
+        expect((await last_event(row)).payload.reason).toBe('unexpected_error');
+    });
+
+    it('a staff Stop during the copy leaves the row waiting, with no halt written', async () => {
+        const row = await seed_row();
+        const controller = new AbortController();
+        const curation = {
+            is_configured: () => true,
+            copy_dip(sip_uuid, dip_path, expected_size, { signal }) {
+                return new Promise((_resolve, reject) => {
+                    signal.addEventListener('abort', () =>
+                        reject(new UpstreamError('curation /dip/copy-to-wasabi failed: canceled'))
+                    );
+                    setTimeout(() => controller.abort(), 20);
+                });
+            },
+        };
+        const out = await run(row, { curation, signal: controller.signal });
+        expect(out).toEqual({ ok: false, reason: 'aborted' });
+        const row_now = await fresh(row);
+        expect(row_now.pipeline_state).toBe('WAITING_FOR_DURACLOUD');
+        expect(row_now.error).toBeNull();
+        expect((await last_event(row)).payload.step).toBe('dip_wait_started');
     });
 
     it('a failed copy halts at DURACLOUD_TIMEOUT, whose kebab offers Retry', async () => {
@@ -281,19 +360,61 @@ describe('ingester/stages/ingest with DIP_COPY_ENABLED', () => {
         expect(available_actions(row_now.pipeline_state)).toEqual([
             'timeline',
             'retry_access_copy',
+            'rollback_archivematica',
         ]);
     });
 
-    it('a DELETED DIP halts at DURACLOUD_TIMEOUT without a copy', async () => {
+    it('a DELETED, DEL_REQ, DEL_FAIL or FAIL DIP halts at DURACLOUD_TIMEOUT at once, without a copy', async () => {
+        const expected = {
+            DELETED: 'dip_deleted',
+            DEL_REQ: 'dip_deletion_requested',
+            DEL_FAIL: 'dip_deletion_failed',
+            FAIL: 'dip_failed',
+        };
+        for (const [status, reason] of Object.entries(expected)) {
+            const row = await seed_row({ package: `pkg-${status}` });
+            const curation = make_curation();
+            const am = make_am({
+                get_dip_package: { status: 200, data: {}, package_status: status, size: SIZE },
+            });
+            const out = await run(row, { am, curation });
+            expect(out.reason).toBe(reason);
+            const row_now = await fresh(row);
+            expect(row_now.pipeline_state).toBe('DURACLOUD_TIMEOUT');
+            expect(row_now.error).toBe(`Archivematica reports the DIP as ${status}`);
+            expect(am._calls.get_dip_package).toHaveLength(1);
+            expect(curation._calls).toHaveLength(0);
+        }
+    });
+
+    it("halts at once when the DIP record's folder is not the one worked out from the AIP's name", async () => {
         const row = await seed_row();
         const curation = make_curation();
         const am = make_am({
-            get_dip_package: { status: 200, data: {}, package_status: 'DELETED', size: SIZE },
+            get_dip_package: {
+                ...UPLOADED,
+                current_path: '/dip-store/0000/f75f/3cf8/4b3d/b494/e0ec/2017/2508/pkg_other',
+            },
         });
         const out = await run(row, { am, curation });
-        expect(out.reason).toBe('dip_deleted');
-        expect((await fresh(row)).pipeline_state).toBe('DURACLOUD_TIMEOUT');
+        expect(out.reason).toBe('dip_path_mismatch');
+        const row_now = await fresh(row);
+        expect(row_now.pipeline_state).toBe('DURACLOUD_TIMEOUT');
+        expect(row_now.error).toContain('(pkg_other)');
+        expect(row_now.error).toContain('(pkg_U158.03.0157.00096)');
         expect(curation._calls).toHaveLength(0);
+
+        // A record path with a location prefix, a trailing slash or a .7z suffix still matches.
+        for (const current_path of [`/dip-store/${DIP_PATH}/`, `${DIP_PATH}.7z`, null]) {
+            const ok_row = await seed_row({ package: `pkg-${String(current_path).length}` });
+            const ok_curation = make_curation();
+            const out_ok = await run(ok_row, {
+                am: make_am({ get_dip_package: { ...UPLOADED, current_path } }),
+                curation: ok_curation,
+            });
+            expect(out_ok.ok).toBe(true);
+            expect(ok_curation._calls).toHaveLength(1);
+        }
     });
 
     it('a request curation refuses (4xx) halts at once', async () => {
@@ -308,21 +429,47 @@ describe('ingester/stages/ingest with DIP_COPY_ENABLED', () => {
         expect(curation._calls).toHaveLength(1);
     });
 
-    it('halts with the last reason when the budget runs out while the DIP is incomplete', async () => {
+    it("names curation's answer when it refuses the copy with its auth failure", async () => {
         const row = await seed_row();
-        const out = await run(row, { curation: make_curation(INCOMPLETE) });
-        expect(out.reason).toBe('duracloud_timeout');
+        const out = await run(row, {
+            curation: make_curation({ status: 403, data: ['Access denied.'] }),
+        });
+        expect(out.reason).toBe('dip_copy_rejected');
+        expect((await fresh(row)).error).toBe(
+            'The curation API refused the copy (HTTP 403): Access denied.'
+        );
+    });
+
+    it('a 200 without a JSON object body halts as a failed copy', async () => {
+        const row = await seed_row();
+        const out = await run(row, { curation: make_curation({ status: 200, data: '<html>' }) });
+        expect(out.reason).toBe('dip_copy_failed');
+        expect((await fresh(row)).error).toBe('The DIP copy failed');
+    });
+
+    it('a DIP still incomplete on the second check halts at once, with the counts', async () => {
+        /*
+         * The package is UPLOADED, so the folder in DCP is final: a second
+         * shortfall is a wrong path or size, not a slow upload.
+         */
+        const row = await seed_row();
+        const curation = make_curation(INCOMPLETE);
+        const out = await run(row, { curation });
+        expect(out.reason).toBe('dip_incomplete');
+        expect(curation._calls).toHaveLength(2);
         const row_now = await fresh(row);
         expect(row_now.pipeline_state).toBe('DURACLOUD_TIMEOUT');
+        expect(row_now.dip_path).toBe(DIP_PATH);
         expect(row_now.error).toBe(
-            `Still waiting when the budget ran out: DCP holds 100 of ${SIZE} bytes`
+            `Archivematica reports the DIP as stored, but DCP holds 100 of ${SIZE} bytes`
         );
         const event = await last_event(row);
         expect(event.payload).toMatchObject({
-            step: 'dip_wait',
+            step: 'dip_copy',
             reason: 'dip_incomplete',
             dcp_bytes: 100,
             expected_bytes: SIZE,
+            mets: true,
         });
     });
 

@@ -358,6 +358,10 @@ describe('libs/archivematica', () => {
             const res = await am_module.create_client(http).get_dip_path('sip-1');
             expect(res.dip_uuid).toBe(dip_uuid);
             expect(res.dip_path).toBe('0000/f75f/3cf8/4b3d/b494/e0ec/2017/2508/pkg_U158-2259082c');
+            // The storage key travels in the header, never the URL.
+            const call = http.calls.get[0];
+            expect(call.url).toBe('https://am-storage.example.com/api/v2/file/sip-1/');
+            expect(call.opts.headers.Authorization).toBe('ApiKey storage-svc:storage-key');
         });
     });
 
@@ -383,9 +387,10 @@ describe('libs/archivematica', () => {
                 size: 6000,
                 current_path: 'x/y',
             });
-            const url = http.calls.get[0].url;
-            expect(url).toContain(`https://am-storage.example.com/api/v2/file/${DIP}/`);
-            expect(url).toContain('username=storage-svc');
+            const call = http.calls.get[0];
+            expect(call.url).toBe(`https://am-storage.example.com/api/v2/file/${DIP}/`);
+            expect(call.url).not.toContain('api_key=');
+            expect(call.opts.headers.Authorization).toBe('ApiKey storage-svc:storage-key');
         });
 
         it('reports no size for a missing, zero or unparseable size', async () => {

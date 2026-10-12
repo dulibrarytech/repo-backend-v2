@@ -429,7 +429,7 @@ describe('ingester — e2e', () => {
             expect(res.status).toBe(403);
         });
 
-        it('no longer offers the Archivematica rollback for DURACLOUD_TIMEOUT', async () => {
+        it('still offers the Archivematica rollback from DURACLOUD_TIMEOUT, for a package that can never finish', async () => {
             const auth = await bearer_for('retry-staff3');
             const post = await supertest(app)
                 .post('/repo/api/ingest/queue')
@@ -437,8 +437,10 @@ describe('ingester — e2e', () => {
                 .send({ rows: [row({ status: 'DURACLOUD_TIMEOUT', sip_uuid: 'sip-t' })] });
             const res = await supertest(app)
                 .post(`/repo/api/ingest/${post.body.ids[0]}/rollback-am`)
-                .set('Authorization', auth);
-            expect(res.status).toBe(403);
+                .set('Authorization', auth)
+                .send({ reason: 'Archivematica deleted the DIP' })
+                .expect(200);
+            expect(res.body.new_state).toBe('AM_DELETION_REQUESTED');
         });
     });
 
@@ -558,6 +560,56 @@ describe('ingester — e2e', () => {
             expect(jobs_rows[0].status).toBe('FAILED');
             expect(jobs_rows[0].error).toMatch(/Returned to packaging/);
             expect(jobs_rows[0].error).toMatch(/PROCESSING_METADATA/);
+        });
+
+        it('after Rollback AIP, moves the folder back and flags no AM cleanup', async () => {
+            const auth = await bearer_for('return-staff-am');
+            const post = await supertest(app)
+                .post('/repo/api/ingest/queue')
+                .set('Authorization', auth)
+                .send({ rows: [row({ status: 'FAILED', sip_uuid: 'sip-rb' })] });
+            const id = post.body.ids[0];
+            await supertest(app)
+                .post(`/repo/api/ingest/${id}/rollback-am`)
+                .set('Authorization', auth)
+                .send({ reason: 'bad bag' })
+                .expect(200);
+            const res = await supertest(app)
+                .post(`/repo/api/ingest/${id}/return-to-packaging`)
+                .set('Authorization', auth)
+                .send({ note: 'deletion approved' })
+                .expect(200);
+            expect(res.body.new_state).toBe('RETURNED_TO_PACKAGING');
+            expect(res.body.prev_state).toBe('FAILED');
+            expect(res.body.needed_qa_move).toBe(true);
+            expect(res.body.needed_am_cleanup).toBe(false);
+            // No QA service in the test environment; the row flip still succeeded.
+            expect(res.body.qa_error).toBeTruthy();
+            const queue = await db_queue()(tables.ingest_queue).where({ id }).first();
+            expect(queue.pipeline_state).toBe('RETURNED_TO_PACKAGING');
+            expect(queue.is_complete).toBe(1);
+            const events = await db_queue()(tables.ingest_events)
+                .where({ queue_id: id })
+                .orderBy('id', 'desc');
+            expect(JSON.parse(events[0].payload)).toMatchObject({
+                action: 'rollback_to_packaging',
+                prev_state: 'FAILED',
+                needed_qa_move: true,
+                needed_am_cleanup: false,
+                am_deletion_requested: true,
+            });
+        });
+
+        it('is refused from a halt state that has not been rolled back', async () => {
+            const auth = await bearer_for('return-staff-no');
+            const post = await supertest(app)
+                .post('/repo/api/ingest/queue')
+                .set('Authorization', auth)
+                .send({ rows: [row({ status: 'FAILED', sip_uuid: 'sip-no' })] });
+            const res = await supertest(app)
+                .post(`/repo/api/ingest/${post.body.ids[0]}/return-to-packaging`)
+                .set('Authorization', auth);
+            expect(res.status).toBe(403);
         });
 
         it('marks needed_qa_move=true for an UPLOADING prev_state', async () => {

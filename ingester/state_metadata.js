@@ -211,7 +211,7 @@ const STATUS_METADATA = {
     AM_DELETION_REQUESTED: {
         severity: 'WARN',
         suggested_action:
-            'AIP deletion request submitted to Archivematica. An Archivematica admin must approve in the Storage Service UI before the AIP is fully removed. Once confirmed, retry the ingest.',
+            'AIP deletion request submitted to Archivematica; an Archivematica admin must approve it in the Storage Service UI. Once approved, use Return to Packaging (Show: Closed only) to put the folder back, then re-submit.',
     },
 
     /*
@@ -279,10 +279,15 @@ const STATES_AT_PRE_AM_FAILURE = new Set([
 ]);
 
 /*
- * DURACLOUD_TIMEOUT is not here: it offers retry_access_copy instead (see
- * available_actions).
+ * DURACLOUD_TIMEOUT is AM-side too, but available_actions lists its
+ * retry_access_copy before the rollback (its own branch).
  */
-const STATES_AT_AM_FAILURE = new Set(['INGEST_STATUS_TIMEOUT', 'FAILED', 'AS_METADATA_DRIFT']);
+const STATES_AT_AM_FAILURE = new Set([
+    'INGEST_STATUS_TIMEOUT',
+    'FAILED',
+    'AS_METADATA_DRIFT',
+    'DURACLOUD_TIMEOUT',
+]);
 
 const STATES_PRE_FOLDER_MOVE_FAILURE = new Set(['AS_METADATA_INVALID']);
 
@@ -406,13 +411,25 @@ function available_actions(state, prev_state) {
         actions.push('rollback_to_packaging');
         return actions;
     }
+    if (state === 'AM_DELETION_REQUESTED') {
+        /*
+         * After Rollback AIP: the deletion request is Archivematica's to
+         * approve, and the folder is still in 002-ingest. Return to
+         * Packaging moves it back for a re-submit; the controller reads
+         * the rollback event for the prior state.
+         */
+        actions.push('rollback_to_packaging');
+        return actions;
+    }
     if (state === 'DURACLOUD_TIMEOUT') {
         /*
          * Stage 4's access copy halted after Archivematica stored the AIP
-         * and the DIP: Retry returns the row to WAITING_FOR_DURACLOUD.
-         * Rolling back would delete a good AIP.
+         * and the DIP: Retry (back to WAITING_FOR_DURACLOUD) comes first.
+         * Rollback AIP stays as the second item, for a package that can
+         * never finish (a DIP Archivematica deleted, a related package
+         * that isn't a DIP): a re-ingest needs the AIP gone first.
          */
-        actions.push('retry_access_copy');
+        actions.push('retry_access_copy', 'rollback_archivematica');
     } else if (STATES_AT_PRE_AM_FAILURE.has(state)) {
         actions.push('rollback_pre_ingest');
     } else if (STATES_AT_AM_FAILURE.has(state)) {

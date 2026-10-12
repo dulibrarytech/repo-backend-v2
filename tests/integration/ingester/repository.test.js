@@ -205,6 +205,54 @@ describe('ingester/stages/repository', () => {
         }
     });
 
+    it('with DIP_COPY_ENABLED, a Stop during the METS read writes no halt', async () => {
+        const app_config = require('../../../config/app');
+        process.env.DIP_COPY_ENABLED = 'true';
+        app_config._reset();
+        try {
+            const row = await seed_row();
+            const controller = new AbortController();
+            const dip_store = make_duracloud({ mets_xml: happy_mets() });
+            dip_store.fetch_text = async () => {
+                controller.abort();
+                throw new Error('DIP store request aborted by the caller');
+            };
+            const out = await stage.run(row, {
+                dip_store,
+                handles: make_handles(),
+                model,
+                signal: controller.signal,
+            });
+            expect(out).toEqual({ ok: false, reason: 'aborted' });
+            const row_now = await db_queue()(tables.ingest_queue).where({ id: row.id }).first();
+            expect(row_now.pipeline_state).toBe('CREATING_REPOSITORY_RECORD');
+            expect(row_now.error).toBeNull();
+        } finally {
+            delete process.env.DIP_COPY_ENABLED;
+            app_config._reset();
+        }
+    });
+
+    it('with DIP_COPY_ENABLED, a row without a dip_path halts at DURACLOUD_TIMEOUT too', async () => {
+        const app_config = require('../../../config/app');
+        process.env.DIP_COPY_ENABLED = 'true';
+        app_config._reset();
+        try {
+            const row = await seed_row({ dip_path: 'PENDING' });
+            const out = await stage.run(row, {
+                dip_store: make_duracloud({ mets_xml: happy_mets() }),
+                handles: make_handles(),
+                model,
+            });
+            expect(out.reason).toBe('missing_dip_path');
+            const row_now = await db_queue()(tables.ingest_queue).where({ id: row.id }).first();
+            expect(row_now.pipeline_state).toBe('DURACLOUD_TIMEOUT');
+        } finally {
+            delete process.env.DIP_COPY_ENABLED;
+            app_config._reset();
+        }
+    });
+
     it('happy path: METADATA_PROCESSED → COMPLETE with tbl_objects row + handle', async () => {
         const row = await seed_row();
         const duracloud = make_duracloud({ mets_xml: happy_mets() });

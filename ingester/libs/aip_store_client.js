@@ -203,12 +203,15 @@ function create_client(http = http_default) {
                 );
                 return { status: res.status, data: res.data };
             } catch (err) {
-                log.warn({
-                    event: 'dip_copy_to_wasabi_failed',
-                    sip_uuid,
-                    dip_path,
-                    err: err.message,
-                });
+                // A staff Stop or a worker shutdown aborts the call on purpose: no warning.
+                if (!(signal && signal.aborted)) {
+                    log.warn({
+                        event: 'dip_copy_to_wasabi_failed',
+                        sip_uuid,
+                        dip_path,
+                        err: err.message,
+                    });
+                }
                 throw new UpstreamError(`curation /dip/copy-to-wasabi failed: ${err.message}`);
             }
         },

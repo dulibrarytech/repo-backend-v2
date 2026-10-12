@@ -69,6 +69,7 @@ async function run(row, deps = {}) {
      * halts like Stage 4's copy, at DURACLOUD_TIMEOUT: Archivematica has
      * the AIP by now, so the kebab must offer Retry (which re-runs Stage
      * 4's wait, then this stage), not INGEST_HALTED's Return to Packaging.
+     * A row that reaches here without a dip_path halts the same way.
      */
     const mets_halt_state = dip_copy_enabled ? 'DURACLOUD_TIMEOUT' : 'INGEST_HALTED';
     const handles = deps.handles || handles_default;
@@ -86,7 +87,7 @@ async function run(row, deps = {}) {
         return { ok: false, reason: 'missing_sip_uuid' };
     }
     if (!row.dip_path || row.dip_path === 'PENDING') {
-        await halt(model, row, { reason: 'missing_dip_path' });
+        await halt(model, row, { reason: 'missing_dip_path' }, mets_halt_state);
         return { ok: false, reason: 'missing_dip_path' };
     }
     const metadata = parse_metadata(row.metadata);
@@ -121,6 +122,8 @@ async function run(row, deps = {}) {
     try {
         mets_res = await mets_source.fetch_text(mets_url, { signal });
     } catch (err) {
+        // A staff Stop or a worker shutdown: leave the row as it is for the resume.
+        if (signal && signal.aborted) return { ok: false, reason: 'aborted' };
         await halt(
             model,
             row,
@@ -134,6 +137,7 @@ async function run(row, deps = {}) {
         typeof mets_res.data !== 'string' ||
         mets_res.data.length === 0
     ) {
+        if (signal && signal.aborted) return { ok: false, reason: 'aborted' };
         await halt(
             model,
             row,

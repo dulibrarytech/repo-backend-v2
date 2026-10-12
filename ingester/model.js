@@ -360,15 +360,16 @@ async function cancel(id, { actor = 'system', reason = 'Cancelled by staff' } = 
 }
 
 /*
- * Read the row's prior pipeline_state from the audit log. Used by
- * the dashboard to decide which rollback action to show after a
- * cancel — see state_metadata.available_actions(state, prev_state).
- * Returns null if no cancel event exists for the row.
+ * Read the row's prior pipeline_state from the audit log: the `from` of
+ * the latest staff_action event that landed it in `to_state`. Decides
+ * which cleanup Return to Packaging runs — see
+ * state_metadata.available_actions(state, prev_state) and
+ * controller._return_row_to_packaging. Null when no such event exists.
  */
-async function get_prev_state_for_cancel(id) {
+async function _prev_state_from_event(id, to_state) {
     const knex = db_queue();
     const row = await knex(EVENTS)
-        .where({ queue_id: id, event_type: 'staff_action', to_state: 'CANCELLED_BY_USER' })
+        .where({ queue_id: id, event_type: 'staff_action', to_state })
         .orderBy('created_at', 'desc')
         .first();
     if (!row || !row.payload) return null;
@@ -378,6 +379,16 @@ async function get_prev_state_for_cancel(id) {
     } catch {
         return null;
     }
+}
+
+// The state a CANCELLED_BY_USER row was in when staff cancelled it.
+async function get_prev_state_for_cancel(id) {
+    return _prev_state_from_event(id, 'CANCELLED_BY_USER');
+}
+
+// The halt state an AM_DELETION_REQUESTED row was in when staff rolled it back.
+async function get_prev_state_for_am_rollback(id) {
+    return _prev_state_from_event(id, 'AM_DELETION_REQUESTED');
 }
 
 /*
@@ -465,6 +476,7 @@ module.exports = {
     finalize_pending_completes,
     cancel,
     get_prev_state_for_cancel,
+    get_prev_state_for_am_rollback,
     ACTIVELY_RUNNING_STATES,
     _purge_batch,
 };

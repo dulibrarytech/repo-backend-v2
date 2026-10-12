@@ -149,7 +149,7 @@ Stage 5 (repository)       → tbl_objects insert + handle mint + SFTP cleanup +
 Stage 6 (aip_store)        → Curation /copy-to-wasabi → AIP lands in Wasabi S3
 ```
 
-Stage 6 is gated by `AIP_STORE_ENABLED`. With the flag off, Stage 5 finalizes ingest the same way it did pre-Stage-6. Every Stage 4 access-copy halt lands in `DURACLOUD_TIMEOUT`, whose row menu offers **Retry** (back to the wait; files already copied are skipped) rather than an Archivematica rollback: the AIP and DIP are safe by then. Stages 1–5 run serially — one package at a time clears metadata, upload, AM transfer, AM ingest, and repository record before the next package starts; only Stage 6 overlaps, running in the background while the next package proceeds.
+Stage 6 is gated by `AIP_STORE_ENABLED`. With the flag off, Stage 5 finalizes ingest the same way it did pre-Stage-6. Every Stage 4 access-copy halt lands in `DURACLOUD_TIMEOUT`, whose row menu offers **Retry** first (back to the wait; files already copied are skipped) and **Rollback AIP** second, for a package that can never finish: the AIP and DIP are safe by then, so Retry is the normal path. Stages 1–5 run serially — one package at a time clears metadata, upload, AM transfer, AM ingest, and repository record before the next package starts; only Stage 6 overlaps, running in the background while the next package proceeds.
 
 ### Companion service: curation API
 

@@ -72,6 +72,15 @@ function storage_url(path) {
 }
 
 /*
+ * A storage-API URL with no credentials in it, for calls that send
+ * storage_auth_header() instead (the key then stays out of access logs).
+ */
+function storage_path_url(path) {
+    const cfg = app_config().archivematica;
+    return `${cfg.storage_api.replace(/\/+$/, '')}/${path}`;
+}
+
+/*
  * `Authorization: ApiKey user:key` header for storage-API calls that
  * need to authenticate via header (vs the query-string variant most
  * storage endpoints accept both).
@@ -247,11 +256,11 @@ function create_client(http = http_default) {
          */
         async get_dip_path(sip_uuid) {
             const cfg = app_config().archivematica;
-            const url = storage_url(`v2/file/${encodeURIComponent(sip_uuid)}/`);
+            const url = storage_path_url(`v2/file/${encodeURIComponent(sip_uuid)}/`);
             try {
                 const res = await http.get(url, {
                     timeout: cfg.timeout_ms,
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', ...storage_auth_header() },
                     validateStatus: () => true,
                 });
                 if (res.status !== 200 || !res.data) {
@@ -286,7 +295,8 @@ function create_client(http = http_default) {
          * DIP_COPY_ENABLED. The copy waits for UPLOADED (the Storage
          * Service sets it only once the upload has returned) and passes
          * `size` on, so curation can check that the whole DIP is in
-         * DuraCloud Preserve. Same endpoint and auth as get_dip_path.
+         * DuraCloud Preserve. Same endpoint as get_dip_path; the key goes
+         * in the Authorization header, never the URL.
          *
          * Returns { status, data, package_type, package_status, size,
          * current_path }: package_type and package_status upper-cased;
@@ -295,11 +305,11 @@ function create_client(http = http_default) {
          */
         async get_dip_package(dip_uuid) {
             const cfg = app_config().archivematica;
-            const url = storage_url(`v2/file/${encodeURIComponent(dip_uuid)}/`);
+            const url = storage_path_url(`v2/file/${encodeURIComponent(dip_uuid)}/`);
             try {
                 const res = await http.get(url, {
                     timeout: cfg.timeout_ms,
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', ...storage_auth_header() },
                     validateStatus: () => true,
                 });
                 if (res.status !== 200 || !res.data) {
