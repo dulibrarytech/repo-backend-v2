@@ -37,6 +37,7 @@
  */
 
 const duracloud_default = require('../../libs/duracloud');
+const dip_store_default = require('../../libs/dip_store');
 const handles_default = require('../../libs/handles');
 const qa_service_default = require('../libs/qa_service');
 const mets_module = require('../libs/mets');
@@ -52,7 +53,24 @@ const { sleep_or_abort } = require('../lib/polling');
 const log = require('../../libs/log');
 
 async function run(row, deps = {}) {
-    const duracloud = deps.duracloud || duracloud_default;
+    /*
+     * The METS comes from the DIP store (Wasabi) once Stage 4 copies the
+     * DIP there (DIP_COPY_ENABLED); dip_store mirrors duracloud's
+     * mets_path / fetch_text, and its body read is bounded by
+     * DIP_STORE_TIMEOUT_MS, so a stalled download halts the row instead of
+     * holding the serial pipeline.
+     */
+    const dip_copy_enabled = app_config().ingest_worker.dip_copy_enabled;
+    const mets_source = dip_copy_enabled
+        ? deps.dip_store || dip_store_default
+        : deps.duracloud || duracloud_default;
+    /*
+     * With the DIP copy on, a METS that can't be read from the DIP store
+     * halts like Stage 4's copy, at DURACLOUD_TIMEOUT: Archivematica has
+     * the AIP by now, so the kebab must offer Retry (which re-runs Stage
+     * 4's wait, then this stage), not INGEST_HALTED's Return to Packaging.
+     */
+    const mets_halt_state = dip_copy_enabled ? 'DURACLOUD_TIMEOUT' : 'INGEST_HALTED';
     const handles = deps.handles || handles_default;
     const qa = deps.qa || deps.qa_service || qa_service_default;
     const parse_mets = (deps.mets && deps.mets.parse_mets) || mets_module.parse_mets;
@@ -97,17 +115,18 @@ async function run(row, deps = {}) {
         );
     }
 
-    // --- Step 1: fetch METS from DuraCloud ---------------------------
-    const mets_url = duracloud.mets_path(row.sip_uuid, row.dip_path);
+    // --- Step 1: fetch METS from DuraCloud or the DIP store ----------
+    const mets_url = mets_source.mets_path(row.sip_uuid, row.dip_path);
     let mets_res;
     try {
-        mets_res = await duracloud.fetch_text(mets_url, { signal });
+        mets_res = await mets_source.fetch_text(mets_url, { signal });
     } catch (err) {
-        await halt(model, row, {
-            reason: 'mets_fetch_failed',
-            error: err.message,
-            mets_url,
-        });
+        await halt(
+            model,
+            row,
+            { reason: 'mets_fetch_failed', error: err.message, mets_url },
+            mets_halt_state
+        );
         return { ok: false, reason: 'mets_fetch_failed' };
     }
     if (
@@ -115,11 +134,12 @@ async function run(row, deps = {}) {
         typeof mets_res.data !== 'string' ||
         mets_res.data.length === 0
     ) {
-        await halt(model, row, {
-            reason: 'mets_unavailable',
-            status: mets_res.status,
-            mets_url,
-        });
+        await halt(
+            model,
+            row,
+            { reason: 'mets_unavailable', status: mets_res.status, mets_url },
+            mets_halt_state
+        );
         return { ok: false, reason: 'mets_unavailable' };
     }
 
@@ -618,11 +638,11 @@ function parse_metadata(raw) {
     }
 }
 
-async function halt(model, row, payload) {
+async function halt(model, row, payload, state = 'INGEST_HALTED') {
     const error_text = payload.error || payload.reason || 'halted';
     await model.update_queue(
         { id: row.id },
-        { status: 'INGEST_HALTED', error: error_text },
+        { status: state, error: error_text },
         {
             actor: 'worker',
             event_type: 'state_change',

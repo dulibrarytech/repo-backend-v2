@@ -8,7 +8,7 @@
  * lib/wasabi.py). v2's Stage 6 stays language-agnostic by calling
  * HTTP endpoints rather than re-implementing the upload in Node.
  * 
- * Two endpoints today:
+ * Endpoints:
  * 
  *   POST /api/v2/aip/copy-to-wasabi
  *     Body: { aip_uuid, repo_uuid }
@@ -34,6 +34,15 @@
  *     to the URL and bytes flow Wasabi → browser directly without
  *     transiting v2 or the curation service.
  * 
+ *   POST /api/v2/dip/copy-to-wasabi
+ *     Body: { sip_uuid, dip_path, expected_size }
+ *     Returns: 200 { ok, status, files, bytes, dcp_bytes,
+ *       expected_bytes, error, ... }, status 'copied', 'incomplete' (ask
+ *       again later) or 'failed'. Stage 4's DIP copy (DIP_COPY_ENABLED):
+ *       curation checks the whole DIP is in DuraCloud Preserve, then
+ *       copies its served files to Wasabi. Idempotent: files already
+ *       there are skipped.
+ *
  * Auth: X-API-Key header (same shared key as qa_service.js). The
  * header is set via default_headers() so a future rotation to a
  * different scheme is a one-place change.
@@ -45,16 +54,17 @@ const log = require('../../libs/log');
 const { UpstreamError } = require('../../libs/errors');
 
 const AIP_PATH = '/api/v2/aip/';
+const DIP_PATH = '/api/v2/dip/';
 
 function is_configured() {
     const cfg = app_config().curation_api;
     return Boolean(cfg && cfg.url && cfg.api_key);
 }
 
-function build_url(endpoint) {
+function build_url(endpoint, path = AIP_PATH) {
     const cfg = app_config().curation_api;
     const base = cfg.url.replace(/\/+$/, '');
-    return `${base}${AIP_PATH}${endpoint}`;
+    return `${base}${path}${endpoint}`;
 }
 
 function default_headers() {
@@ -162,6 +172,44 @@ function create_client(http = http_default) {
                 throw new UpstreamError(
                     `curation /aip/copy-from-duracloud failed: ${err.message}`
                 );
+            }
+        },
+
+        /*
+         * Stage 4's DIP copy: ask curation to check the DIP is complete in
+         * DuraCloud Preserve (Archivematica's recorded size, plus the
+         * METS) and copy its served files to Wasabi. Synchronous; the
+         * caller bounds it with `timeout_ms` (ingest_worker
+         * .dip_copy_timeout_ms) and `signal` (the row's abort, for a
+         * staff Stop or a worker shutdown).
+         *
+         * Returns { status, data }; data.status is 'copied',
+         * 'incomplete' or 'failed'. A 400 is a bad request. Throws
+         * UpstreamError on a transport failure (Stage 4 retries).
+         */
+        async copy_dip(sip_uuid, dip_path, expected_size, { timeout_ms, signal } = {}) {
+            const cfg = app_config().curation_api;
+            const url = build_url('copy-to-wasabi', DIP_PATH);
+            try {
+                const res = await http.post(
+                    url,
+                    { sip_uuid, dip_path, expected_size },
+                    {
+                        timeout: timeout_ms || cfg.timeout_ms,
+                        signal,
+                        headers: default_headers(),
+                        validateStatus: () => true,
+                    }
+                );
+                return { status: res.status, data: res.data };
+            } catch (err) {
+                log.warn({
+                    event: 'dip_copy_to_wasabi_failed',
+                    sip_uuid,
+                    dip_path,
+                    err: err.message,
+                });
+                throw new UpstreamError(`curation /dip/copy-to-wasabi failed: ${err.message}`);
             }
         },
 

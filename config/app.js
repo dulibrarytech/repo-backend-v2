@@ -644,6 +644,21 @@ function build() {
             ingest_timeout_ms: integer('INGEST_INGEST_TIMEOUT_MS', 6 * 60 * 60 * 1000),
             duracloud_poll_ms: integer('INGEST_DURACLOUD_POLL_MS', 60000),
             duracloud_timeout_ms: integer('INGEST_DURACLOUD_TIMEOUT_MS', 60 * 60 * 1000),
+            /*
+             * DuraCloud Preserve cutover (P3). On, Stage 4 waits for
+             * Archivematica's DIP package to be UPLOADED and asks the
+             * curation API to copy its served files to Wasabi (POST
+             * /api/v2/dip/copy-to-wasabi), within the budget above; Stage 5
+             * reads the METS from the DIP store. Flip it in the switch
+             * window, when Archivematica starts writing to DCP.
+             */
+            dip_copy_enabled: boolean('DIP_COPY_ENABLED', false),
+            /*
+             * One copy call's wall-clock limit: seconds for most DIPs,
+             * minutes for one with large PDFs. Keep it under curation's
+             * gunicorn --timeout (3700 s).
+             */
+            dip_copy_timeout_ms: positive_integer('DIP_COPY_TIMEOUT_MS', 30 * 60 * 1000),
 
             /*
              * Stage 5 success hold. The row sits at COMPLETE with

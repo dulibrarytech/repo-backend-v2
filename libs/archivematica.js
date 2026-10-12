@@ -9,6 +9,7 @@
  *   - get_transfer_status(uuid)
  *   - get_ingest_status(uuid)
  *   - get_dip_path(sip_uuid)          ← storage API; used post-ingest
+ *   - get_dip_package(dip_uuid)       ← storage API; the DIP copy's wait
  *   - delete_aip_request({ uuid, delete_reason })  ← storage API; rollback
  *   - clear_transfer(uuid) / clear_ingest(uuid)    ← post-success cleanup
  *   - ping_api() / ping_storage_api()              ← health endpoints
@@ -268,10 +269,63 @@ function create_client(http = http_default) {
                     .join('/');
                 const folder_parts = (data.current_path || '').split('/');
                 const folder = folder_parts[folder_parts.length - 1].replace('.7z', '');
-                return { status: res.status, data, dip_path: `${path}/${folder}` };
+                return {
+                    status: res.status,
+                    data,
+                    dip_path: `${path}/${folder}`,
+                    dip_uuid: dipuuid,
+                };
             } catch (err) {
                 log.warn({ event: 'am_get_dip_path_failed', sip_uuid, err: err.message });
                 throw new UpstreamError(`Archivematica get_dip_path failed: ${err.message}`);
+            }
+        },
+
+        /*
+         * The DIP package's own record: Stage 4's wait with
+         * DIP_COPY_ENABLED. The copy waits for UPLOADED (the Storage
+         * Service sets it only once the upload has returned) and passes
+         * `size` on, so curation can check that the whole DIP is in
+         * DuraCloud Preserve. Same endpoint and auth as get_dip_path.
+         *
+         * Returns { status, data, package_type, package_status, size,
+         * current_path }: package_type and package_status upper-cased;
+         * size a positive integer or null. A non-200 has nulls; a
+         * transport error throws UpstreamError.
+         */
+        async get_dip_package(dip_uuid) {
+            const cfg = app_config().archivematica;
+            const url = storage_url(`v2/file/${encodeURIComponent(dip_uuid)}/`);
+            try {
+                const res = await http.get(url, {
+                    timeout: cfg.timeout_ms,
+                    headers: { 'Content-Type': 'application/json' },
+                    validateStatus: () => true,
+                });
+                if (res.status !== 200 || !res.data) {
+                    return {
+                        status: res.status,
+                        data: null,
+                        package_type: null,
+                        package_status: null,
+                        size: null,
+                        current_path: null,
+                    };
+                }
+                const data = res.data;
+                const size = Number(data.size);
+                const upper = (value) => (typeof value === 'string' ? value.toUpperCase() : null);
+                return {
+                    status: res.status,
+                    data,
+                    package_type: upper(data.package_type),
+                    package_status: upper(data.status),
+                    size: Number.isSafeInteger(size) && size > 0 ? size : null,
+                    current_path: data.current_path || null,
+                };
+            } catch (err) {
+                log.warn({ event: 'am_get_dip_package_failed', dip_uuid, err: err.message });
+                throw new UpstreamError(`Archivematica get_dip_package failed: ${err.message}`);
             }
         },
 

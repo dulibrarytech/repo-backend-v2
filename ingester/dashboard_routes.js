@@ -216,6 +216,13 @@ module.exports = function mount(app) {
         controller.reset_row_action
     );
     app.post(
+        `${base}/:id/retry-access-copy`,
+        require_dashboard_auth,
+        can_ingest,
+        write_limiter(),
+        controller.retry_access_copy_action
+    );
+    app.post(
         `${base}/:id/return-to-packaging`,
         require_dashboard_auth,
         can_ingest,

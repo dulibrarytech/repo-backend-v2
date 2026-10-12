@@ -620,6 +620,39 @@ async function reset_row(req, res) {
 }
 
 /*
+ * --- POST /api/ingest/:id/retry-access-copy -----------------------------
+ *
+ * "Retry", for a row halted at DURACLOUD_TIMEOUT: Stage 4's access-copy wait
+ * ran out or its copy failed after Archivematica stored the AIP and the DIP.
+ * The row returns to WAITING_FOR_DURACLOUD with its error cleared, and the
+ * worker resumes Stage 4 at the wait (the DIP copy skips files already in
+ * Wasabi). Nothing in Archivematica is touched.
+ */
+async function retry_access_copy(req, res) {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+        throw new ValidationError('id must be a positive integer');
+    }
+    const row = await model.get_queue_row({ id });
+    if (!row) throw new NotFoundError(`queue row ${id} not found`);
+    if (!available_actions(row.pipeline_state).includes('retry_access_copy')) {
+        throw new ForbiddenError(
+            `retry_access_copy not available from state ${row.pipeline_state}`
+        );
+    }
+    const result = await model.update_queue(
+        { id },
+        { status: 'WAITING_FOR_DURACLOUD', error: null },
+        {
+            actor: actor_of(req),
+            event_type: 'staff_action',
+            payload: { action: 'retry_access_copy', from: row.pipeline_state },
+        }
+    );
+    res.json({ id, affected: result.affected, new_state: 'WAITING_FOR_DURACLOUD' });
+}
+
+/*
  * --- POST /api/ingest/:id/cancel ----------------------------------------
  *
  * Staff-initiated cancel of an in-flight row. Two steps:
@@ -880,6 +913,7 @@ module.exports = {
     cancel_batch,
     rollback_archivematica,
     reset_row,
+    retry_access_copy,
     cancel_row,
     return_to_packaging,
     reset_orphaned,

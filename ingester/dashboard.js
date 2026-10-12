@@ -844,6 +844,10 @@ async function reset_row_action(req, res) {
     return _wrap_api_as_partial(api_controller.reset_row, req, res);
 }
 
+async function retry_access_copy_action(req, res) {
+    return _wrap_api_as_partial(api_controller.retry_access_copy, req, res);
+}
+
 async function return_to_packaging_action(req, res) {
     return _wrap_api_as_partial(api_controller.return_to_packaging, req, res);
 }
@@ -1250,6 +1254,7 @@ module.exports = {
     cancel_batch_action,
     rollback_archivematica_action,
     reset_row_action,
+    retry_access_copy_action,
     return_to_packaging_action,
     // Workspace pages
     workspace_page,

@@ -119,8 +119,7 @@ const STATUS_METADATA = {
     // --- Wait states (INFO, but explanatory) ------------------------------
     WAITING_FOR_DURACLOUD: {
         severity: 'INFO',
-        suggested_action:
-            'Wait — Archivematica completed; waiting for AIP to propagate to DuraCloud.',
+        suggested_action: 'Wait — Archivematica has finished; the access copy is being prepared.',
     },
 
     // --- Polling timeouts — likely transient / staff-recoverable (WARN) ---
@@ -144,10 +143,15 @@ const STATUS_METADATA = {
         suggested_action:
             'Ingest status polling exceeded 6 hours. Check Archivematica dashboard for the actual state.',
     },
+    /*
+     * Stage 4's access-copy wait ran out, or its copy failed. The AIP and
+     * DIP are safe in preservation storage by then, so the kebab offers
+     * Retry (back to the wait), never an Archivematica rollback.
+     */
     DURACLOUD_TIMEOUT: {
         severity: 'WARN',
         suggested_action:
-            'DuraCloud propagation exceeded 1 hour after Archivematica completed. Retry the package; contact IT if it persists.',
+            "The files are safe, but the access copy didn't finish. Use Retry; contact LDT if it stops here again.",
     },
 
     // --- Hard failures requiring staff action (ERROR) ---------------------
@@ -274,12 +278,11 @@ const STATES_AT_PRE_AM_FAILURE = new Set([
     'TRANSFER_STATUS_TIMEOUT',
 ]);
 
-const STATES_AT_AM_FAILURE = new Set([
-    'INGEST_STATUS_TIMEOUT',
-    'FAILED',
-    'AS_METADATA_DRIFT',
-    'DURACLOUD_TIMEOUT',
-]);
+/*
+ * DURACLOUD_TIMEOUT is not here: it offers retry_access_copy instead (see
+ * available_actions).
+ */
+const STATES_AT_AM_FAILURE = new Set(['INGEST_STATUS_TIMEOUT', 'FAILED', 'AS_METADATA_DRIFT']);
 
 const STATES_PRE_FOLDER_MOVE_FAILURE = new Set(['AS_METADATA_INVALID']);
 
@@ -344,7 +347,7 @@ const AM_PRIOR_STATES = new Set([
 /*
  * Returns the subset of:
  *   ['timeline', 'rollback_pre_ingest', 'rollback_archivematica',
- *    'reset', 'cancel']
+ *    'reset', 'cancel', 'retry_access_copy']
  * that's appropriate from the given state. `timeline` is always
  * available (every row has events). The others depend on where in
  * the pipeline the package halted.
@@ -403,7 +406,14 @@ function available_actions(state, prev_state) {
         actions.push('rollback_to_packaging');
         return actions;
     }
-    if (STATES_AT_PRE_AM_FAILURE.has(state)) {
+    if (state === 'DURACLOUD_TIMEOUT') {
+        /*
+         * Stage 4's access copy halted after Archivematica stored the AIP
+         * and the DIP: Retry returns the row to WAITING_FOR_DURACLOUD.
+         * Rolling back would delete a good AIP.
+         */
+        actions.push('retry_access_copy');
+    } else if (STATES_AT_PRE_AM_FAILURE.has(state)) {
         actions.push('rollback_pre_ingest');
     } else if (STATES_AT_AM_FAILURE.has(state)) {
         actions.push('rollback_archivematica');

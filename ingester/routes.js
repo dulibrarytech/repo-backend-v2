@@ -66,6 +66,13 @@ module.exports = function mount(app) {
         controller.rollback_archivematica
     );
     app.post(`${base}/:id/reset`, require_auth, can_ingest, write_limiter(), controller.reset_row);
+    app.post(
+        `${base}/:id/retry-access-copy`,
+        require_auth,
+        can_ingest,
+        write_limiter(),
+        controller.retry_access_copy
+    );
     app.post(`${base}/:id/cancel`, require_auth, can_ingest, write_limiter(), controller.cancel_row);
     app.post(
         `${base}/:id/return-to-packaging`,

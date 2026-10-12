@@ -29,11 +29,17 @@
  *      AS_METADATA_DRIFT.
  *   3. DuraCloud wait: fetch get_dip_path(sip_uuid) to get the
  *      DC-side folder, then probe the METS file until it lands.
+ *      With DIP_COPY_ENABLED (DuraCloud Preserve), wait_and_copy_dip
+ *      replaces it: wait for the DIP package to be UPLOADED, then have
+ *      curation copy its served files to Wasabi. Every one of its halts
+ *      is DURACLOUD_TIMEOUT, whose Retry brings the row back here.
  */
 
 const am_default = require('../../libs/archivematica');
 const aspace_default = require('../../libs/archivesspace');
 const duracloud_default = require('../../libs/duracloud');
+const dip_store_default = require('../../libs/dip_store');
+const curation_default = require('../libs/aip_store_client');
 const validator_default = require('../libs/aspace_validator');
 const model_default = require('../model');
 const app_config = require('../../config/app');
@@ -210,6 +216,18 @@ async function run(row, deps = {}) {
         }
     }
 
+    if (cfg.dip_copy_enabled) {
+        return wait_and_copy_dip(row, {
+            am,
+            curation: deps.curation || curation_default,
+            dip_store: deps.dip_store || dip_store_default,
+            model,
+            cfg,
+            signal,
+            sip_uuid,
+        });
+    }
+
     /*
      * --- Substep 3: DuraCloud wait -----------------------------------
      * 
@@ -348,6 +366,250 @@ async function run(row, deps = {}) {
         }
     );
 
+    return { ok: true, sip_uuid, dip_path };
+}
+
+/*
+ * --- Substep 3 with DIP_COPY_ENABLED: wait for the DIP, then copy it ---
+ *
+ * Archivematica writes the DIP to DuraCloud Preserve; the public site reads
+ * the Wasabi copy of its served files. Within the old wait's budget
+ * (duracloud_poll_ms / duracloud_timeout_ms), each attempt:
+ *   (a) asks Archivematica for the AIP's DIP link until there is one (the
+ *       old wait halts at once without it), once per run, so a resumed row
+ *       asks again; records dip_path;
+ *   (b) reads the DIP package record: not a DIP or DELETED → halt;
+ *       UPLOADED with a size → go on; anything else → try again. Its
+ *       current_path goes into the events, to compare with dip_path;
+ *   (c) asks curation to check that the DIP is complete in DCP and copy its
+ *       served files (copy_dip, with the package's size): 'incomplete' →
+ *       try again; 'copied' → METADATA_PROCESSED.
+ * Transport errors and curation 5xx are retried within the budget. Every
+ * halt is DURACLOUD_TIMEOUT: the AIP and the DIP are safe in DCP by then,
+ * so the dashboard offers Retry (back to WAITING_FOR_DURACLOUD), never an
+ * Archivematica rollback. The copy skips what already landed.
+ */
+async function wait_and_copy_dip(row, { am, curation, dip_store, model, cfg, signal, sip_uuid }) {
+    const missing = [
+        !curation.is_configured() && 'the curation API (CURATION_API, CURATION_API_KEY)',
+        !dip_store.is_configured() && 'the DIP store (DIP_STORE_*)',
+    ].filter(Boolean);
+    if (missing.length) {
+        await halt(model, row, 'DURACLOUD_TIMEOUT', {
+            stage: 'ingest',
+            step: 'dip_copy',
+            reason: 'not_configured',
+            error: `DIP_COPY_ENABLED is on, but ${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} not configured`,
+            sip_uuid,
+        });
+        return { ok: false, reason: 'dip_copy_not_configured' };
+    }
+
+    let dip_path = null;
+    let dip_uuid = null;
+    let dip_current_path = null;
+    if (row.pipeline_state !== 'WAITING_FOR_DURACLOUD') {
+        await model.update_queue(
+            { id: row.id },
+            { status: 'WAITING_FOR_DURACLOUD' },
+            {
+                actor: 'worker',
+                payload: { stage: 'ingest', step: 'dip_wait_started', sip_uuid },
+            }
+        );
+    }
+
+    /*
+     * Why the row is still waiting, for the timeout halt: `reason` is
+     * a code, `error` the text LDT reads on the Timeline.
+     */
+    let waiting = {
+        reason: 'dip_not_linked',
+        error: 'Archivematica has not linked a DIP to this AIP',
+    };
+    async function wait_again(reason, error, detail = {}) {
+        waiting = { reason, error, ...detail };
+        try {
+            await model.update_queue({ id: row.id }, { last_poll_at: Date.now() });
+        } catch (err) {
+            log.warn({
+                event: 'dip_wait_heartbeat_write_failed',
+                queue_id: row.id,
+                err: err.message,
+            });
+        }
+        return { done: false };
+    }
+
+    const outcome = await poll(
+        async () => {
+            if (!dip_uuid) {
+                const dp = await am.get_dip_path(sip_uuid);
+                if (!dp.dip_path || !dp.dip_uuid) {
+                    return wait_again(
+                        'dip_not_linked',
+                        'Archivematica has not linked a DIP to this AIP',
+                        { am_status: dp.status }
+                    );
+                }
+                dip_path = dp.dip_path;
+                dip_uuid = dp.dip_uuid;
+                if (dip_path !== row.dip_path) {
+                    // No state change, so no event: the dip_copied event names it.
+                    await model.update_queue({ id: row.id }, { dip_path });
+                }
+            }
+
+            const pkg = await am.get_dip_package(dip_uuid);
+            if (pkg.status !== 200 || !pkg.data) {
+                return wait_again(
+                    'dip_record_unavailable',
+                    `Archivematica did not return the DIP record (HTTP ${pkg.status})`
+                );
+            }
+            dip_current_path = pkg.current_path;
+            if (pkg.package_type && pkg.package_type !== 'DIP') {
+                /*
+                 * get_dip_path takes the AIP's first related package to be
+                 * its DIP (v1's rule). If it is something else, its size
+                 * can never match the DIP folder: say so now, not after
+                 * the budget.
+                 */
+                return {
+                    done: true,
+                    value: {
+                        halt: 'not_a_dip',
+                        error: `The AIP's first related package in Archivematica is not a DIP (package type ${pkg.package_type})`,
+                    },
+                };
+            }
+            if (pkg.package_status === 'DELETED') {
+                return {
+                    done: true,
+                    value: {
+                        halt: 'dip_deleted',
+                        error: 'Archivematica reports the DIP as DELETED',
+                    },
+                };
+            }
+            if (pkg.package_status !== 'UPLOADED') {
+                return wait_again(
+                    'dip_not_uploaded',
+                    `Archivematica reports the DIP as ${pkg.package_status || 'no status'}, not UPLOADED`,
+                    { package_status: pkg.package_status }
+                );
+            }
+            if (!pkg.size) {
+                return wait_again('dip_size_missing', 'Archivematica reports no size for the DIP');
+            }
+
+            const res = await curation.copy_dip(sip_uuid, dip_path, pkg.size, {
+                timeout_ms: cfg.dip_copy_timeout_ms,
+                signal,
+            });
+            const data = res.data && typeof res.data === 'object' ? res.data : {};
+            if (res.status >= 500 || res.status === 429) {
+                return wait_again(
+                    'curation_unavailable',
+                    `The curation API answered HTTP ${res.status}`
+                );
+            }
+            if (res.status !== 200) {
+                return {
+                    done: true,
+                    value: {
+                        halt: 'dip_copy_rejected',
+                        error: `The curation API refused the copy (HTTP ${res.status}): ${data.error || 'no detail'}`,
+                    },
+                };
+            }
+            if (data.status === 'incomplete') {
+                return wait_again(
+                    'dip_incomplete',
+                    data.error || 'The DIP is not complete in DCP yet',
+                    {
+                        dcp_bytes: data.dcp_bytes,
+                        expected_bytes: data.expected_bytes,
+                        mets: data.mets,
+                    }
+                );
+            }
+            if (data.ok === true && data.status === 'copied') {
+                return { done: true, value: { copied: data } };
+            }
+            return {
+                done: true,
+                value: {
+                    halt: 'dip_copy_failed',
+                    error: data.error || 'The DIP copy failed',
+                    failures: Array.isArray(data.failures) ? data.failures : undefined,
+                },
+            };
+        },
+        {
+            interval_ms: cfg.duracloud_poll_ms,
+            timeout_ms: cfg.duracloud_timeout_ms,
+            signal,
+            on_attempt: async ({ error }) => {
+                log.warn({ event: 'dip_wait_error', queue_id: row.id, err: error.message });
+                waiting = { reason: 'upstream_error', error: error.message };
+                return true;
+            },
+        }
+    );
+
+    if (outcome.aborted) return { ok: false, reason: 'aborted' };
+    if (outcome.timed_out) {
+        await halt(model, row, 'DURACLOUD_TIMEOUT', {
+            stage: 'ingest',
+            step: 'dip_wait',
+            ...waiting,
+            error: `Still waiting when the budget ran out: ${waiting.error}`,
+            attempts: outcome.attempts,
+            elapsed_ms: outcome.elapsed_ms,
+            sip_uuid,
+            dip_uuid,
+            dip_path,
+            dip_current_path,
+        });
+        return { ok: false, reason: 'duracloud_timeout' };
+    }
+    if (outcome.result.halt) {
+        await halt(model, row, 'DURACLOUD_TIMEOUT', {
+            stage: 'ingest',
+            step: 'dip_copy',
+            reason: outcome.result.halt,
+            error: outcome.result.error,
+            failures: outcome.result.failures,
+            sip_uuid,
+            dip_uuid,
+            dip_path,
+            dip_current_path,
+        });
+        return { ok: false, reason: outcome.result.halt };
+    }
+
+    const copied = outcome.result.copied;
+    await model.update_queue(
+        { id: row.id },
+        { status: 'METADATA_PROCESSED' },
+        {
+            actor: 'worker',
+            payload: {
+                stage: 'ingest',
+                step: 'dip_copied',
+                sip_uuid,
+                dip_uuid,
+                dip_path,
+                dip_current_path,
+                files: copied.files,
+                bytes: copied.bytes,
+                verified: copied.verified,
+                attempts: outcome.attempts,
+                elapsed_ms: outcome.elapsed_ms,
+            },
+        }
+    );
     return { ok: true, sip_uuid, dip_path };
 }
 

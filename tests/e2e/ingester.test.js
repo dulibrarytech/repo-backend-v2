@@ -378,6 +378,70 @@ describe('ingester — e2e', () => {
         });
     });
 
+    describe('POST /repo/api/ingest/:id/retry-access-copy', () => {
+        it('requires auth', async () => {
+            const res = await supertest(app).post('/repo/api/ingest/1/retry-access-copy');
+            expect(res.status).toBe(401);
+        });
+
+        it('returns a DURACLOUD_TIMEOUT row to WAITING_FOR_DURACLOUD and clears its error', async () => {
+            const auth = await bearer_for('retry-staff');
+            const post = await supertest(app)
+                .post('/repo/api/ingest/queue')
+                .set('Authorization', auth)
+                .send({ rows: [row({ status: 'DURACLOUD_TIMEOUT', sip_uuid: 'sip-r' })] });
+            const id = post.body.ids[0];
+            await db_queue()(tables.ingest_queue)
+                .where({ id })
+                .update({ error: 'DCP holds 1 of 2 bytes', dip_path: 'aabb/folder' });
+
+            const res = await supertest(app)
+                .post(`/repo/api/ingest/${id}/retry-access-copy`)
+                .set('Authorization', auth)
+                .expect(200);
+            expect(res.body.new_state).toBe('WAITING_FOR_DURACLOUD');
+            const queue = await db_queue()(tables.ingest_queue).where({ id }).first();
+            expect(queue.pipeline_state).toBe('WAITING_FOR_DURACLOUD');
+            expect(queue.error).toBeNull();
+            expect(queue.dip_path).toBe('aabb/folder');
+            expect(queue.is_complete).toBe(0);
+            const event = await db_queue()(tables.ingest_events)
+                .where({ queue_id: id })
+                .orderBy('id', 'desc')
+                .first();
+            expect(event.event_type).toBe('staff_action');
+            expect(event.actor).toBe('retry-staff');
+            expect(JSON.parse(event.payload)).toEqual({
+                action: 'retry_access_copy',
+                from: 'DURACLOUD_TIMEOUT',
+            });
+        });
+
+        it('returns 403 from any other state', async () => {
+            const auth = await bearer_for('retry-staff2');
+            const post = await supertest(app)
+                .post('/repo/api/ingest/queue')
+                .set('Authorization', auth)
+                .send({ rows: [row({ status: 'FAILED', sip_uuid: 'sip-f' })] });
+            const res = await supertest(app)
+                .post(`/repo/api/ingest/${post.body.ids[0]}/retry-access-copy`)
+                .set('Authorization', auth);
+            expect(res.status).toBe(403);
+        });
+
+        it('no longer offers the Archivematica rollback for DURACLOUD_TIMEOUT', async () => {
+            const auth = await bearer_for('retry-staff3');
+            const post = await supertest(app)
+                .post('/repo/api/ingest/queue')
+                .set('Authorization', auth)
+                .send({ rows: [row({ status: 'DURACLOUD_TIMEOUT', sip_uuid: 'sip-t' })] });
+            const res = await supertest(app)
+                .post(`/repo/api/ingest/${post.body.ids[0]}/rollback-am`)
+                .set('Authorization', auth);
+            expect(res.status).toBe(403);
+        });
+    });
+
     describe('POST /repo/api/ingest/:id/cancel', () => {
         it('flips an in-flight UPLOADING row to CANCELLED_BY_USER', async () => {
             const auth = await bearer_for('cancel-staff');

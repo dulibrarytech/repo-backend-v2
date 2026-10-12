@@ -568,6 +568,31 @@ describe('ingest dashboard — e2e', () => {
             expect(res.text).toContain('PENDING');
         });
 
+        it('retry_access_copy_action returns the rendered row partial', async () => {
+            const id = await seed('DURACLOUD_TIMEOUT', { sip_uuid: 'sip-d' });
+            const cookie = await cookie_for('retry-html');
+            const res = await supertest(app)
+                .post(`/repo/dashboard/ingest/${id}/retry-access-copy`)
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.headers['content-type']).toMatch(/html/);
+            expect(res.text).toContain('queue-row-' + id);
+            expect(res.text).toContain('WAITING_FOR_DURACLOUD');
+            expect(res.text).not.toContain('retry-access-copy');
+        });
+
+        it('a DURACLOUD_TIMEOUT row offers Retry in its kebab, not Rollback AIP', async () => {
+            await seed('DURACLOUD_TIMEOUT', { package: 'gamma', sip_uuid: 'sip-g' });
+            const cookie = await cookie_for('retry-list');
+            const res = await supertest(app)
+                .get('/repo/dashboard/ingest/list')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toContain('gamma');
+            expect(res.text).toMatch(/\/ingest\/\d+\/retry-access-copy/);
+            expect(res.text).not.toContain('Rollback AIP');
+        });
+
         it('forwards 403 from the API when the action is not available', async () => {
             // COMPLETE row → cancel rejected with 403.
             const id = await seed('COMPLETE');

@@ -87,7 +87,8 @@
      */
     const has_stop_aip = actions.indexOf('stop_aip_copy') !== -1;
     const has_dismiss_aip = actions.indexOf('dismiss_aip_row') !== -1;
-    const has_divider = has_rollback || has_cancel || has_stop_aip || has_dismiss_aip;
+    const has_retry_copy = actions.indexOf('retry_access_copy') !== -1;
+    const has_divider = has_rollback || has_cancel || has_stop_aip || has_dismiss_aip || has_retry_copy;
 %>
 <tr id="queue-row-<%= row.id %>">
     <td class="package-cell">
@@ -431,6 +432,34 @@
                                 <path d="M10 11v6"/><path d="M14 11v6"/>
                             </svg>
                             Rollback AIP
+                        </a>
+                    </li>
+                <% } %>
+
+                <% if (has_retry_copy) { %>
+                    <%/* Retry — Stage 4's access copy halted
+                         (DURACLOUD_TIMEOUT). The AIP and DIP are safe; the
+                         row goes back to the wait, and files already
+                         copied are skipped. */%>
+                    <li>
+                        <a href="#"
+                           class="dropdown-item"
+                           hx-post="<%= dashboard_base %>/ingest/<%= row.id %>/retry-access-copy"
+                           hx-target="#queue-row-<%= row.id %>"
+                           hx-swap="outerHTML"
+                           hx-indicator="closest tr"
+                           data-confirm-title="Retry the Access Copy"
+                           data-confirm-severity="warn"
+                           data-confirm-proceed="Retry"
+                           hx-confirm="Retry the access copy for '<%= row.package %>'? Its files are safe in preservation storage. The package goes back to waiting for its access copy; nothing changes in Archivematica.">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                                 stroke="currentColor" stroke-width="1.75"
+                                 stroke-linecap="round" stroke-linejoin="round"
+                                 style="vertical-align: -2px; margin-right: 6px;">
+                                <polyline points="23 4 23 10 17 10"/>
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                            </svg>
+                            Retry
                         </a>
                     </li>
                 <% } %>

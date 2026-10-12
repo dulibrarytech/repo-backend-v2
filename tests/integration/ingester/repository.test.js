@@ -141,6 +141,70 @@ describe('ingester/stages/repository', () => {
         await db_helper.teardown();
     });
 
+    it('reads the METS from the DIP store, not DuraCloud, with DIP_COPY_ENABLED', async () => {
+        const app_config = require('../../../config/app');
+        process.env.DIP_COPY_ENABLED = 'true';
+        app_config._reset();
+        try {
+            const row = await seed_row();
+            const dip_store = make_duracloud({ mets_xml: happy_mets() });
+            const duracloud = {
+                mets_path() {
+                    throw new Error('DuraCloud read with DIP_COPY_ENABLED on');
+                },
+                async fetch_text() {
+                    throw new Error('DuraCloud read with DIP_COPY_ENABLED on');
+                },
+            };
+            const out = await stage.run(row, {
+                duracloud,
+                dip_store,
+                handles: make_handles(),
+                model,
+            });
+            expect(out.ok).toBe(true);
+            expect(dip_store._calls).toEqual([{ path: `aabb/folder-A/METS.${row.sip_uuid}.xml` }]);
+        } finally {
+            delete process.env.DIP_COPY_ENABLED;
+            app_config._reset();
+        }
+    });
+
+    it('with DIP_COPY_ENABLED, an unreadable METS halts at DURACLOUD_TIMEOUT, which offers Retry', async () => {
+        const app_config = require('../../../config/app');
+        const { available_actions } = require('../../../ingester/state_metadata');
+        process.env.DIP_COPY_ENABLED = 'true';
+        app_config._reset();
+        try {
+            const missing = await seed_row({ package: 'pkg-missing' });
+            const out = await stage.run(missing, {
+                dip_store: make_duracloud({ status: 404 }),
+                handles: make_handles(),
+                model,
+            });
+            expect(out.reason).toBe('mets_unavailable');
+            const row_now = await db_queue()(tables.ingest_queue).where({ id: missing.id }).first();
+            expect(row_now.pipeline_state).toBe('DURACLOUD_TIMEOUT');
+            expect(available_actions(row_now.pipeline_state)).toContain('retry_access_copy');
+
+            const broken = await seed_row({ package: 'pkg-broken' });
+            const dip_store = make_duracloud({ mets_xml: happy_mets() });
+            dip_store.fetch_text = async () => {
+                throw new Error('DIP store timeout after 15000 ms');
+            };
+            const out2 = await stage.run(broken, { dip_store, handles: make_handles(), model });
+            expect(out2.reason).toBe('mets_fetch_failed');
+            const broken_now = await db_queue()(tables.ingest_queue)
+                .where({ id: broken.id })
+                .first();
+            expect(broken_now.pipeline_state).toBe('DURACLOUD_TIMEOUT');
+            expect(broken_now.error).toContain('DIP store timeout');
+        } finally {
+            delete process.env.DIP_COPY_ENABLED;
+            app_config._reset();
+        }
+    });
+
     it('happy path: METADATA_PROCESSED → COMPLETE with tbl_objects row + handle', async () => {
         const row = await seed_row();
         const duracloud = make_duracloud({ mets_xml: happy_mets() });
