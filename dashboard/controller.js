@@ -193,6 +193,8 @@ async function home_page(req, res) {
         per_year,
         fmt_count: format_count,
         fmt_bytes: format_bytes,
+        // The storage cards' placeholders name the same store as the partial.
+        store_label: stats_duracloud.store_label(),
         // Degraded-services banner: staff's passive signal that a backing service is down.
         show_services_banner: true,
     });
@@ -229,6 +231,7 @@ async function stats_duracloud_partial(req, res) {
     const usage = await stats_duracloud.usage();
     render_partial(req, res, 'dashboard/partials/stats_duracloud', {
         usage,
+        store_label: stats_duracloud.store_label(),
         fmt_bytes: format_bytes,
     });
 }

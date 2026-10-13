@@ -10,6 +10,7 @@ const { db } = require('../../config/db');
 const tables = require('../../config/db_tables');
 const jwt = require('../../libs/jwt');
 const app_config = require('../../config/app');
+const stats_duracloud = require('../../stats/duracloud');
 
 let app;
 /*
@@ -39,7 +40,8 @@ function tiny_jpeg() {
 describe('dashboard — e2e', () => {
     beforeAll(async () => {
         upload_tempdir = await fs.mkdtemp(path.join(os.tmpdir(), 'repo-tn-e2e-'));
-        app = make_app({ env: { THUMBNAIL_UPLOAD_PATH: upload_tempdir } });
+        // The storage cards' label depends on the flag: pin it so a shell export can't change it.
+        app = make_app({ env: { THUMBNAIL_UPLOAD_PATH: upload_tempdir, DIP_COPY_ENABLED: 'false' } });
         await db_helper.setup_schema();
     });
     beforeEach(async () => {
@@ -776,6 +778,31 @@ describe('dashboard — e2e', () => {
             expect(res.text).toContain('Total DuraCloud AIP Store Usage');
             expect(res.text).toContain('Total DuraCloud Storage Usage');
             expect(res.text).toContain('—');
+        });
+
+        it('names DuraCloud Preserve on the placeholders and the cards after the switch', async () => {
+            /*
+             * The flag itself is covered in tests/unit/stats/duracloud.test.js;
+             * this checks that both views take their label from store_label().
+             */
+            const label = vi
+                .spyOn(stats_duracloud, 'store_label')
+                .mockReturnValue('DuraCloud Preserve');
+            try {
+                const cookie = await cookie_for('stats-20');
+                const page = await supertest(app).get('/repo/dashboard/').set('Cookie', cookie);
+                expect(page.status).toBe(200);
+                expect(page.text).toContain('Total DuraCloud Preserve DIP Store Usage');
+                const res = await supertest(app)
+                    .get('/repo/dashboard/_stats/duracloud')
+                    .set('Cookie', cookie);
+                expect(res.status).toBe(200);
+                expect(res.text).toContain('Total DuraCloud Preserve DIP Store Usage');
+                expect(res.text).toContain('Total DuraCloud Preserve AIP Store Usage');
+                expect(res.text).toContain('Total DuraCloud Preserve Storage Usage');
+            } finally {
+                label.mockRestore();
+            }
         });
 
         it('sidebar marks Home as the active nav item while stats renders as home', async () => {

@@ -217,10 +217,13 @@ function create_client(http = http_default) {
         },
 
         /*
-         * Cached Wasabi bucket-utilization readout (batch backups +
-         * AIP store). Instant — the curation side serves a cache and
-         * recomputes in the background when stale; `computing: true`
-         * means poll again shortly. `refresh` forces a recompute.
+         * Cached bucket-utilization readout: the Wasabi buckets (batch
+         * backups, AIP store) and, once curation has its DCP key, DCP's
+         * DIP and AIP locations (the home page's storage cards). Instant
+         * — the curation side serves a cache and recomputes in the
+         * background when stale; `computing: true` means poll again
+         * shortly. `refresh` forces a recompute. Capped at 15 s: a cache
+         * read, never a walk.
          */
         async bucket_usage() {
             const cfg = app_config().curation_api;

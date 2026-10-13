@@ -146,7 +146,8 @@ const STATUS_METADATA = {
     /*
      * Stage 4's access-copy wait ran out, or its copy failed. The AIP and
      * DIP are safe in preservation storage by then, so the kebab offers
-     * Retry (back to the wait), never an Archivematica rollback.
+     * Retry (back to the wait) first; Rollback AIP stays below it for a
+     * package that can never finish that way.
      */
     DURACLOUD_TIMEOUT: {
         severity: 'WARN',

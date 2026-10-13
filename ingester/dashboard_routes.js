@@ -108,7 +108,8 @@ module.exports = function mount(app) {
     app.get(`${admin_base}/wasabi`, require_dashboard_auth, controller.services_wasabi_partial);
     /*
      * Storage-utilization refresh: forces the curation side to re-walk
-     * both buckets in the background, then re-renders the card.
+     * every store it measures (the Wasabi buckets and, with its DCP key,
+     * DCP's two locations) in the background, then re-renders the card.
      */
     app.post(
         `${admin_base}/wasabi/usage-refresh`,
