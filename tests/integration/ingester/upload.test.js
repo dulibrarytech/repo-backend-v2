@@ -42,12 +42,12 @@ function make_qa(script) {
             calls.move_to_ingest.push({ uuid, folder, pkg });
             return next('move_to_ingest')();
         },
-        async move_to_sftp(uuid) {
-            calls.move_to_sftp.push({ uuid });
+        async move_to_sftp(uuid, pkg) {
+            calls.move_to_sftp.push({ uuid, pkg });
             return next('move_to_sftp')();
         },
-        async sftp_upload_status(uuid, expected) {
-            calls.sftp_upload_status.push({ uuid, expected });
+        async sftp_upload_status(uuid, expected, pkg) {
+            calls.sftp_upload_status.push({ uuid, expected, pkg });
             return next('sftp_upload_status')();
         },
         _calls: calls,
@@ -106,6 +106,29 @@ describe('ingester/stages/upload', () => {
         await stage.run(row, { qa, model });
         expect(qa._calls.move_to_ingest[0].uuid).toBe('collection-pid-abc');
         expect(qa._calls.move_to_sftp[0].uuid).toBe('collection-pid-abc');
+    });
+
+    it('names the package on the put and on every poll, so curation uploads and counts that folder only', async () => {
+        /*
+         * 2026-10-14: the curation side used to upload all of 002-ingest
+         * and count every file under <uuid>/, so a leftover sibling (a
+         * package whose Wasabi archive failed) was re-sent and could
+         * make this upload look complete before its own files arrived.
+         */
+        const row = await seed_row({ package: 'pkg-002' });
+        const qa = make_qa({
+            get_package_file_count: { status: 200, data: { package_file_count: 1 } },
+            move_to_ingest: { status: 200, data: {} },
+            move_to_sftp: { status: 200, data: {} },
+            sftp_upload_status: { status: 200, data: { uploaded: 1 } },
+        });
+        await stage.run(row, { qa, model });
+        expect(qa._calls.move_to_sftp).toEqual([{ uuid: 'codu:test', pkg: 'pkg-002' }]);
+        expect(qa._calls.sftp_upload_status[0]).toEqual({
+            uuid: 'codu:test',
+            expected: 1,
+            pkg: 'pkg-002',
+        });
     });
 
     it("treats the legacy collection_uuid='PENDING' default as missing — falls through to q-<id>", async () => {

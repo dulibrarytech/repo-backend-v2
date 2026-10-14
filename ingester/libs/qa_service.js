@@ -10,10 +10,11 @@
  * 
  *   - move_to_ingest(uuid, folder, package)  — fire-and-forget; QA moves
  *     the folder asynchronously. We submit the request, return.
- *   - move_to_sftp(uuid)                      — fire-and-forget; QA pushes
- *     the staged batch to the AM SFTP source. Long-running (~30 min).
- *   - sftp_upload_status(uuid, total_count)  — polled by the worker
- *     until total files match expected count or UPLOAD_TIMEOUT fires.
+ *   - move_to_sftp(uuid, package)             — fire-and-forget; QA pushes
+ *     that one package to the AM SFTP source. Long-running (~30 min).
+ *   - sftp_upload_status(uuid, total_count, package) — polled by the
+ *     worker until the package's files match the expected count or
+ *     UPLOAD_TIMEOUT fires.
  *   - get_package_file_count(folder, package) — used pre-flight to learn
  *     the count we'll later poll against.
  * 
@@ -143,15 +144,19 @@ function create_client(http = http_default) {
         },
 
         /*
-         * Push the staged batch up to Archivematica's SFTP source.
-         * Legitimately long-running for big collections; the v1 timeout
+         * Push one staged package up to Archivematica's SFTP source:
+         * 002-ingest/<uuid>/<package> to <sftp_path>/<uuid>/<package>.
+         * Without `package_name` the curation side uploads its whole
+         * staging tree (the pre-2026-10 contract), which re-sent every
+         * leftover sibling and let one count toward this upload.
+         * Legitimately long-running for big packages; the v1 timeout
          * was 30 minutes, preserved here via app_config().move_timeout_ms.
          */
-        async move_to_sftp(uuid) {
+        async move_to_sftp(uuid, package_name) {
             const cfg = app_config().curation_api;
             return _get(
                 http,
-                build_url('move-to-sftp', { uuid }),
+                build_url('move-to-sftp', { uuid, package: package_name }),
                 'move_to_sftp',
                 cfg.move_timeout_ms
             );
@@ -160,10 +165,16 @@ function create_client(http = http_default) {
         /*
          * Ask the curation side to stop an in-flight background put
          * (2026-07-30). Best-effort + idempotent — fired by the cancel
-         * flows when the row being cancelled was UPLOADING.
+         * flows when the row being cancelled was UPLOADING. `package_name`
+         * names the put to stop; the curation side keys its cancel flag
+         * by package, so another package of the collection keeps going.
          */
-        async cancel_upload(uuid) {
-            return _get(http, build_url('cancel-upload', { uuid }), 'cancel_upload');
+        async cancel_upload(uuid, package_name) {
+            return _get(
+                http,
+                build_url('cancel-upload', { uuid, package: package_name }),
+                'cancel_upload'
+            );
         },
 
         /*
@@ -171,13 +182,17 @@ function create_client(http = http_default) {
          * current upload count vs expected; the worker compares against
          * total_batch_file_count and advances to UPLOAD_COMPLETE when
          * they match, or to UPLOAD_TIMEOUT after the configured window.
+         * With `package_name` the curation side counts and sizes that
+         * package's remote folder only, so a leftover sibling from an
+         * earlier package can't make this upload look complete early.
          */
-        async sftp_upload_status(uuid, total_batch_file_count) {
+        async sftp_upload_status(uuid, total_batch_file_count, package_name) {
             return _get(
                 http,
                 build_url('upload-status', {
                     uuid,
                     total_batch_file_count,
+                    package: package_name,
                 }),
                 'sftp_upload_status'
             );

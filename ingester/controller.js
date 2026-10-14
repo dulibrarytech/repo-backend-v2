@@ -720,13 +720,14 @@ async function cancel_row(req, res) {
 
 /*
  * For a row cancelled mid-upload, ask the curation side to stop its background
- * put as well. Best-effort: on failure the put simply runs its course.
+ * put as well — the put for this row's package, as Stage 2 started it. Best-
+ * effort: on failure the put simply runs its course.
  */
 async function _cancel_inflight_upload(row, prev_state) {
     if (prev_state !== 'UPLOADING') return;
     if (!(qa_service.is_configured && qa_service.is_configured())) return;
     try {
-        await qa_service.cancel_upload(_qa_uuid(row));
+        await qa_service.cancel_upload(_qa_uuid(row), row.package);
     } catch (err) {
         log.warn({
             event: 'cancel_upload_request_failed',

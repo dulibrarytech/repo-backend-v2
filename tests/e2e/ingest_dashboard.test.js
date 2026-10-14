@@ -480,8 +480,8 @@ describe('ingest dashboard — e2e', () => {
             const orig_cancel = qa_service.cancel_upload;
             const cancels = [];
             qa_service.is_configured = () => true;
-            qa_service.cancel_upload = async (uuid) => {
-                cancels.push(uuid);
+            qa_service.cancel_upload = async (uuid, pkg) => {
+                cancels.push({ uuid, pkg });
                 return { status: 200, data: { message: 'cancel_requested' } };
             };
             try {
@@ -490,7 +490,10 @@ describe('ingest dashboard — e2e', () => {
                  * (the 002-ingest/<uuid> staging folder) — give the
                  * UPLOADING row a distinct one to pin the plumbing.
                  */
-                const uploading = await seed('UPLOADING', { collection_uuid: 'codu-up-1' });
+                const uploading = await seed('UPLOADING', {
+                    collection_uuid: 'codu-up-1',
+                    package: 'pkg-up-1',
+                });
                 const pending = await seed('PENDING', { collection_uuid: 'codu-up-2' });
                 const cookie = await cookie_for('halt-upload');
                 const res = await supertest(app)
@@ -507,7 +510,8 @@ describe('ingest dashboard — e2e', () => {
                 expect((await model.get_queue_row({ id: pending })).status).toBe(
                     'CANCELLED_BY_USER'
                 );
-                expect(cancels).toEqual(['codu-up-1']);
+                // The put to stop is this row's package, as Stage 2 started it.
+                expect(cancels).toEqual([{ uuid: 'codu-up-1', pkg: 'pkg-up-1' }]);
             } finally {
                 qa_service.is_configured = orig_conf;
                 qa_service.cancel_upload = orig_cancel;
