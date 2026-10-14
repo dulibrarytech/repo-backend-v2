@@ -25,6 +25,33 @@ const model = require('./model');
 const batches = require('./batches');
 
 /*
+ * tbl_objects.file_name is VARCHAR(255): a value at the limit may have
+ * been cut off mid-path.
+ */
+const FILE_NAME_MAX_LENGTH = 255;
+
+/* A non-blank string, else null. */
+function non_empty_string(v) {
+    return typeof v === 'string' && v.trim() !== '' ? v : null;
+}
+
+/*
+ * The row's file_name as a fallback envelope `object`, or null when it
+ * is not a usable dip-store path: blank, a bare name (no '/'), a folder
+ * (ends in '/'), an absolute URL, a value cut off at the column limit,
+ * or a DuraCloud chunk file (`.dura-manifest`, `.dura-chunk-*`), which
+ * no longer exists.
+ */
+function file_name_as_object(file_name) {
+    if (typeof file_name !== 'string' || file_name.trim() === '') return null;
+    if (!file_name.includes('/') || file_name.endsWith('/')) return null;
+    if (/^https?:\/\//i.test(file_name)) return null;
+    if (file_name.length >= FILE_NAME_MAX_LENGTH) return null;
+    if (file_name.includes('.dura-')) return null;
+    return file_name;
+}
+
+/*
  * Build the tbl_objects write from an ASpace metadata response:
  * `mods`, the denormalized `display_record` envelope, and the derived
  * `compound_parts` / `is_compound` fields.
@@ -35,7 +62,9 @@ const batches = require('./batches');
  * creator, f_subjects, type, …) instead of fossilizing the old ones —
  * and so it heals thin pre-consolidation envelopes. The ASpace fetch
  * carries no DuraCloud paths (those are local DIP data), so object/
- * thumbnail per part are recovered from the previous envelope's parts.
+ * thumbnail per part are recovered from the previous envelope's parts,
+ * and the top-level object/thumbnail/mime_type are kept from the previous
+ * envelope, else taken from the parts, else from the row's columns.
  */
 function build_payload(existing_row, metadata) {
     const row = existing_row && typeof existing_row === 'object' ? existing_row : {};
@@ -117,6 +146,38 @@ function build_payload(existing_row, metadata) {
         metadata: metadata_for_envelope,
         dip_parts,
     });
+    /*
+     * The top-level object/thumbnail/mime_type are DIP facts recorded at
+     * ingest, which a metadata refresh never changes: the old envelope's
+     * values win whenever it has them. Most single objects keep their DIP
+     * paths only there (no DIP list, no per-part `object`), so no master
+     * part is found and the three come back null; and a v1-era compound
+     * names its TIFF master at the top while its first part names the JP2,
+     * which pick_master_part would otherwise swap in. Only without an old
+     * value does the parts' stand, and failing that the row's columns: the
+     * envelope's object (e.g. .tif) often differs from file_name (.jp2),
+     * and the indexer's master_object prefers the envelope value.
+     */
+    const column_values = {
+        object: file_name_as_object(row.file_name),
+        thumbnail: non_empty_string(row.thumbnail),
+        mime_type: non_empty_string(row.mime_type),
+    };
+    for (const field of ['object', 'thumbnail', 'mime_type']) {
+        const previous = non_empty_string(old_envelope[field]);
+        if (previous !== null) {
+            built.envelope[field] = previous;
+        } else if (built.envelope[field] === null) {
+            built.envelope[field] = column_values[field];
+        }
+    }
+    /*
+     * Without a resource_type, build_envelope derived `type` from the
+     * MIME it had; re-derive it from the refilled one.
+     */
+    if (!metadata_for_envelope.resource_type) {
+        built.envelope.type = display_envelope.type_from_mime(built.envelope.mime_type);
+    }
     /*
      * A custom-uploaded thumbnail lives in the column as an absolute URL
      * (set_thumbnail); it must survive a metadata refresh rather than be

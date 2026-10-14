@@ -86,7 +86,14 @@ async function health(req, res) {
     );
 }
 
-// GET /api/v1/search?q=&page=&page_size=&object_type=&is_compound=&subject=&collection=&sort=
+/*
+ * GET /api/v1/search?q=&page=&page_size=&object_type=&is_compound=&subject=&collection=&sort=
+ *
+ * object_type: `object` (single and compound objects; is_compound=false
+ * excludes the compounds), `compound` (compound objects only) or
+ * `collection`. collection: one or more collection UUIDs, matched exactly
+ * whatever their case.
+ */
 async function search(req, res) {
     const make = (pid) => make_thumbnail_url_for(req, pid);
     const result = await model.search(req.query, { make_thumbnail_url: make });
