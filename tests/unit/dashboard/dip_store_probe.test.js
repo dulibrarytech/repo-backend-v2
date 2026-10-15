@@ -32,12 +32,6 @@ describe('DIP store service probe', () => {
         dip_store._reset();
     });
 
-    it('is listed right after DuraCloud, which it replaces as the DIP source', () => {
-        const keys = dashboard.SERVICE_PROBES.map((p) => p.key);
-        expect(keys).toContain('dip_store');
-        expect(keys.indexOf('dip_store')).toBe(keys.indexOf('duracloud') + 1);
-    });
-
     it('reports "not configured" without touching Wasabi', async () => {
         for (const name of Object.keys(ENV)) delete process.env[name];
         app_config._reset();

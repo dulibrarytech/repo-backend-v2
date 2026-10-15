@@ -9,6 +9,7 @@
 
 const dashboard = require('../../../ingester/dashboard');
 const app_config = require('../../../config/app');
+const qa_service = require('../../../ingester/libs/qa_service');
 
 describe('service probe deadline (banner snappiness)', () => {
     it('_with_deadline resolves a fast probe to its value', async () => {
@@ -74,7 +75,9 @@ describe('service probe deadline (banner snappiness)', () => {
     it('banner deadline clears the slowest interactive probe (no false "down")', () => {
         const cfg = app_config();
         expect(dashboard.BANNER_PROBE_TIMEOUT_MS).toBeGreaterThanOrEqual(cfg.archivespace.timeout_ms);
-        expect(dashboard.BANNER_PROBE_TIMEOUT_MS).toBeGreaterThanOrEqual(cfg.duracloud.timeout_ms);
+        expect(dashboard.BANNER_PROBE_TIMEOUT_MS).toBeGreaterThanOrEqual(
+            qa_service.HEALTH_DCP_TIMEOUT_MS
+        );
         expect(dashboard.BANNER_PROBE_TIMEOUT_MS).toBeGreaterThanOrEqual(cfg.dip_store.timeout_ms);
         expect(dashboard.BANNER_PROBE_TIMEOUT_MS).toBeGreaterThanOrEqual(cfg.elasticsearch.timeout_ms);
     });
