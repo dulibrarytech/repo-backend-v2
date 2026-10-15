@@ -368,6 +368,27 @@ describe('ingest dashboard — e2e', () => {
             expect(res.text).not.toMatch(/Use the rollback action/);
         });
 
+        it('after Rollback AIP the closed row offers Return to Packaging, and it works', async () => {
+            const id = await seed('FAILED', { package: 'delta', sip_uuid: 'sip-am' });
+            const cookie = await cookie_for('rtp-am');
+            await supertest(app)
+                .post(`/repo/dashboard/ingest/${id}/rollback-am`)
+                .set('Cookie', cookie)
+                .expect(200);
+            const closed = await supertest(app)
+                .get('/repo/dashboard/ingest/list?is_complete=1')
+                .set('Cookie', cookie)
+                .expect(200);
+            expect(closed.text).toContain('delta');
+            expect(closed.text).toContain(`/ingest/${id}/return-to-packaging`);
+            expect(closed.text).toContain('deletion request stays with Archivematica');
+            const res = await supertest(app)
+                .post(`/repo/dashboard/ingest/${id}/return-to-packaging`)
+                .set('Cookie', cookie)
+                .expect(200);
+            expect(res.text).toContain('RETURNED_TO_PACKAGING');
+        });
+
         it('return_to_packaging_action returns the rendered row partial', async () => {
             /*
              * Set up a CANCELLED_BY_USER row with a PROCESSING_METADATA
@@ -459,8 +480,8 @@ describe('ingest dashboard — e2e', () => {
             const orig_cancel = qa_service.cancel_upload;
             const cancels = [];
             qa_service.is_configured = () => true;
-            qa_service.cancel_upload = async (uuid) => {
-                cancels.push(uuid);
+            qa_service.cancel_upload = async (uuid, pkg) => {
+                cancels.push({ uuid, pkg });
                 return { status: 200, data: { message: 'cancel_requested' } };
             };
             try {
@@ -469,7 +490,10 @@ describe('ingest dashboard — e2e', () => {
                  * (the 002-ingest/<uuid> staging folder) — give the
                  * UPLOADING row a distinct one to pin the plumbing.
                  */
-                const uploading = await seed('UPLOADING', { collection_uuid: 'codu-up-1' });
+                const uploading = await seed('UPLOADING', {
+                    collection_uuid: 'codu-up-1',
+                    package: 'pkg-up-1',
+                });
                 const pending = await seed('PENDING', { collection_uuid: 'codu-up-2' });
                 const cookie = await cookie_for('halt-upload');
                 const res = await supertest(app)
@@ -486,7 +510,8 @@ describe('ingest dashboard — e2e', () => {
                 expect((await model.get_queue_row({ id: pending })).status).toBe(
                     'CANCELLED_BY_USER'
                 );
-                expect(cancels).toEqual(['codu-up-1']);
+                // The put to stop is this row's package, as Stage 2 started it.
+                expect(cancels).toEqual([{ uuid: 'codu-up-1', pkg: 'pkg-up-1' }]);
             } finally {
                 qa_service.is_configured = orig_conf;
                 qa_service.cancel_upload = orig_cancel;
@@ -566,6 +591,34 @@ describe('ingest dashboard — e2e', () => {
             expect(res.headers['content-type']).toMatch(/html/);
             expect(res.text).toContain('queue-row-' + id);
             expect(res.text).toContain('PENDING');
+        });
+
+        it('retry_access_copy_action returns the rendered row partial', async () => {
+            const id = await seed('DURACLOUD_TIMEOUT', { sip_uuid: 'sip-d' });
+            const cookie = await cookie_for('retry-html');
+            const res = await supertest(app)
+                .post(`/repo/dashboard/ingest/${id}/retry-access-copy`)
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.headers['content-type']).toMatch(/html/);
+            expect(res.text).toContain('queue-row-' + id);
+            expect(res.text).toContain('WAITING_FOR_DURACLOUD');
+            expect(res.text).not.toContain('retry-access-copy');
+        });
+
+        it('a DURACLOUD_TIMEOUT row offers Retry first, then Rollback AIP, in its kebab', async () => {
+            await seed('DURACLOUD_TIMEOUT', { package: 'gamma', sip_uuid: 'sip-g' });
+            const cookie = await cookie_for('retry-list');
+            const res = await supertest(app)
+                .get('/repo/dashboard/ingest/list')
+                .set('Cookie', cookie);
+            expect(res.status).toBe(200);
+            expect(res.text).toContain('gamma');
+            const retry = res.text.search(/\/ingest\/\d+\/retry-access-copy/);
+            const rollback = res.text.search(/\/ingest\/\d+\/rollback-am/);
+            expect(retry).toBeGreaterThan(-1);
+            expect(rollback).toBeGreaterThan(retry);
+            expect(res.text).toContain('Rollback AIP');
         });
 
         it('forwards 403 from the API when the action is not available', async () => {

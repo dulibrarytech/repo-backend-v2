@@ -126,9 +126,10 @@ An Express 5 application (CommonJS, EJS + HTMX partials, Bootstrap 5) serving th
 | ----------------------------- | ------------------------------------------------------------------------------------------------- |
 | **Archivematica + AM Storage Service** | Ingest pipeline target. Stage 3 starts transfers; Stage 4 polls ingest; AIP retrieved via Storage Service API for the preservation copy. |
 | **ArchivesSpace**             | Source of truth for descriptive metadata. On-demand + system-wide refresh both fetch from here.   |
-| **DuraCloud**                 | Active storage tier for AIPs (post-AM). Thumbnail proxy reads legacy thumbnails from here.        |
-| **Wasabi S3**  | Storage tier. Stage 6 + backfill copy AIPs here via the curation API.            |
-| **[Curation API](https://github.com/dulibrarytech/digitaldu-backend-curation-service)** (Python) | Wasabi gatekeeper. Holds the boto3 credentials; v2 talks HTTP to it for both SFTP-staging and AIP copies. Also owns AM-folder QA. |
+| **DuraCloud**                 | Archivematica's storage for AIPs and DIPs until the DuraCloud Preserve switch. Stage 4 waits for each DIP's METS here and Stage 5 reads it; the thumbnail chains read here unless the DIP store is switched on. |
+| **DuraCloud Preserve**        | Replaces DuraCloud (plain AWS S3). v2 never reads it: with `DIP_COPY_ENABLED`, Stage 4 has the curation API check each new DIP there and copy its served files to the DIP store. |
+| **Wasabi S3**  | Storage tier. Stage 6 + backfill copy AIPs here via the curation API. Its `dip-store/` folder (the **DIP store**) holds each DIP's served files (thumbnails, METS, JPG/PDF objects); v2 reads it with a folder-scoped read-only key (`DIP_STORE_*`) for thumbnails, Stage 5's METS and the frontend's gateway (`/api/v2/dip-store/*`, `DIP_GATEWAY_*`). |
+| **[Curation API](https://github.com/dulibrarytech/digitaldu-backend-curation-service)** (Python) | Storage gatekeeper. Holds the Wasabi write credentials and the DuraCloud Preserve key; v2 talks HTTP to it for SFTP staging, AIP copies and DIP copies. Also owns AM-folder QA. |
 | **[Handle.net](https://www.handle.net/) server** | Mints persistent identifiers per object under the DU prefix. Reads over the handle HTTP JSON API; writes over the native protocol via the [official client library](https://www.handle.net/download_hnr.html). |
 | **TN service**                | Generates fresh thumbnails from source files.                                                     |
 | **Kaltura**                   | Streaming media for AV-bearing objects.                                                           |
@@ -142,16 +143,17 @@ A six-stage state machine. Each stage is idempotent on resume; the worker awaits
 Stage 1 (process_metadata) → ASpace fetch + transformer → workspace metadata snapshot
 Stage 2 (upload)           → SFTP push to Archivematica drop
 Stage 3 (transfer)         → AM start_transfer + approval + transfer polling
-Stage 4 (ingest)           → AM ingest poll + DuraCloud propagation wait
+Stage 4 (ingest)           → AM ingest poll + access-copy wait (DuraCloud METS probe; with
+                             DIP_COPY_ENABLED: DIP UPLOADED in AM → curation /dip/copy-to-wasabi)
 Stage 5 (repository)       → tbl_objects insert + handle mint + SFTP cleanup + move-to-ingested
 Stage 6 (aip_store)        → Curation /copy-to-wasabi → AIP lands in Wasabi S3
 ```
 
-Stage 6 is gated by `AIP_STORE_ENABLED`. With the flag off, Stage 5 finalizes ingest the same way it did pre-Stage-6. Stages 1–5 run serially — one package at a time clears metadata, upload, AM transfer, AM ingest, and repository record before the next package starts; only Stage 6 overlaps, running in the background while the next package proceeds.
+Stage 6 is gated by `AIP_STORE_ENABLED`. With the flag off, Stage 5 finalizes ingest the same way it did pre-Stage-6. Every Stage 4 access-copy halt lands in `DURACLOUD_TIMEOUT`, whose row menu offers **Retry** first (back to the wait; files already copied are skipped) and **Rollback AIP** second, for a package that can never finish: the AIP and DIP are safe by then, so Retry is the normal path. Stages 1–5 run serially — one package at a time clears metadata, upload, AM transfer, AM ingest, and repository record before the next package starts; only Stage 6 overlaps, running in the background while the next package proceeds.
 
 ### Companion service: curation API
 
-Package ingest is a two-service effort with [digitaldu-backend-curation-service](https://github.com/dulibrarytech/digitaldu-backend-curation-service), a Python API that owns the filesystem and storage operations this backend can't (or shouldn't) perform directly. During the pre-ingest workspace and Stage 2 it stages and QAs package folders on the Archivematica SFTP drop; during Stage 6 and AIP backfill it copies AIPs to Wasabi and mints the presigned download URLs the dashboard serves. It is the sole holder of the Wasabi (boto3) credentials — this backend carries only the `CURATION_API` URL and `CURATION_API_KEY`, and talks to it over HTTP under the `/api/v2/qa/*` and `/api/v2/aip/*` prefixes. Deploy the two services together: an ingest run cannot complete without both.
+Package ingest is a two-service effort with [digitaldu-backend-curation-service](https://github.com/dulibrarytech/digitaldu-backend-curation-service), a Python API that owns the filesystem and storage operations this backend can't (or shouldn't) perform directly. During the pre-ingest workspace and Stage 2 it stages and QAs package folders on the Archivematica SFTP drop; during Stage 6 and AIP backfill it copies AIPs to Wasabi and mints the presigned download URLs the dashboard serves. With `DIP_COPY_ENABLED`, Stage 4 asks it to copy each new DIP's served files from DuraCloud Preserve to the DIP store. It holds the Wasabi write credentials and the DuraCloud Preserve key — this backend carries the `CURATION_API` URL and `CURATION_API_KEY` (plus its read-only DIP-store key), and talks to it over HTTP under the `/api/v2/qa/*`, `/api/v2/aip/*` and `/api/v2/dip/*` prefixes. Deploy the two services together: an ingest run cannot complete without both.
 
 ### System-wide metadata refresh
 
@@ -159,14 +161,14 @@ Admin-initiated, queue-paced re-fetch of every active object's ASpace metadata. 
 
 ### Storage tier (AIP store)
 
-AIPs produced by Archivematica land in DuraCloud as part of standard AM operation, then get a second copy in **Wasabi S3** for long-term storage:
+AIPs produced by Archivematica land in DuraCloud (DuraCloud Preserve after the switch) as part of standard AM operation, then get a second copy in **Wasabi S3** for long-term storage:
 
 - **Live ingest:** Stage 6 fires automatically when `AIP_STORE_ENABLED=true`.
 - **Backfill:** `/dashboard/admin/aip-backfill` chews through objects that pre-date the flag, in operator-controlled chunks.
 - **Catalog:** `tbl_aip_store` holds one row per AIP (~20,800 legacy rows from the one-time DuraCloud → Wasabi migration plus ingest-time rows from Stage 6).
 - **Downloads:** Dashboard renders a presigned Wasabi URL via the curation API; bytes never transit v2.
 
-Wasabi credentials live in the curation service's env, not v2's — v2 carries only the `CURATION_API` URL + `CURATION_API_KEY`.
+The Wasabi write credentials live in the curation service's env, not v2's — v2 carries the `CURATION_API` URL + `CURATION_API_KEY`, plus a read-only key for the DIP store.
 
 ### Persistent identifiers (Handle.net)
 

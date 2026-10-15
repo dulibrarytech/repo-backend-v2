@@ -689,6 +689,24 @@ describe('ingester/model — cancel / get_prev_state_for_cancel', () => {
         const prev = await model.get_prev_state_for_cancel(id);
         expect(prev).toBeNull();
     });
+
+    it('get_prev_state_for_am_rollback reads the rollback event, and only that', async () => {
+        const [id] = await model.queue_packages([
+            row_template({ package: 'p1', status: 'FAILED' }),
+        ]);
+        expect(await model.get_prev_state_for_am_rollback(id)).toBeNull();
+        await model.update_queue(
+            { id },
+            { status: 'AM_DELETION_REQUESTED', is_complete: 1 },
+            {
+                actor: 'jdoe',
+                event_type: 'staff_action',
+                payload: { action: 'rollback_archivematica', from: 'FAILED' },
+            }
+        );
+        expect(await model.get_prev_state_for_am_rollback(id)).toBe('FAILED');
+        expect(await model.get_prev_state_for_cancel(id)).toBeNull();
+    });
 });
 
 describe('ingester/model — _purge_batch', () => {

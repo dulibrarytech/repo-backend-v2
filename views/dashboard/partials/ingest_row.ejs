@@ -87,7 +87,8 @@
      */
     const has_stop_aip = actions.indexOf('stop_aip_copy') !== -1;
     const has_dismiss_aip = actions.indexOf('dismiss_aip_row') !== -1;
-    const has_divider = has_rollback || has_cancel || has_stop_aip || has_dismiss_aip;
+    const has_retry_copy = actions.indexOf('retry_access_copy') !== -1;
+    const has_divider = has_rollback || has_cancel || has_stop_aip || has_dismiss_aip || has_retry_copy;
 %>
 <tr id="queue-row-<%= row.id %>">
     <td class="package-cell">
@@ -168,7 +169,7 @@
                        hx-swap="innerHTML"
                        data-bs-toggle="modal"
                        data-bs-target="#modal-mount">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"
                              stroke="currentColor" stroke-width="1.75"
                              stroke-linecap="round" stroke-linejoin="round"
                              style="vertical-align: -2px; margin-right: 6px;">
@@ -203,7 +204,7 @@
                            data-confirm-severity="warn"
                            data-confirm-proceed="Cancel package"
                            hx-confirm="Cancel '<%= row.package %>'? The active stage will stop on its next poll. After cancel you'll see a rollback action to clean up SFTP or Archivematica (depending on how far the package got). Continue?">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"
                                  stroke="currentColor" stroke-width="1.75"
                                  stroke-linecap="round" stroke-linejoin="round"
                                  style="vertical-align: -2px; margin-right: 6px;">
@@ -233,7 +234,7 @@
                            data-confirm-severity="warn"
                            data-confirm-proceed="Stop copy"
                            hx-confirm="Stop the preservation copy for '<%= row.package %>'? The ingest itself is complete — this only stops the backup copy to cloud storage. It can be retried any time from the AIPs dashboard. Continue?">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"
                                  stroke="currentColor" stroke-width="1.75"
                                  stroke-linecap="round" stroke-linejoin="round"
                                  style="vertical-align: -2px; margin-right: 6px;">
@@ -261,7 +262,7 @@
                            data-confirm-severity="info"
                            data-confirm-proceed="Dismiss"
                            hx-confirm="Dismiss '<%= row.package %>' from the queue view? The ingest itself is complete. The failed preservation copy stays listed on the AIPs dashboard, where it can be retried any time. Continue?">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"
                                  stroke="currentColor" stroke-width="1.75"
                                  stroke-linecap="round" stroke-linejoin="round"
                                  style="vertical-align: -2px; margin-right: 6px;">
@@ -296,7 +297,7 @@
                            data-confirm-proceed="Halt batch"
                            data-busy-message="Halting the batch - cancelling every open package. This can take a minute for large batches..."
                            hx-confirm="Halt ALL packages of '<%= row.batch %>'? Packages in a running stage stop on their next poll; packages waiting their turn are cancelled before they start. Already-halted and completed packages are not affected. After halting, use 'Return entire batch to Packaging' to clean up and re-submit later.">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"
                                  stroke="currentColor" stroke-width="1.75"
                                  stroke-linecap="round" stroke-linejoin="round"
                                  style="vertical-align: -2px; margin-right: 6px;">
@@ -327,8 +328,8 @@
                            data-confirm-title="Return to Packaging and Ingesting"
                            data-confirm-severity="info"
                            data-confirm-proceed="Return to Packaging"
-                           hx-confirm="Return '<%= row.package %>' to the Packaging and Ingesting view? The folder will be moved back to 001-ready if it was uploaded to Archivematica's SFTP staging area. Once back in Packaging, staff can re-submit after addressing the original issue.">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                           hx-confirm="Return '<%= row.package %>' to the Packaging and Ingesting view? The folder will be moved back to 001-ready if it was uploaded to Archivematica's SFTP staging area. Once back in Packaging, staff can re-submit after addressing the original issue.<%= row.pipeline_state === 'AM_DELETION_REQUESTED' ? ' The AIP deletion request stays with Archivematica: make sure an admin has approved it before re-submitting.' : '' %>">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"
                                  stroke="currentColor" stroke-width="1.75"
                                  stroke-linecap="round" stroke-linejoin="round"
                                  style="vertical-align: -2px; margin-right: 6px;">
@@ -361,7 +362,7 @@
                            data-confirm-severity="info"
                            data-confirm-proceed="Return to Packaging"
                            hx-confirm="Return '<%= row.package %>' to the Packaging and Ingesting view? The folder will be moved back to the workspace (SFTP staging cleaned up). No Archivematica activity has occurred for this package — safe to re-submit after addressing the original issue.">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"
                                  stroke="currentColor" stroke-width="1.75"
                                  stroke-linecap="round" stroke-linejoin="round"
                                  style="vertical-align: -2px; margin-right: 6px;">
@@ -396,7 +397,7 @@
                            data-confirm-proceed="Return batch"
                            data-busy-message="Returning the batch to Packaging - moving folders back one package at a time. This can take a few minutes for large batches..."
                            hx-confirm="Return ALL halted and cancelled packages of '<%= row.batch %>' to the Packaging and Ingesting view? Only packages that never reached Archivematica are affected — running or completed packages are skipped, and any package needing an Archivematica-side rollback keeps its own per-package action.">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"
                                  stroke="currentColor" stroke-width="1.75"
                                  stroke-linecap="round" stroke-linejoin="round"
                                  style="vertical-align: -2px; margin-right: 6px;">
@@ -405,6 +406,35 @@
                                 <path d="M20 20v-7a4 4 0 0 0-4-4H10"/>
                             </svg>
                             Return entire batch to Packaging
+                        </a>
+                    </li>
+                <% } %>
+
+                <% if (has_retry_copy) { %>
+                    <%/* Retry — Stage 4's access copy halted
+                         (DURACLOUD_TIMEOUT). The AIP and DIP are safe; the
+                         row goes back to the wait, and files already
+                         copied are skipped. Rollback AIP follows, for a
+                         package that can never finish that way. */%>
+                    <li>
+                        <a href="#"
+                           class="dropdown-item"
+                           hx-post="<%= dashboard_base %>/ingest/<%= row.id %>/retry-access-copy"
+                           hx-target="#queue-row-<%= row.id %>"
+                           hx-swap="outerHTML"
+                           hx-indicator="closest tr"
+                           data-confirm-title="Retry the Access Copy"
+                           data-confirm-severity="warn"
+                           data-confirm-proceed="Retry"
+                           hx-confirm="Retry the access copy for '<%= row.package %>'? Its files are safe in preservation storage. The package goes back to waiting for its access copy; nothing changes in Archivematica.">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"
+                                 stroke="currentColor" stroke-width="1.75"
+                                 stroke-linecap="round" stroke-linejoin="round"
+                                 style="vertical-align: -2px; margin-right: 6px;">
+                                <polyline points="23 4 23 10 17 10"/>
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                            </svg>
+                            Retry
                         </a>
                     </li>
                 <% } %>
@@ -422,7 +452,7 @@
                            data-confirm-severity="danger"
                            data-confirm-proceed="Submit request"
                            hx-confirm="Submit AIP deletion request to Archivematica for '<%= row.package %>'? An Archivematica admin will need to approve the deletion in the Storage Service UI before the AIP is fully removed. Continue?">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"
                                  stroke="currentColor" stroke-width="1.75"
                                  stroke-linecap="round" stroke-linejoin="round"
                                  style="vertical-align: -2px; margin-right: 6px;">
@@ -447,7 +477,7 @@
                            data-confirm-severity="warn"
                            data-confirm-proceed="Reset"
                            hx-confirm="Reset '<%= row.package %>'? The queue row will be cleared. No folder move or Archivematica action — this package halted before any external systems were touched.">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"
                                  stroke="currentColor" stroke-width="1.75"
                                  stroke-linecap="round" stroke-linejoin="round"
                                  style="vertical-align: -2px; margin-right: 6px;">

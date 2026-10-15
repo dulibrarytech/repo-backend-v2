@@ -47,6 +47,17 @@ function integer(name, fallback) {
     return n;
 }
 
+// An integer from 1 to 2^31-1: 0 would switch a timeout off, more overflows setTimeout.
+function positive_integer(name, fallback) {
+    const n = integer(name, fallback);
+    if (n < 1 || n > 2147483647) {
+        throw new Error(
+            `Env var ${name} must be a positive integer up to 2147483647 (got "${process.env[name]}")`
+        );
+    }
+    return n;
+}
+
 function boolean(name, fallback = false) {
     const v = process.env[name];
     if (v === undefined || v === '') return fallback;
@@ -383,6 +394,42 @@ function build() {
         },
 
         /*
+         * DIP store — the Wasabi copy of every DIP's served files, written
+         * by the curation service and read here (libs/dip_store.js) with a
+         * key scoped to the dip-store/ folder. Unset → not configured; the
+         * Services card is gray.
+         */
+        dip_store: {
+            // s3://<bucket>/<prefix>/; stored DB paths are relative to the prefix.
+            location: optional('DIP_STORE_LOCATION', ''),
+            // Full endpoint URL, e.g. https://s3.us-west-1.wasabisys.com.
+            endpoint: optional('DIP_STORE_ENDPOINT', ''),
+            region: optional('DIP_STORE_REGION', ''),
+            access_key_id: optional('DIP_STORE_ACCESS_KEY_ID', ''),
+            secret_access_key: optional('DIP_STORE_SECRET_ACCESS_KEY', ''),
+            /*
+             * Total wait for a response's headers, retries included (a
+             * METS read gets the same again for its body). Must stay at
+             * or under the services-banner deadline, which bounds the probe.
+             */
+            timeout_ms: positive_integer('DIP_STORE_TIMEOUT_MS', 15000),
+            /*
+             * The serving cutover. On: the gateway answers the
+             * frontend and both thumbnail chains read the DIP store. Off:
+             * the gateway refuses (404; 500 to the frontend's own
+             * credential) and the thumbnails keep reading DuraCloud.
+             */
+            gateway_enabled: boolean('DIP_GATEWAY_ENABLED', false),
+            /*
+             * The gateway's Basic credential (the frontend's REPOSITORY_USER
+             * / REPOSITORY_PWD). URL-safe characters only (letters, digits,
+             * -._~): the frontend puts them in the URL unencoded.
+             */
+            gateway_user: optional('DIP_GATEWAY_USER', ''),
+            gateway_password: optional('DIP_GATEWAY_PASSWORD', ''),
+        },
+
+        /*
          * Archivematica — preservation pipeline. Two APIs with separate
          * credentials:
          *   - dashboard API (transfer/ingest), auth via username +
@@ -597,6 +644,21 @@ function build() {
             ingest_timeout_ms: integer('INGEST_INGEST_TIMEOUT_MS', 6 * 60 * 60 * 1000),
             duracloud_poll_ms: integer('INGEST_DURACLOUD_POLL_MS', 60000),
             duracloud_timeout_ms: integer('INGEST_DURACLOUD_TIMEOUT_MS', 60 * 60 * 1000),
+            /*
+             * DuraCloud Preserve cutover (P3). On, Stage 4 waits for
+             * Archivematica's DIP package to be UPLOADED and asks the
+             * curation API to copy its served files to Wasabi (POST
+             * /api/v2/dip/copy-to-wasabi), within the budget above; Stage 5
+             * reads the METS from the DIP store. Flip it in the switch
+             * window, when Archivematica starts writing to DCP.
+             */
+            dip_copy_enabled: boolean('DIP_COPY_ENABLED', false),
+            /*
+             * One copy call's wall-clock limit: seconds for most DIPs,
+             * minutes for one with large PDFs. Keep it under curation's
+             * gunicorn --timeout (3700 s).
+             */
+            dip_copy_timeout_ms: positive_integer('DIP_COPY_TIMEOUT_MS', 30 * 60 * 1000),
 
             /*
              * Stage 5 success hold. The row sits at COMPLETE with

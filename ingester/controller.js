@@ -620,6 +620,40 @@ async function reset_row(req, res) {
 }
 
 /*
+ * --- POST /api/ingest/:id/retry-access-copy -----------------------------
+ *
+ * "Retry", for a row halted at DURACLOUD_TIMEOUT: Stage 4's access-copy wait
+ * ran out or its copy failed after Archivematica stored the AIP and the DIP.
+ * The row returns to WAITING_FOR_DURACLOUD with its error and heartbeat
+ * cleared, and the worker resumes Stage 4 at the wait (the DIP copy skips
+ * files already in Wasabi). Nothing in Archivematica is touched; for a
+ * package that can never finish, Rollback AIP is the row's second item.
+ */
+async function retry_access_copy(req, res) {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+        throw new ValidationError('id must be a positive integer');
+    }
+    const row = await model.get_queue_row({ id });
+    if (!row) throw new NotFoundError(`queue row ${id} not found`);
+    if (!available_actions(row.pipeline_state).includes('retry_access_copy')) {
+        throw new ForbiddenError(
+            `retry_access_copy not available from state ${row.pipeline_state}`
+        );
+    }
+    const result = await model.update_queue(
+        { id },
+        { status: 'WAITING_FOR_DURACLOUD', error: null, last_poll_at: null },
+        {
+            actor: actor_of(req),
+            event_type: 'staff_action',
+            payload: { action: 'retry_access_copy', from: row.pipeline_state },
+        }
+    );
+    res.json({ id, affected: result.affected, new_state: 'WAITING_FOR_DURACLOUD' });
+}
+
+/*
  * --- POST /api/ingest/:id/cancel ----------------------------------------
  *
  * Staff-initiated cancel of an in-flight row. Two steps:
@@ -686,13 +720,14 @@ async function cancel_row(req, res) {
 
 /*
  * For a row cancelled mid-upload, ask the curation side to stop its background
- * put as well. Best-effort: on failure the put simply runs its course.
+ * put as well — the put for this row's package, as Stage 2 started it. Best-
+ * effort: on failure the put simply runs its course.
  */
 async function _cancel_inflight_upload(row, prev_state) {
     if (prev_state !== 'UPLOADING') return;
     if (!(qa_service.is_configured && qa_service.is_configured())) return;
     try {
-        await qa_service.cancel_upload(_qa_uuid(row));
+        await qa_service.cancel_upload(_qa_uuid(row), row.package);
     } catch (err) {
         log.warn({
             event: 'cancel_upload_request_failed',
@@ -724,6 +759,11 @@ async function _cancel_inflight_upload(row, prev_state) {
  *     dashboard tells staff to delete the AIP in AM's Storage Service UI by
  *     hand.
  *
+ * Also the follow-up for an AM_DELETION_REQUESTED row (after Rollback AIP):
+ * the prior state comes from the rollback event, the QA move always runs
+ * (the folder left 001-ready in Stage 2), and no AM cleanup is flagged,
+ * since the deletion is already requested.
+ *
  * QA failure is best-effort: the queue row still flips and the error is
  * recorded in the audit payload.
  */
@@ -736,7 +776,10 @@ async function return_to_packaging(req, res) {
     if (!row) throw new NotFoundError(`queue row ${id} not found`);
 
     // The audit log's prior state is the only signal for whether the folder moved.
-    const prev_state = await model.get_prev_state_for_cancel(id);
+    const prev_state =
+        row.pipeline_state === 'AM_DELETION_REQUESTED'
+            ? await model.get_prev_state_for_am_rollback(id)
+            : await model.get_prev_state_for_cancel(id);
     const allowed = available_actions(row.pipeline_state, prev_state).includes(
         'rollback_to_packaging'
     );
@@ -781,14 +824,22 @@ async function _return_row_to_packaging(row, { actor, note = null, prev_state })
      */
     let qa_outcome = null;
     let qa_error = null;
+    /*
+     * After Rollback AIP the folder left 001-ready in Stage 2 whatever the
+     * halt state was, so the QA move always runs; the AIP's deletion is
+     * already requested, so no manual AM cleanup is flagged.
+     */
+    const after_am_rollback = row.pipeline_state === 'AM_DELETION_REQUESTED';
     const needs_qa_move =
-        POST_UPLOAD_PRE_AM_PRIOR_STATES.has(prev_state) || AM_PRIOR_STATES.has(prev_state);
+        after_am_rollback ||
+        POST_UPLOAD_PRE_AM_PRIOR_STATES.has(prev_state) ||
+        AM_PRIOR_STATES.has(prev_state);
     /*
      * AM-side cancels leave an AIP this endpoint cannot clean up. The flag goes
      * into the response and the audit log so the dashboard can prompt for
      * manual AM cleanup. Independent of needs_qa_move.
      */
-    const needs_am_cleanup = AM_PRIOR_STATES.has(prev_state);
+    const needs_am_cleanup = !after_am_rollback && AM_PRIOR_STATES.has(prev_state);
     if (needs_qa_move) {
         if (qa_service.is_configured && qa_service.is_configured()) {
             try {
@@ -831,6 +882,7 @@ async function _return_row_to_packaging(row, { actor, note = null, prev_state })
                 prev_state,
                 needed_qa_move: needs_qa_move,
                 needed_am_cleanup: needs_am_cleanup,
+                am_deletion_requested: after_am_rollback,
                 qa_uuid: needs_qa_move ? qa_uuid : null,
                 qa_outcome,
                 qa_error,
@@ -880,6 +932,7 @@ module.exports = {
     cancel_batch,
     rollback_archivematica,
     reset_row,
+    retry_access_copy,
     cancel_row,
     return_to_packaging,
     reset_orphaned,

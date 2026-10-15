@@ -69,7 +69,7 @@ describe('api/model — build_query', () => {
         const cid = randomUUID();
         const q = model_module.build_query({ collection: cid });
         expect(q.bool.filter).toContainEqual({
-            terms: { is_member_of_collection: [cid] },
+            terms: { 'is_member_of_collection.keyword': [cid] },
         });
     });
 
@@ -78,7 +78,7 @@ describe('api/model — build_query', () => {
         const b = randomUUID();
         const q = model_module.build_query({ collection: [a, b] });
         expect(q.bool.filter).toContainEqual({
-            terms: { is_member_of_collection: [a, b] },
+            terms: { 'is_member_of_collection.keyword': [a, b] },
         });
     });
 
@@ -90,7 +90,34 @@ describe('api/model — build_query', () => {
 
     it('filters by object_type from the closed set', () => {
         const q = model_module.build_query({ object_type: 'collection' });
-        expect(q.bool.filter).toContainEqual({ term: { object_type: 'collection' } });
+        expect(q.bool.filter).toContainEqual({ term: { 'object_type.keyword': 'collection' } });
+    });
+
+    it('maps object_type=compound onto object_type=object plus is_compound=1', () => {
+        const expected = [
+            { term: { is_published: 1 } },
+            { term: { 'object_type.keyword': 'object' } },
+            { term: { is_compound: 1 } },
+        ];
+        expect(model_module.build_query({ object_type: 'compound' }).bool.filter).toEqual(expected);
+        // An explicit is_compound=true adds no second clause.
+        expect(
+            model_module.build_query({ object_type: 'compound', is_compound: 'true' }).bool.filter
+        ).toEqual(expected);
+    });
+
+    it('rejects object_type=compound with is_compound=false', () => {
+        expect(() =>
+            model_module.build_query({ object_type: 'compound', is_compound: 'false' })
+        ).toThrow(ValidationError);
+    });
+
+    it('lower-cases collection UUIDs for the exact keyword match', () => {
+        const cid = randomUUID();
+        const q = model_module.build_query({ collection: cid.toUpperCase() });
+        expect(q.bool.filter).toContainEqual({
+            terms: { 'is_member_of_collection.keyword': [cid.toLowerCase()] },
+        });
     });
 
     it('rejects unknown object_type values', () => {
@@ -293,6 +320,8 @@ describe('api/model — model surface (search/get/list/eligible)', () => {
         expect(es.calls[0].opts.size).toBe(10);
         // display_record excluded from search hits.
         expect(es.calls[0].opts.source).toEqual({ excludes: ['display_record'] });
+        // An exact total, past ES's default cap of 10,000.
+        expect(es.calls[0].opts.track_total_hits).toBe(true);
     });
 
     it('search: page_size capped at 100', async () => {
@@ -344,7 +373,7 @@ describe('api/model — model surface (search/get/list/eligible)', () => {
         await m.list_collections({}, { make_thumbnail_url });
         const opts = es.calls[0].opts;
         expect(opts.query.bool.filter).toContainEqual({
-            term: { object_type: 'collection' },
+            term: { 'object_type.keyword': 'collection' },
         });
         expect(opts.query.bool.filter).toContainEqual({ term: { is_published: 1 } });
         expect(opts.sort).toEqual([{ 'title.keyword': 'asc' }]);

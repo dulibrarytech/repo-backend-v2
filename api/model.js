@@ -107,8 +107,13 @@ function build_query(opts = {}) {
                 throw new ValidationError(`collection must be a UUID (got "${c}")`);
             }
         }
-        filter.push({ terms: { is_member_of_collection: collections } });
+        // Exact on the keyword field, and pids are lower-case UUIDs.
+        filter.push({
+            terms: { 'is_member_of_collection.keyword': collections.map((c) => c.toLowerCase()) },
+        });
     }
+
+    const is_compound = parse_is_compound(opts.is_compound);
 
     // Object type — closed set.
     if (opts.object_type !== undefined && opts.object_type !== '') {
@@ -117,7 +122,22 @@ function build_query(opts = {}) {
                 `object_type must be one of ${[...ALLOWED_OBJECT_TYPES].join(', ')}`
             );
         }
-        filter.push({ term: { object_type: opts.object_type } });
+        /*
+         * The index stores a compound as object_type 'object' with
+         * is_compound 1 (the v1 shape), never as 'compound': `object`
+         * includes compounds (is_compound=false excludes them), and
+         * `compound` is `object` plus is_compound=1. Exact matches on the
+         * keyword sub-field, like the collection filter.
+         */
+        if (opts.object_type === 'compound') {
+            if (is_compound === false) {
+                throw new ValidationError('object_type=compound conflicts with is_compound=false');
+            }
+            filter.push({ term: { 'object_type.keyword': 'object' } });
+            filter.push({ term: { is_compound: 1 } });
+        } else {
+            filter.push({ term: { 'object_type.keyword': opts.object_type } });
+        }
     }
 
     /*
@@ -140,16 +160,12 @@ function build_query(opts = {}) {
     }
 
     /*
-     * is_compound — accept "true"/"false" strings since query params
-     * arrive as strings, but filter on the integer (0/1) the index
-     * stores; a boolean would not match the long-typed field.
+     * is_compound — filter on the integer (0/1) the index stores; a
+     * boolean would not match the long-typed field. object_type=compound
+     * already carries the clause.
      */
-    if (opts.is_compound !== undefined && opts.is_compound !== '') {
-        const v = String(opts.is_compound).toLowerCase();
-        if (v !== 'true' && v !== 'false') {
-            throw new ValidationError('is_compound must be true or false');
-        }
-        filter.push({ term: { is_compound: v === 'true' ? 1 : 0 } });
+    if (is_compound !== undefined && opts.object_type !== 'compound') {
+        filter.push({ term: { is_compound: is_compound ? 1 : 0 } });
     }
 
     return {
@@ -158,6 +174,19 @@ function build_query(opts = {}) {
             filter,
         },
     };
+}
+
+/*
+ * The is_compound query param: true, false, or undefined when absent.
+ * Query params arrive as strings; anything but "true"/"false" is a 400.
+ */
+function parse_is_compound(raw) {
+    if (raw === undefined || raw === '') return undefined;
+    const v = String(raw).toLowerCase();
+    if (v !== 'true' && v !== 'false') {
+        throw new ValidationError('is_compound must be true or false');
+    }
+    return v === 'true';
 }
 
 // Translate `sort` query param into an ES sort spec.
@@ -274,6 +303,8 @@ function create_model({ es = es_default } = {}) {
                  * need the full record.
                  */
                 source: { excludes: ['display_record'] },
+                // An exact total: ES otherwise stops counting at 10,000.
+                track_total_hits: true,
             });
             const items = hits.map((h) => project_to_public(h.body, 'list', make_thumbnail_url));
             return {
@@ -312,7 +343,7 @@ function create_model({ es = es_default } = {}) {
                 bool: {
                     filter: [
                         { term: { is_published: 1 } },
-                        { term: { object_type: 'collection' } },
+                        { term: { 'object_type.keyword': 'collection' } },
                     ],
                 },
             };
@@ -323,6 +354,7 @@ function create_model({ es = es_default } = {}) {
                 size: page_size,
                 sort: [{ 'title.keyword': 'asc' }],
                 source: { excludes: ['display_record'] },
+                track_total_hits: true,
             });
             const items = hits.map((h) => project_to_public(h.body, 'list', make_thumbnail_url));
             return { page, page_size, total, items };

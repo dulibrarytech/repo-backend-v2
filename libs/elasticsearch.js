@@ -473,6 +473,7 @@ function create_client(factory = default_client_factory) {
      *   opts.sort    optional sort spec; defaults to relevance
      *   opts.source  optional _source filter ({ excludes: [...] }), e.g. to omit
      *                the bulky display_record
+     *   opts.track_total_hits  optional; true makes `total` exact past 10,000
      *   → { total, hits: [{ pid, body, score }] }
      *
      * get_document(pid): the full _source, or null on 404.
@@ -489,6 +490,7 @@ function create_client(factory = default_client_factory) {
         };
         if (opts.sort) body.sort = opts.sort;
         if (opts.source) body._source = opts.source;
+        if (opts.track_total_hits !== undefined) body.track_total_hits = opts.track_total_hits;
         try {
             const res = await c.search({ index: cfg.index, ...body });
             // v8 returns the body directly; v7 wraps it.

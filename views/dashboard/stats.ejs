@@ -85,7 +85,7 @@
     </div>
 </div>
 
-<%/* Row 3 — DuraCloud + fiscal-year ingests. The 3 DuraCloud cards
+<%/* Row 3 — storage + fiscal-year ingests. The 3 storage cards
      are HTMX-loaded as a single partial (one request fetches all
      three values; the partial renders the three card wrappers
      itself). The 4th card (FY ingests) comes from the DB-derived
@@ -96,25 +96,27 @@
          hx-get="<%= dashboard_base %>/_stats/duracloud"
          hx-trigger="load"
          hx-swap="innerHTML">
-        <%/* Placeholder while the DuraCloud probe is in flight.
+        <%/* Placeholder while the storage numbers load.
              Three skeleton cards keep the row's height stable so the
-             chart below doesn't jump when the real values arrive. */%>
+             chart below doesn't jump when the real values arrive; their
+             labels use the same `store_label` the partial gets (home_page
+             passes it), so they don't change. */%>
         <div class="col-md-4">
             <div class="card-stat">
                 <div class="card-stat__value text-muted">…</div>
-                <div class="card-stat__label">Total DuraCloud DIP Store Usage</div>
+                <div class="card-stat__label">Total <%= store_label %> DIP Store Usage</div>
             </div>
         </div>
         <div class="col-md-4">
             <div class="card-stat">
                 <div class="card-stat__value text-muted">…</div>
-                <div class="card-stat__label">Total DuraCloud AIP Store Usage</div>
+                <div class="card-stat__label">Total <%= store_label %> AIP Store Usage</div>
             </div>
         </div>
         <div class="col-md-4">
             <div class="card-stat">
                 <div class="card-stat__value text-muted">…</div>
-                <div class="card-stat__label">Total DuraCloud Storage Usage</div>
+                <div class="card-stat__label">Total <%= store_label %> Storage Usage</div>
             </div>
         </div>
     </div>

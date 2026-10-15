@@ -1,30 +1,50 @@
-<%/* DuraCloud storage-usage cards. Rendered by the stats page after
-     the rest of the grid paints — each AM API call takes 1-3s, and
-     we don't want to gate the whole page on that.
+<%/* Storage-usage cards: DuraCloud, then DuraCloud Preserve after the
+     switch (`store_label`, see stats/duracloud.js). Rendered by the
+     stats page after the rest of the grid paints — each source can
+     take seconds, and we don't want to gate the whole page on that.
 
-     `usage` shape: { dip_bytes, aip_bytes, total_bytes, ok, error }
-     Any byte field may be null (AM unreachable, missing space UUID,
-     etc.). `fmt_bytes(null)` renders '—' so the cards still lay out
-     cleanly. The error message is hoisted into the title attribute
-     of the first card so staff hovering can see what failed without
-     us cluttering the dashboard with a banner. */%>
+     `usage` shape: { dip_bytes, aip_bytes, total_bytes, ok, error,
+     computed_at, computing }. Any byte field may be null (source
+     unreachable, missing space UUID, DCP not measured yet, etc.).
+     `fmt_bytes(null)` renders '—' so the cards still lay out cleanly.
+     The first card's title carries what failed, whether curation is
+     recalculating, and the numbers' age (the DCP path reads a cache
+     that can be a day old), so staff hovering can see it without a
+     banner. */%>
+<%
+    function fmt_usage_age(epoch_s) {
+        const t = Number(epoch_s);
+        if (!isFinite(t) || t <= 0) return null;
+        const m = Math.max(0, Math.round((Date.now() / 1000 - t) / 60));
+        if (m < 60) return m + 'm ago';
+        const h = Math.round(m / 60);
+        if (h < 48) return h + 'h ago';
+        return Math.round(h / 24) + 'd ago';
+    }
+    const notes = [];
+    if (!usage.ok && usage.error) notes.push(usage.error);
+    if (usage.computing) notes.push('recalculating');
+    const usage_age = fmt_usage_age(usage.computed_at);
+    if (usage_age) notes.push('as of ' + usage_age);
+    const first_card_title = notes.join(' · ');
+%>
 
 <div class="col-md-4">
     <div class="card-stat"
-         <% if (!usage.ok && usage.error) { %>title="<%= usage.error %>"<% } %>>
+         <% if (first_card_title) { %>title="<%= first_card_title %>"<% } %>>
         <div class="card-stat__value"><%= fmt_bytes(usage.dip_bytes) %></div>
-        <div class="card-stat__label">Total DuraCloud DIP Store Usage</div>
+        <div class="card-stat__label">Total <%= store_label %> DIP Store Usage</div>
     </div>
 </div>
 <div class="col-md-4">
     <div class="card-stat">
         <div class="card-stat__value"><%= fmt_bytes(usage.aip_bytes) %></div>
-        <div class="card-stat__label">Total DuraCloud AIP Store Usage</div>
+        <div class="card-stat__label">Total <%= store_label %> AIP Store Usage</div>
     </div>
 </div>
 <div class="col-md-4">
     <div class="card-stat">
         <div class="card-stat__value"><%= fmt_bytes(usage.total_bytes) %></div>
-        <div class="card-stat__label">Total DuraCloud Storage Usage</div>
+        <div class="card-stat__label">Total <%= store_label %> Storage Usage</div>
     </div>
 </div>

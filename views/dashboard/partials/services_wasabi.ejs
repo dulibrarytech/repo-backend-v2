@@ -87,8 +87,10 @@
 
     <%/* Storage utilization — cached numbers from the curation side
          (a live listing of the batch bucket takes minutes, so the
-         curation service walks both buckets in a background thread and
-         this card only ever reads the cache). Completed objects only:
+         curation service walks every store it measures in a background
+         thread — the two Wasabi buckets shown here, and DCP's two
+         locations for the home page's cards — and this card only ever
+         reads the cache). Completed objects only:
          in-progress/abandoned multipart parts don't appear in listings
          but DO count on Wasabi's bill — the Wasabi console is the
          billing-grade number. */%>

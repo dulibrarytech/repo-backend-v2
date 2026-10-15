@@ -183,7 +183,7 @@
         <li><strong>process_metadata</strong> — fetch the ArchivesSpace metadata and prepare the record the pipeline will ingest.</li>
         <li><strong>upload</strong> — SFTP push to the Archivematica drop (Archivematica SFTP server).</li>
         <li><strong>transfer</strong> — Archivematica starts + approves the transfer, then we poll it. Before any transfer activity shows, Archivematica first copies the whole package into its own work area — a very large package (many GB of video/audio) can sit at <code>UPLOAD_COMPLETE</code> for a long while during this copy. This is normal; the row's Details text says so.</li>
-        <li><strong>ingest</strong> — poll Archivematica's ingest, then wait for DuraCloud propagation.</li>
+        <li><strong>ingest</strong> — poll Archivematica's ingest, then wait until the package's access copy (the files the public site shows) is ready.</li>
         <li><strong>repository</strong> — create the object record, mint its Handle, clean up SFTP, and back up the original batch files to Wasabi (each file is verified before the local copy is removed).</li>
         <li><strong>aip_store</strong> — copy the AIP into the Wasabi preservation tier (when AIP-store is enabled).</li>
     </ol>
@@ -193,8 +193,9 @@
         <ul class="mt-2 mb-0">
             <li><strong>Timeline</strong> — every state change for the package, with timestamps and who did it.</li>
             <li><strong>Cancel</strong> — stop an in-flight package. After cancelling, a <strong>Return to Packaging</strong> action appears for the cleanup.</li>
-            <li><strong>Return to Packaging</strong> — for cancelled or halted packages: moves the folder back to the Packaging and Ingesting view so it can be re-submitted after the issue is addressed.</li>
-            <li><strong>Rollback AIP</strong> — for packages that failed after Archivematica stored them: submits an AIP deletion request (an Archivematica admin must approve it before removal).</li>
+            <li><strong>Return to Packaging</strong> — for cancelled or halted packages, and after Rollback AIP (set Show to "Closed only" to find the row): moves the folder back to the Packaging and Ingesting view so it can be re-submitted after the issue is addressed.</li>
+            <li><strong>Retry</strong> — for a package whose access copy didn't finish: the files are safe. Retry sends it back to wait for its access copy and finish the ingest. Nothing changes in Archivematica. If the package can never finish that way (for example Archivematica no longer has its access copy), <strong>Rollback AIP</strong> is offered just below Retry.</li>
+            <li><strong>Rollback AIP</strong> — for packages that failed after Archivematica stored them: submits an AIP deletion request (an Archivematica admin must approve it before removal). Once approved, use Return to Packaging on the row to put the folder back for a re-submit.</li>
             <li><strong>Stop preservation copy</strong> — for packages in the final preservation-copy step: stops the backup copy to cloud storage. The ingest itself is already complete, so nothing is rolled back; the copy can be retried any time from the AIPs dashboard.</li>
             <li><strong>Dismiss from queue</strong> — for a failed preservation copy: clears the row from the queue view once you've seen it. The AIPs dashboard keeps tracking it and offers Retry.</li>
             <li><strong>Reset</strong> — clears a halted row that never reached any outside system, so the package can be re-submitted.</li>
@@ -206,6 +207,7 @@
         <ul class="small mb-0">
             <li><strong>Halt on a large video/audio batch</strong> — time limits are already raised for large media, so this should be rare. When it does happen it's usually the time limit, not an actual failure — contact LDT, who can check the limits and retry the row.</li>
             <li><strong>"AIP not found in AM Storage Service"</strong> — the system keeps retrying on its own for a while. If the package stays flagged, contact LDT.</li>
+            <li><strong>"The access copy didn't finish"</strong> — the files are safe. Use <strong>Retry</strong> from the row's menu (⋮). If it stops there again, contact LDT.</li>
             <li><strong>An object finished ingesting but doesn't appear in search</strong> — a record with unusual data can occasionally fail to index. The system sets it aside so it doesn't hold up other packages — contact LDT to have it fixed and re-indexed.</li>
         </ul>
     </div>
@@ -250,7 +252,7 @@
         <dt class="col-sm-3">AIP</dt>
         <dd class="col-sm-9">Archival Information Package — the preserved output stored long-term.</dd>
         <dt class="col-sm-3">DuraCloud</dt>
-        <dd class="col-sm-9">Archivematica's storage layer the worker waits on during ingest.</dd>
+        <dd class="col-sm-9">Archivematica's storage for preserved packages and their access copies, being replaced by DuraCloud Preserve.</dd>
         <dt class="col-sm-3">Wasabi&nbsp;S3</dt>
         <dd class="col-sm-9">The S3 storage tier for long-term copies — both the preserved AIPs and backups of the original ingest batches.</dd>
         <dt class="col-sm-3">Handle / PID</dt>

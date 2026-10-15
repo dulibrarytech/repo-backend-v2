@@ -16,10 +16,11 @@
     upstream check and refreshes on its own cadence.
 </p>
 
-<%/* Combined upstream-services panel. One HTMX poll fans out to four
-     parallel probes server-side (curation-API, Archivematica,
-     DuraCloud, ArchivesSpace) and renders a status grid. Separate from
-     the deeper Wasabi card below, which exercises the boto3 layer. */%>
+<%/* Combined upstream-services panel. One HTMX poll fans out to the
+     SERVICE_PROBES in parallel server-side (curation-API, Archivematica,
+     DuraCloud, DIP store, ArchivesSpace) and renders a status grid.
+     Separate from the deeper Wasabi card below, which exercises the
+     boto3 layer. */%>
 <div class="content-card mb-3">
     <div class="content-card-header">
         <h2 style="font-size: 18px; margin: 0;">Upstream services</h2>

@@ -185,6 +185,11 @@ module.exports = function create_app() {
      * curation service's store). Api-key gated, not JWT.
      */
     require('../images/routes')(app);
+    /*
+     * DIP store gateway — the public frontend's DIP files once
+     * DIP_GATEWAY_ENABLED is on. Basic-auth gated.
+     */
+    require('../dip_store_gateway/routes')(app);
 
     // 404 fallthrough — must come after all routes, before error handler.
     app.use((req, _res, next) => {

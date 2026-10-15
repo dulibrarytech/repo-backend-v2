@@ -108,6 +108,15 @@ describe('ingester/libs/qa_service', () => {
             expect(res).toEqual({ status: 200, data: { uploaded: 42 } });
             expect(http.calls.get[0].url).toContain('upload-status?uuid=uuid-1');
             expect(http.calls.get[0].url).toContain('total_batch_file_count=100');
+            expect(http.calls.get[0].url).not.toContain('package=');
+        });
+
+        it('names the package so the curation side counts that folder only', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 200, data: { message: 'in_progress' } });
+            const client = qa_module.create_client(http);
+            await client.sftp_upload_status('uuid-1', 100, 'pkg 001');
+            expect(http.calls.get[0].url).toContain('package=pkg%20001');
         });
     });
 
@@ -130,6 +139,30 @@ describe('ingester/libs/qa_service', () => {
             const client = qa_module.create_client(http);
             await client.move_to_sftp('uuid-1');
             expect(http.calls.get[0].opts.timeout).toBe(60000);
+            // Legacy whole-tree put when no package is given.
+            expect(http.calls.get[0].url).toBe(
+                'https://qa.example.com/api/v2/qa/move-to-sftp?uuid=uuid-1'
+            );
+        });
+
+        it('move_to_sftp names the package so the curation put is scoped to it', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 200, data: { message: 'upload_started' } });
+            const client = qa_module.create_client(http);
+            await client.move_to_sftp('uuid-1', 'pkg-001');
+            expect(http.calls.get[0].url).toBe(
+                'https://qa.example.com/api/v2/qa/move-to-sftp?uuid=uuid-1&package=pkg-001'
+            );
+        });
+
+        it('cancel_upload names the package whose put should stop', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 200, data: { message: 'cancel_requested' } });
+            const client = qa_module.create_client(http);
+            await client.cancel_upload('uuid-1', 'pkg-001');
+            expect(http.calls.get[0].url).toBe(
+                'https://qa.example.com/api/v2/qa/cancel-upload?uuid=uuid-1&package=pkg-001'
+            );
         });
     });
 

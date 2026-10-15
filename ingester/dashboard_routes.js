@@ -101,13 +101,15 @@ module.exports = function mount(app) {
     app.get(`${admin_base}`, require_dashboard_auth, controller.services_page);
     /*
      * Combined upstream-services panel: curation-API, Archivematica,
-     * DuraCloud, ArchivesSpace — each a single reachability/auth probe.
+     * DuraCloud, the DIP store, ArchivesSpace — each a single
+     * reachability/auth probe (SERVICE_PROBES in the controller).
      */
     app.get(`${admin_base}/health`, require_dashboard_auth, controller.services_health_partial);
     app.get(`${admin_base}/wasabi`, require_dashboard_auth, controller.services_wasabi_partial);
     /*
      * Storage-utilization refresh: forces the curation side to re-walk
-     * both buckets in the background, then re-renders the card.
+     * every store it measures (the Wasabi buckets and, with its DCP key,
+     * DCP's two locations) in the background, then re-renders the card.
      */
     app.post(
         `${admin_base}/wasabi/usage-refresh`,
@@ -213,6 +215,13 @@ module.exports = function mount(app) {
         can_ingest,
         write_limiter(),
         controller.reset_row_action
+    );
+    app.post(
+        `${base}/:id/retry-access-copy`,
+        require_dashboard_auth,
+        can_ingest,
+        write_limiter(),
+        controller.retry_access_copy_action
     );
     app.post(
         `${base}/:id/return-to-packaging`,

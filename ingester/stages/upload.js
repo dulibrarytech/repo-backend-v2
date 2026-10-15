@@ -15,7 +15,10 @@
  *   2. Tell QA to move the package from 001-ready to 002-ingest.
  *      Fire-and-forget on the wire — QA does the move asynchronously
  *      and we observe the result via subsequent calls.
- *   3. Tell QA to push the staged batch up to the AM SFTP source.
+ *   3. Tell QA to push this package (002-ingest/<uuid>/<package>) up
+ *      to the AM SFTP source — only this package, so a leftover
+ *      sibling from an earlier package's failed Wasabi archive is
+ *      neither re-sent nor counted toward this upload.
  *      QA runs the SFTP put in a BACKGROUND thread and returns
  *      immediately, so the poll below observes the transfer while it
  *      happens (the remote dir filling up) and the dashboard can show a
@@ -116,7 +119,7 @@ async function run(row, deps = {}) {
      */
     try {
         await qa.move_to_ingest(qa_uuid, folder, package_name);
-        await qa.move_to_sftp(qa_uuid);
+        await qa.move_to_sftp(qa_uuid, package_name);
     } catch (err) {
         /*
          * Transport-level failure here is fatal — the move never
@@ -136,7 +139,7 @@ async function run(row, deps = {}) {
     let total_bytes = 0;
     const outcome = await poll(
         async ({ attempt, elapsed_ms }) => {
-            const res = await qa.sftp_upload_status(qa_uuid, expected_count);
+            const res = await qa.sftp_upload_status(qa_uuid, expected_count, package_name);
             if (res.status !== 200 || res.data === null || res.data === undefined) {
                 /*
                  * QA hiccup — don't immediately halt; the next poll

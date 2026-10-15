@@ -18,6 +18,7 @@ const log = require('../libs/log');
 const { create_model, make_thumbnail_url_for } = require('./model');
 const tn_service = require('../libs/tn_service');
 const duracloud = require('../libs/duracloud');
+const dip_store = require('../libs/dip_store');
 const projection = require('../libs/object_projection');
 const repo_model = require('../repository/model');
 const { NotFoundError } = require('../libs/errors');
@@ -50,6 +51,11 @@ function send_json(req, res, status, body, { max_age = 300 } = {}) {
 }
 
 function send_thumbnail_placeholder(res) {
+    /*
+     * Nothing for a client that cancelled: the write would be dropped and
+     * the file stream would wait forever, one open descriptor per cancel.
+     */
+    if (res.destroyed || res.writableEnded) return;
     res.status(200);
     res.set('Content-Type', 'image/svg+xml');
     /*
@@ -80,7 +86,14 @@ async function health(req, res) {
     );
 }
 
-// GET /api/v1/search?q=&page=&page_size=&object_type=&is_compound=&subject=&collection=&sort=
+/*
+ * GET /api/v1/search?q=&page=&page_size=&object_type=&is_compound=&subject=&collection=&sort=
+ *
+ * object_type: `object` (single and compound objects; is_compound=false
+ * excludes the compounds), `compound` (compound objects only) or
+ * `collection`. collection: one or more collection UUIDs, matched exactly
+ * whatever their case.
+ */
 async function search(req, res) {
     const make = (pid) => make_thumbnail_url_for(req, pid);
     const result = await model.search(req.query, { make_thumbnail_url: make });
@@ -163,8 +176,21 @@ async function get_thumbnail(req, res) {
         }
     }
 
-    // Case 3: DuraCloud fallback.
-    if (stored && duracloud.is_configured()) {
+    // Case 3: the DIP store once DIP_GATEWAY_ENABLED is on; DuraCloud until then.
+    if (stored && dip_store.is_serving()) {
+        try {
+            const status = await dip_store.pipe_to(res, stored, {
+                on_200: (headers) => {
+                    res.status(200);
+                    res.set('Content-Type', headers['content-type'] || 'image/jpeg');
+                    res.set('Cache-Control', 'public, max-age=3600');
+                },
+            });
+            if (status === 200) return;
+        } catch {
+            return send_thumbnail_placeholder(res);
+        }
+    } else if (stored && duracloud.is_configured()) {
         let upstream;
         try {
             upstream = await duracloud.get_thumbnail_stream(stored);

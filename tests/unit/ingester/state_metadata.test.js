@@ -171,6 +171,43 @@ describe('ingester/state_metadata — available_actions', () => {
         }
     });
 
+    it('offers "retry_access_copy" first, then "rollback_archivematica", for DURACLOUD_TIMEOUT', () => {
+        /*
+         * Stage 4's access copy halted after Archivematica stored the AIP
+         * and the DIP: Retry is the normal path; the rollback stays as the
+         * second item for a package that can never finish that way.
+         */
+        expect(available_actions('DURACLOUD_TIMEOUT')).toEqual([
+            'timeline',
+            'retry_access_copy',
+            'rollback_archivematica',
+        ]);
+        expect(STATES_AT_AM_FAILURE.has('DURACLOUD_TIMEOUT')).toBe(true);
+        expect(STATES_AT_PRE_AM_FAILURE.has('DURACLOUD_TIMEOUT')).toBe(false);
+        for (const state of ['FAILED', 'INGEST_HALTED', 'WAITING_FOR_DURACLOUD', 'COMPLETE']) {
+            expect(available_actions(state)).not.toContain('retry_access_copy');
+        }
+    });
+
+    it('offers Return to Packaging after an AIP rollback (AM_DELETION_REQUESTED)', () => {
+        for (const prev of [null, 'FAILED', 'DURACLOUD_TIMEOUT']) {
+            expect(available_actions('AM_DELETION_REQUESTED', prev)).toEqual([
+                'timeline',
+                'rollback_to_packaging',
+            ]);
+        }
+    });
+
+    it('the access-copy messages are plain and never say to roll back', () => {
+        for (const state of ['WAITING_FOR_DURACLOUD', 'DURACLOUD_TIMEOUT']) {
+            const text = get_status_metadata(state).suggested_action;
+            expect(text).not.toMatch(/roll ?back|DuraCloud|propagat|AIP/i);
+        }
+        expect(get_status_metadata('DURACLOUD_TIMEOUT').suggested_action).toMatch(
+            /Retry.*contact LDT/
+        );
+    });
+
     it('offers "reset" for PRE_FOLDER_MOVE_FAILURE states', () => {
         for (const state of STATES_PRE_FOLDER_MOVE_FAILURE) {
             const actions = available_actions(state);

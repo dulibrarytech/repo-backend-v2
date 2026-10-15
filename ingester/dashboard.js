@@ -22,6 +22,7 @@ const qa_service = require('./libs/qa_service');
 const aip_store_client = require('./libs/aip_store_client');
 const archivematica = require('../libs/archivematica');
 const duracloud = require('../libs/duracloud');
+const dip_store = require('../libs/dip_store');
 const aspace = require('../libs/archivesspace');
 const es = require('../libs/elasticsearch');
 const worker_registry = require('./worker');
@@ -843,6 +844,10 @@ async function reset_row_action(req, res) {
     return _wrap_api_as_partial(api_controller.reset_row, req, res);
 }
 
+async function retry_access_copy_action(req, res) {
+    return _wrap_api_as_partial(api_controller.retry_access_copy, req, res);
+}
+
 async function return_to_packaging_action(req, res) {
     return _wrap_api_as_partial(api_controller.return_to_packaging, req, res);
 }
@@ -915,13 +920,16 @@ async function services_page(req, res) {
 }
 
 /*
- * The four upstream services the ingest pipeline depends on, each with one
- * non-throwing reachability/auth probe. Array order is render order.
+ * The upstream services the ingest pipeline depends on, each with one
+ * non-throwing reachability/auth probe. Array order is render order. The
+ * DIP store replaces DuraCloud as the DIP source during the DuraCloud
+ * Preserve cutover; both cards show until then.
  */
 const SERVICE_PROBES = [
     { key: 'curation_api', label: 'Curation API', probe: _probe_curation },
     { key: 'archivematica', label: 'Archivematica', probe: _probe_archivematica },
     { key: 'duracloud', label: 'DuraCloud', probe: _probe_duracloud },
+    { key: 'dip_store', label: 'DIP store (Wasabi)', probe: _probe_dip_store },
     { key: 'archivesspace', label: 'ArchivesSpace', probe: _probe_archivesspace },
 ];
 
@@ -950,6 +958,7 @@ const SERVICE_CAPABILITY = {
     curation_api: 'ingest / QA moves',
     archivematica: 'ingest pipeline',
     duracloud: 'preservation storage',
+    dip_store: 'access copies',
     archivesspace: 'metadata sync',
 };
 
@@ -964,9 +973,9 @@ const BANNER_PROBES = [
 
 /*
  * Per-probe deadline for the banner. Must exceed the slowest HEALTHY probe, or
- * a live service is false-flagged as down: ArchivesSpace and DuraCloud are 15s,
- * Elasticsearch 10s. The invariant is guarded in tests against
- * ARCHIVESPACE_TIMEOUT_MS.
+ * a live service is false-flagged as down: ArchivesSpace, DuraCloud and the
+ * DIP store are 15s, Elasticsearch 10s. The invariant is guarded in tests
+ * against each of those client timeouts.
  */
 const BANNER_PROBE_TIMEOUT_MS = 20000;
 
@@ -1093,6 +1102,17 @@ async function _probe_duracloud() {
         configured: true,
         reachable: ok,
         detail: ok ? 'dip-store reachable' : 'dip-store unreachable or auth rejected',
+    };
+}
+
+// DIP store — list one key under dip-store/ and read it. An empty folder is healthy.
+async function _probe_dip_store() {
+    if (!dip_store.is_configured()) return { configured: false };
+    const ok = await dip_store.ping();
+    return {
+        configured: true,
+        reachable: ok,
+        detail: ok ? 'dip-store/ list and read OK' : 'dip-store/ unreachable or access denied',
     };
 }
 
@@ -1234,6 +1254,7 @@ module.exports = {
     cancel_batch_action,
     rollback_archivematica_action,
     reset_row_action,
+    retry_access_copy_action,
     return_to_packaging_action,
     // Workspace pages
     workspace_page,
@@ -1261,5 +1282,7 @@ module.exports = {
     // exported for tests
     _run_probe,
     _with_deadline,
+    _probe_dip_store,
+    SERVICE_PROBES,
     BANNER_PROBE_TIMEOUT_MS,
 };

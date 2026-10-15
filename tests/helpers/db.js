@@ -119,7 +119,7 @@ async function seed_aip_store(overrides = {}) {
         downloaded: 0,
         is_migrated: 6, // v2 ingest: copied_ok
         source: 'ingest_v2',
-        wasabi_bucket: 'library-repository',
+        wasabi_bucket: 'test-aip-store',
         wasabi_key: 'aip-store/test-aip.7z',
         bytes: 1024,
         copied_at: new Date(),

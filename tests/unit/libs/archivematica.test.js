@@ -344,6 +344,87 @@ describe('libs/archivematica', () => {
         });
     });
 
+    describe('get_dip_path → dip_uuid', () => {
+        it('also returns the DIP package uuid the path was built from', async () => {
+            const dip_uuid = '0000f75f-3cf8-4b3d-b494-e0ec20172508';
+            const http = make_fake_http();
+            http.set_response({
+                status: 200,
+                data: {
+                    related_packages: [`/api/v2/file/${dip_uuid}/`],
+                    current_path: '/x/pkg_U158-2259082c.7z',
+                },
+            });
+            const res = await am_module.create_client(http).get_dip_path('sip-1');
+            expect(res.dip_uuid).toBe(dip_uuid);
+            expect(res.dip_path).toBe('0000/f75f/3cf8/4b3d/b494/e0ec/2017/2508/pkg_U158-2259082c');
+            // The storage key travels in the header, never the URL.
+            const call = http.calls.get[0];
+            expect(call.url).toBe('https://am-storage.example.com/api/v2/file/sip-1/');
+            expect(call.opts.headers.Authorization).toBe('ApiKey storage-svc:storage-key');
+        });
+    });
+
+    describe('get_dip_package', () => {
+        const DIP = '0000f75f-3cf8-4b3d-b494-e0ec20172508';
+
+        it('reads the DIP record from the storage API: status upper-cased, size a number', async () => {
+            const http = make_fake_http();
+            http.set_response({
+                status: 200,
+                data: {
+                    package_type: 'dip',
+                    status: 'uploaded',
+                    size: '6000',
+                    current_path: 'x/y',
+                },
+            });
+            const res = await am_module.create_client(http).get_dip_package(DIP);
+            expect(res).toMatchObject({
+                status: 200,
+                package_type: 'DIP',
+                package_status: 'UPLOADED',
+                size: 6000,
+                current_path: 'x/y',
+            });
+            const call = http.calls.get[0];
+            expect(call.url).toBe(`https://am-storage.example.com/api/v2/file/${DIP}/`);
+            expect(call.url).not.toContain('api_key=');
+            expect(call.opts.headers.Authorization).toBe('ApiKey storage-svc:storage-key');
+        });
+
+        it('reports no size for a missing, zero or unparseable size', async () => {
+            for (const size of [undefined, null, 0, 'n/a', -3]) {
+                const http = make_fake_http();
+                http.set_response({ status: 200, data: { status: 'UPLOADED', size } });
+                const res = await am_module.create_client(http).get_dip_package(DIP);
+                expect(res.size).toBeNull();
+            }
+        });
+
+        it('returns nulls on a non-200', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 404, data: null });
+            const res = await am_module.create_client(http).get_dip_package(DIP);
+            expect(res).toEqual({
+                status: 404,
+                data: null,
+                package_type: null,
+                package_status: null,
+                size: null,
+                current_path: null,
+            });
+        });
+
+        it('throws UpstreamError on a transport failure', async () => {
+            const http = make_fake_http();
+            http.set_response({ throw: new Error('ECONNRESET') });
+            await expect(am_module.create_client(http).get_dip_package(DIP)).rejects.toThrow(
+                /get_dip_package failed: ECONNRESET/
+            );
+        });
+    });
+
     describe('delete_aip_request', () => {
         it('POSTs JSON body with pipeline + user identifiers', async () => {
             const http = make_fake_http();
