@@ -21,7 +21,6 @@ const jobs = require('./jobs');
 const qa_service = require('./libs/qa_service');
 const aip_store_client = require('./libs/aip_store_client');
 const archivematica = require('../libs/archivematica');
-const duracloud = require('../libs/duracloud');
 const dip_store = require('../libs/dip_store');
 const aspace = require('../libs/archivesspace');
 const es = require('../libs/elasticsearch');
@@ -921,14 +920,14 @@ async function services_page(req, res) {
 
 /*
  * The upstream services the ingest pipeline depends on, each with one
- * non-throwing reachability/auth probe. Array order is render order. The
- * DIP store replaces DuraCloud as the DIP source during the DuraCloud
- * Preserve cutover; both cards show until then.
+ * non-throwing reachability/auth probe. Array order is render order:
+ * DuraCloud Preserve (the preservation store, checked through curation)
+ * comes right before the DIP store (the copy the public site is served from).
  */
 const SERVICE_PROBES = [
     { key: 'curation_api', label: 'Curation API', probe: _probe_curation },
     { key: 'archivematica', label: 'Archivematica', probe: _probe_archivematica },
-    { key: 'duracloud', label: 'DuraCloud', probe: _probe_duracloud },
+    { key: 'dcp', label: 'DuraCloud Preserve', probe: _probe_dcp },
     { key: 'dip_store', label: 'DIP store (Wasabi)', probe: _probe_dip_store },
     { key: 'archivesspace', label: 'ArchivesSpace', probe: _probe_archivesspace },
 ];
@@ -957,7 +956,7 @@ const SERVICE_CAPABILITY = {
     elasticsearch: 'search & browse',
     curation_api: 'ingest / QA moves',
     archivematica: 'ingest pipeline',
-    duracloud: 'preservation storage',
+    dcp: 'preservation storage',
     dip_store: 'access copies',
     archivesspace: 'metadata sync',
 };
@@ -973,9 +972,9 @@ const BANNER_PROBES = [
 
 /*
  * Per-probe deadline for the banner. Must exceed the slowest HEALTHY probe, or
- * a live service is false-flagged as down: ArchivesSpace, DuraCloud and the
- * DIP store are 15s, Elasticsearch 10s. The invariant is guarded in tests
- * against each of those client timeouts.
+ * a live service is false-flagged as down: ArchivesSpace, DuraCloud Preserve
+ * (curation's /health/dcp) and the DIP store are 15s, Elasticsearch 10s. The
+ * invariant is guarded in tests against each of those client timeouts.
  */
 const BANNER_PROBE_TIMEOUT_MS = 20000;
 
@@ -992,13 +991,23 @@ async function services_banner_partial(req, res) {
             _run_probe(key, label, probe, BANNER_PROBE_TIMEOUT_MS)
         )
     );
-    const degraded = results
-        .filter((s) => s.configured && !s.reachable)
-        .map((s) => ({ label: s.label, capability: SERVICE_CAPABILITY[s.key] || '' }));
     render_partial(req, res, 'dashboard/partials/services_banner', {
-        degraded,
+        degraded: _banner_degraded(results),
         checked_at: new Date().toISOString(),
     });
+}
+
+/*
+ * The services the banner names: configured but down. DuraCloud Preserve is
+ * checked through curation, so with curation down its state is unknown and
+ * only curation is named.
+ */
+function _banner_degraded(results) {
+    const down = results.filter((s) => s.configured && !s.reachable);
+    const curation_down = down.some((s) => s.key === 'curation_api');
+    return down
+        .filter((s) => !(curation_down && s.key === 'dcp'))
+        .map((s) => ({ label: s.label, capability: SERVICE_CAPABILITY[s.key] || '' }));
 }
 
 /*
@@ -1094,15 +1103,51 @@ async function _probe_archivematica() {
     return { configured: true, reachable: r.ok, detail };
 }
 
-// DuraCloud — HEAD on the dip-store space root (reachability + auth).
-async function _probe_duracloud() {
-    if (!duracloud.is_configured()) return { configured: false };
-    const ok = await duracloud.ping();
-    return {
-        configured: true,
-        reachable: ok,
-        detail: ok ? 'dip-store reachable' : 'dip-store unreachable or auth rejected',
-    };
+/*
+ * One curation call a minute, however many pages ask: each /health/dcp lists
+ * both DCP locations and holds a curation worker while it does, so a DCP
+ * outage can't tie up curation through this card. Callers share the call in
+ * flight.
+ */
+const DCP_PROBE_CACHE_MS = 60_000;
+let dcp_probe = null; // { at: <ms>, result: Promise }
+
+async function _probe_dcp() {
+    if (!qa_service.is_configured()) return { configured: false };
+    if (!dcp_probe || Date.now() - dcp_probe.at >= DCP_PROBE_CACHE_MS) {
+        dcp_probe = { at: Date.now(), result: _check_dcp() };
+    }
+    return dcp_probe.result;
+}
+
+// Test-only — clear the cached DCP check.
+function _reset_dcp_probe() {
+    dcp_probe = null;
+}
+
+/*
+ * DuraCloud Preserve, through curation's GET /health/dcp: curation lists one
+ * key in each DCP location with its DCP key (repov2 holds none). Curation
+ * down throws; _run_probe turns that into a red card.
+ */
+async function _check_dcp() {
+    const r = await qa_service.health_dcp();
+    const body = r.data || {};
+    if (r.status !== 200) {
+        return { configured: true, reachable: false, detail: `GET /health/dcp → ${r.status}` };
+    }
+    if (body.ok === true) {
+        return {
+            configured: true,
+            reachable: true,
+            detail: 'both DCP locations listed via curation',
+        };
+    }
+    const locations = Array.isArray(body.locations) ? body.locations : [];
+    const bad = locations.find((l) => !l.ok);
+    const reason =
+        body.error || (bad && `${bad.prefix || bad.name}: ${bad.error || 'nothing listed'}`);
+    return { configured: true, reachable: false, detail: `curation: ${reason || 'not ok'}` };
 }
 
 // DIP store — list one key under dip-store/ and read it. An empty folder is healthy.
@@ -1283,6 +1328,9 @@ module.exports = {
     _run_probe,
     _with_deadline,
     _probe_dip_store,
+    _probe_dcp,
+    _reset_dcp_probe,
+    _banner_degraded,
     SERVICE_PROBES,
     BANNER_PROBE_TIMEOUT_MS,
 };

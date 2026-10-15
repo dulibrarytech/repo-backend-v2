@@ -36,6 +36,12 @@ const { UpstreamError } = require('../../libs/errors');
 
 const QA_PATH = '/api/v2/qa/';
 
+/*
+ * /health/dcp lists one key in each DCP location, so it can take longer
+ * than the other health calls; capped under the services banner's deadline.
+ */
+const HEALTH_DCP_TIMEOUT_MS = 15_000;
+
 function is_configured() {
     const cfg = app_config().curation_api;
     return Boolean(cfg && cfg.url && cfg.api_key);
@@ -355,6 +361,30 @@ function create_client(http = http_default) {
                 throw new UpstreamError(`QA service /health/wasabi failed: ${err.message}`);
             }
         },
+
+        /*
+         * DuraCloud Preserve probe: curation lists one key in each DCP
+         * location with its own DCP key (repov2 holds none). At the app
+         * root like /health/wasabi; always 200, with body.ok the signal:
+         *   { ok, configured, error, elapsed_ms,
+         *     locations: [{ name, setting, bucket, prefix, keys, ok, error }] }
+         * Transport-level failure throws UpstreamError.
+         */
+        async health_dcp() {
+            const cfg = app_config().curation_api;
+            const base = cfg.url.replace(/\/+$/, '');
+            try {
+                const res = await http.get(`${base}/health/dcp`, {
+                    timeout: HEALTH_DCP_TIMEOUT_MS,
+                    headers: default_headers(),
+                    validateStatus: () => true,
+                });
+                return { status: res.status, data: res.data };
+            } catch (err) {
+                log.warn({ event: 'qa_health_dcp_failed', err: err.message });
+                throw new UpstreamError(`QA service /health/dcp failed: ${err.message}`);
+            }
+        },
     };
 }
 
@@ -379,3 +409,4 @@ async function _get(http, url, op, override_timeout) {
 module.exports = create_client();
 module.exports.create_client = create_client;
 module.exports.is_configured = is_configured;
+module.exports.HEALTH_DCP_TIMEOUT_MS = HEALTH_DCP_TIMEOUT_MS;

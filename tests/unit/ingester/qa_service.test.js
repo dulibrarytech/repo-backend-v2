@@ -294,4 +294,33 @@ describe('ingester/libs/qa_service', () => {
             await expect(client.health_wasabi()).rejects.toBeInstanceOf(UpstreamError);
         });
     });
+
+    describe('health_dcp', () => {
+        it('hits /health/dcp at the app root with X-API-Key', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 200, data: { ok: true, locations: [] } });
+            const client = qa_module.create_client(http);
+            const res = await client.health_dcp();
+            expect(res).toEqual({ status: 200, data: { ok: true, locations: [] } });
+            const call = http.calls.get[0];
+            expect(call.url).toBe('https://qa.example.com/health/dcp');
+            expect(call.opts.headers['X-API-Key']).toBe('qa-key');
+            expect(call.opts.timeout).toBe(qa_module.HEALTH_DCP_TIMEOUT_MS);
+        });
+
+        it('passes through 200 with body.ok=false (curation reports DCP failing)', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 200, data: { ok: false, error: 'not configured' } });
+            const client = qa_module.create_client(http);
+            const res = await client.health_dcp();
+            expect(res.data.ok).toBe(false);
+        });
+
+        it('throws UpstreamError on transport failure (curation unreachable)', async () => {
+            const http = make_fake_http();
+            http.set_response({ throw: new Error('ECONNREFUSED') });
+            const client = qa_module.create_client(http);
+            await expect(client.health_dcp()).rejects.toBeInstanceOf(UpstreamError);
+        });
+    });
 });
