@@ -174,6 +174,42 @@ describe('convert/worker — deferred verification', () => {
         expect(completed.map((c) => c.id)).toEqual([7, 8]);
     });
 
+    it('a MISSING derivative holds the next row until it lands', async () => {
+        const client = make_client({
+            verifies: [{ outcome: 'missing' }, { outcome: 'ok', bytes: 21 }],
+        });
+        const worker = create_worker({ client });
+        claim_queue.push(make_row(13), make_row(14));
+
+        await worker.tick(); // POST row 13
+        expect(await worker.tick()).toBe(true); // check 1 — missing: row 14 waits
+        expect(client.convert).toHaveBeenCalledTimes(1);
+        expect(claim_queue).toHaveLength(1);
+        await worker.tick(); // check 2 — ok: complete 13, then POST 14
+        expect(completed.map((c) => c.id)).toEqual([13]);
+        expect(client.convert).toHaveBeenCalledTimes(2);
+        await worker.tick(); // verify 14
+        expect(completed.map((c) => c.id)).toEqual([13, 14]);
+        expect(failed).toHaveLength(0);
+    });
+
+    it('a derivative still MISSING at the check cap fails, then the next row is posted', async () => {
+        const client = make_client({
+            verifies: [{ outcome: 'missing' }, { outcome: 'missing' }, { outcome: 'missing' }],
+        });
+        const worker = create_worker({ client });
+        claim_queue.push(make_row(15), make_row(16));
+
+        await worker.tick(); // POST row 15
+        await worker.tick(); // check 1 — missing
+        await worker.tick(); // check 2 — missing
+        expect(client.convert).toHaveBeenCalledTimes(1);
+        await worker.tick(); // check 3 — missing → cap: fail 15, then POST 16
+        expect(failed.map((f) => f.id)).toEqual([15]);
+        expect(client.convert).toHaveBeenCalledTimes(2);
+        expect(client.convert.mock.calls[1][0]).toMatchObject({ object_name: 'thing-16.tif' });
+    });
+
     it('an idle queue still settles a pending verification', async () => {
         const client = make_client({ verifies: [{ outcome: 'ok', bytes: 11 }] });
         const worker = create_worker({ client });

@@ -39,9 +39,11 @@ function create_worker({ client = client_default } = {}) {
      * ACKs 202 BEFORE converting (fire-and-forget), so completion is
      * only recorded once the derivative is confirmed real — verified on
      * the NEXT tick, by which point the paced cooldown has given the
-     * background conversion ≥ delay_ms to land. In-memory on purpose:
-     * a crash leaves the row IN_PROGRESS and reset_orphaned() returns
-     * it to PENDING for a harmless re-conversion.
+     * background conversion ≥ delay_ms to land. Until it settles (a
+     * MISSING derivative or an unreachable check, under the cap), no
+     * new row is claimed: one conversion at a time. In-memory on
+     * purpose: a crash leaves the row IN_PROGRESS and reset_orphaned()
+     * returns it to PENDING for a harmless re-conversion.
      */
     let awaiting = null;
     // Log the endpoint-absent fallback once per process, not per row.
@@ -153,9 +155,9 @@ function create_worker({ client = client_default } = {}) {
 
     /*
      * Process one queue step: settle the previous tick's verification,
-     * then claim + POST the next row. Returns true if any work was done
-     * (caller then waits the full cooldown), false if idle (caller
-     * waits the shorter idle interval).
+     * then, once nothing is awaiting, claim + POST the next row. Returns
+     * true if any work was done (caller then waits the full cooldown),
+     * false if idle (caller waits the shorter idle interval).
      */
     async function tick_once() {
         if (stopping) return false;
@@ -172,6 +174,12 @@ function create_worker({ client = client_default } = {}) {
             }
             did_verify = true;
             if (stopping) return true;
+            /*
+             * Still unsettled: check it again next tick rather than
+             * claiming. A new claim would replace `awaiting` and leave
+             * this row IN_PROGRESS with its result never recorded.
+             */
+            if (awaiting) return true;
         }
 
         let row;
