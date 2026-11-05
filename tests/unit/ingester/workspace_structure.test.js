@@ -38,6 +38,7 @@ function make_astools({
      * MDO path unchanged.
      */
     package_files = {},
+    get_uri_responses = {},
 } = {}) {
     const calls = {
         list_workspace: 0,
@@ -63,6 +64,7 @@ function make_astools({
         async get_uri(folder, pkg) {
             calls.get_uri.push({ folder, pkg });
             if (package_files.throw) throw new Error(package_files.throw);
+            if (get_uri_responses[pkg]) return get_uri_responses[pkg];
             const files = package_files[pkg] || ['uri.txt', 'scan_001.tif'];
             return { status: 200, data: { result: { uris: [], files }, errors: [] } };
         },
@@ -454,6 +456,45 @@ describe('workspace.run_make_digital_objects — Kaltura pre-flight', () => {
         expect(result.ok).toBe(false);
         expect(result.error).toContain('Could not check');
         expect(astools.calls.make_digital_objects).toEqual([]);
+    });
+
+    it.each([
+        ['an HTTP error', { status: 502, data: '<html>Bad Gateway</html>' }],
+        [
+            'a missing package',
+            { status: 404, data: { result: null, errors: ['Package not found'] } },
+        ],
+        ['a 200 with no file list', { status: 200, data: { result: null, errors: [] } }],
+    ])('blocks when a per-package file listing returns %s', async (_label, response) => {
+        const astools = make_astools({
+            packages_data: { result: ['pkg_a', 'pkg_b'], errors: [] },
+            package_files: { pkg_a: ['clip.mov'] },
+            get_uri_responses: { pkg_b: response },
+        });
+        const kaltura = make_kaltura();
+
+        const result = await workspace.run_make_digital_objects(FOLDER, { astools, kaltura });
+
+        expect(result.ok).toBe(false);
+        expect(result.status).toBe(422);
+        expect(result.error).toContain('Could not check "pkg_b"');
+        expect(kaltura.calls.resolve_packages).toEqual([]);
+        expect(astools.calls.make_digital_objects).toEqual([]);
+    });
+
+    it('treats .webm files as audio/video', async () => {
+        const astools = media_astools({ pkg_a: ['talk.webm'] });
+        const kaltura = make_kaltura({
+            rows: [{ package: 'pkg_a', file: 'talk.webm', entry_id: '1_ccc', status: 1 }],
+        });
+
+        const result = await workspace.run_make_digital_objects(FOLDER, { astools, kaltura });
+
+        expect(result.ok).toBe(true);
+        expect(kaltura.calls.resolve_packages).toEqual([
+            [{ package: 'pkg_a', files: ['talk.webm'] }],
+        ]);
+        expect(result.kaltura).toEqual({ attached: 1 });
     });
 });
 

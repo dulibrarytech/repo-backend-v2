@@ -35,6 +35,7 @@ const { UpstreamError, ValidationError } = require('../libs/errors');
 const DEFAULT_SESSION_EXPIRY_S = 24 * 60 * 60;
 const DEFAULT_SESSION_TIMEOUT_MS = 10_000;
 const DEFAULT_SEARCH_TIMEOUT_MS = 15_000;
+const SILENT_SDK_LOGGER = { log() {}, error() {}, debug() {} };
 
 /*
  * Build a fresh SDK client per call. The SDK's Configuration object
@@ -44,6 +45,8 @@ const DEFAULT_SEARCH_TIMEOUT_MS = 15_000;
  */
 function _make_client() {
     const cfg = new kaltura.Configuration();
+    cfg.serviceUrl = config.get().service_url;
+    cfg.setLogger(SILENT_SDK_LOGGER);
     return new kaltura.Client(cfg);
 }
 

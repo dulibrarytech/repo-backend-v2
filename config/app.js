@@ -549,6 +549,7 @@ function build() {
          * /export flow.
          */
         kaltura: {
+            service_url: optional('KALTURA_SERVICE_URL', 'https://www.kaltura.com'),
             partner_id: optional('KALTURA_PARTNER_ID', ''),
             user_id: optional('KALTURA_USER_ID', ''),
             secret_key: optional('KALTURA_SECRET_KEY', ''),

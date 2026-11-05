@@ -392,7 +392,7 @@ function _extract_package_array(data) {
  */
 const KALTURA_MEDIA_EXTENSIONS = new Set([
     // video
-    'mp4', 'mov', 'm4v', 'avi', 'mkv', 'mpg', 'mpeg', 'wmv',
+    'mp4', 'mov', 'm4v', 'avi', 'mkv', 'mpg', 'mpeg', 'wmv', 'webm',
     // audio
     'wav', 'mp3', 'm4a', 'flac', 'ogg', 'aiff', 'aif', 'wma',
 ]);
@@ -437,15 +437,30 @@ async function _collect_kaltura_media(astools, folder) {
     const media = [];
     for (const pkg of folder_state.packages) {
         if (!pkg || !pkg.name) continue;
-        let res;
+        let files = null;
+        let failure = null;
         try {
-            res = await astools.get_uri(folder, pkg.name);
+            const res = await astools.get_uri(folder, pkg.name);
+            if (
+                res &&
+                res.status === 200 &&
+                res.data &&
+                res.data.result &&
+                Array.isArray(res.data.result.files)
+            ) {
+                files = res.data.result.files;
+            } else {
+                failure = `HTTP ${res ? res.status : 'no response'}`;
+            }
         } catch (err) {
+            failure = err.message;
+        }
+        if (failure) {
             log.warn({
                 event: 'workspace_mdo_kaltura_enum_failed',
                 folder,
                 package: pkg.name,
-                err: err.message,
+                err: failure,
             });
             return {
                 ok: false,
@@ -455,11 +470,6 @@ async function _collect_kaltura_media(astools, folder) {
                     `keeps happening, contact LDT.`,
             };
         }
-        const files =
-            res && res.status === 200 && res.data && res.data.result &&
-            Array.isArray(res.data.result.files)
-                ? res.data.result.files
-                : [];
         const media_files = files.filter(_is_kaltura_media);
         if (media_files.length > 0) {
             media.push({ package: pkg.name, files: media_files });
