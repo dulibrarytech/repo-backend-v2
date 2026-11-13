@@ -33,3 +33,5 @@ process.on('unhandledRejection', (reason) => {
     console.error('Unhandled rejection in test:', reason);
     throw reason instanceof Error ? reason : new Error(String(reason));
 });
+
+require('./loopback_listen').install();

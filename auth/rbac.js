@@ -56,6 +56,7 @@ const PERMISSIONS = Object.freeze({
      * removes a persistent identifier. Admin holds it via ALL_PERMISSIONS.
      */
     MANAGE_HANDLES: 'manage_handles',
+    MANAGE_ASPACE_LINKS: 'manage_aspace_links',
 });
 const ALL_PERMISSIONS = Object.freeze(Object.values(PERMISSIONS));
 

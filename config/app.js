@@ -254,6 +254,11 @@ function build() {
              * transform() rules change.
              */
             transformer_version: optional('ASPACE_TRANSFORMER_VERSION', '1'),
+            writes_enabled: boolean('ASPACE_WRITES_ENABLED', false),
+        },
+        aspace_links: {
+            enabled: boolean('ASPACE_LINKS_WORKER_ENABLED', false),
+            batch_size: positive_integer('ASPACE_LINKS_BATCH_SIZE', 100),
         },
         /*
          * Metadata-refresh worker. Caps ASpace requests in flight; staff

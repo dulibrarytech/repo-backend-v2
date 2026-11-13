@@ -356,6 +356,51 @@ describe('ingester/stages/repository', () => {
         expect(fresh.pipeline_state).toBe('COMPLETE');
     });
 
+    it('queues the ArchivesSpace record for a link check once the object exists', async () => {
+        const row = await seed_row({ metadata_uri: '/repositories/2/archival_objects/77' });
+        const out = await stage.run(row, {
+            duracloud: make_duracloud({ mets_xml: happy_mets() }),
+            handles: make_handles(),
+            model,
+        });
+        expect(out.ok).toBe(true);
+
+        const queued = await db_queue()(tables.aspace_links);
+        expect(queued).toHaveLength(1);
+        expect(queued[0]).toMatchObject({
+            uri: '/repositories/2/archival_objects/77',
+            status: 'PENDING',
+        });
+    });
+
+    it('queues no link check when the object has no handle', async () => {
+        const row = await seed_row({ metadata_uri: '/repositories/2/archival_objects/77' });
+        const out = await stage.run(row, {
+            duracloud: make_duracloud({ mets_xml: happy_mets() }),
+            handles: make_handles({ configured: false }),
+            model,
+        });
+        expect(out.ok).toBe(true);
+        expect(await db_queue()(tables.aspace_links)).toHaveLength(0);
+    });
+
+    it('a link-queue failure never unwinds the completed ingest', async () => {
+        const row = await seed_row();
+        const out = await stage.run(row, {
+            duracloud: make_duracloud({ mets_xml: happy_mets() }),
+            handles: make_handles(),
+            model,
+            aspace_links_model: {
+                enqueue: async () => {
+                    throw new Error('queue DB is down');
+                },
+            },
+        });
+        expect(out.ok).toBe(true);
+        const fresh = await db_queue()(tables.ingest_queue).where({ id: row.id }).first();
+        expect(fresh.pipeline_state).toBe('COMPLETE');
+    });
+
     it('writes a CREATING_REPOSITORY_RECORD audit event before the build', async () => {
         const row = await seed_row();
         const out = await stage.run(row, {

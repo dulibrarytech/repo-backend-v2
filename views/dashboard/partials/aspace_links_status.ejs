@@ -1,0 +1,45 @@
+<% if (!worker_enabled) { %>
+    <div class="alert alert-warning" role="alert" style="margin-bottom: 12px;">
+        <strong>Automatic checking is off.</strong>
+        Records wait here until <code>ASPACE_LINKS_WORKER_ENABLED</code> is
+        turned on and the app is restarted.
+    </div>
+<% } else if (!writes_enabled) { %>
+    <div class="alert alert-warning" role="alert" style="margin-bottom: 12px;">
+        <strong>Nothing is being written to ArchivesSpace.</strong>
+        Records are checked and reported only. To write the changes, turn on
+        <code>ASPACE_WRITES_ENABLED</code> and restart the app.
+    </div>
+<% } %>
+
+<% if (summary.waiting_error) { %>
+    <div class="alert alert-warning" role="alert" style="margin-bottom: 12px;">
+        <strong>The last check could not be completed.</strong>
+        It will be tried again in a few minutes.
+        <div class="small" style="margin-top: 4px;">
+            <code style="word-break: break-word;"><%= summary.waiting_error %></code>
+        </div>
+    </div>
+<% } %>
+
+<dl class="row mb-3 small" style="row-gap: 4px;">
+    <dt class="col-5 text-muted">Waiting to be checked</dt>
+    <dd class="col-7"><strong><%= summary.waiting.toLocaleString() %></strong></dd>
+
+    <dt class="col-5 text-muted">Checked</dt>
+    <dd class="col-7">
+        <%= summary.checked.toLocaleString() %>
+        <% if (summary.last_checked_at) { %>
+            <span class="text-muted ms-2">
+                last at <%= new Date(summary.last_checked_at).toISOString().slice(0, 16).replace('T', ' ') %> UTC
+            </span>
+        <% } %>
+    </dd>
+
+    <% Object.keys(labels).forEach(function (state) { %>
+        <% if (summary.states[state]) { %>
+            <dt class="col-5 text-muted"><%= labels[state] %></dt>
+            <dd class="col-7"><%= summary.states[state].toLocaleString() %></dd>
+        <% } %>
+    <% }); %>
+</dl>

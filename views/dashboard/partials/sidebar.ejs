@@ -290,6 +290,19 @@
             </svg>
         </a>
 
+        <a href="<%= dashboard_base %>/admin/aspace-links"
+           class="<%= page === 'aspace_links' ? 'active' : '' %>"
+           <% if (page === 'aspace_links') { %>aria-current="page"<% } %>
+           aria-label="ArchivesSpace Links (admin)"
+           title="ArchivesSpace Links (admin)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                <polyline points="15 3 21 3 21 9"/>
+                <line x1="10" y1="14" x2="21" y2="3"/>
+            </svg>
+        </a>
+
         <%/* Batch Backups (Wasabi) — read-only browse + download of
              the Wasabi batch archive (retired 003-ingested
              replacement). Duplicate/copy icon (two overlapping

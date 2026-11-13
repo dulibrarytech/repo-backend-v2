@@ -202,6 +202,85 @@ describe('metadata/worker — integration', () => {
         expect(row.error).toMatch(/401/);
     });
 
+    it('signs in again when ArchivesSpace has dropped the session (412)', async () => {
+        const first = await db_helper.seed_object({ uri: '/r/session-1', display_record: '{}' });
+        const second = await db_helper.seed_object({ uri: '/r/session-2', display_record: '{}' });
+        const third = await db_helper.seed_object({ uri: '/r/session-3', display_record: '{}' });
+
+        const dropped = new Set();
+        const used = [];
+        const aspace = make_fake_aspace({
+            get_record: async (uri, token) => {
+                used.push(token);
+                if (dropped.has(token)) {
+                    return { status: 412, data: { code: 'SESSION_GONE' }, headers: {} };
+                }
+                return { status: 200, data: { title: 'Fresh' }, headers: {} };
+            },
+        });
+        const worker = create_worker({ aspace });
+
+        await model.enqueue_single(first.pid);
+        await worker.tick();
+        dropped.add('tok-1');
+
+        await model.enqueue_single(second.pid);
+        await worker.tick();
+        await model.enqueue_single(third.pid);
+        await worker.tick();
+
+        const rows = await db_queue()(QUEUE).select('status', 'error');
+        expect(rows.map((row) => row.status)).toEqual(['COMPLETE', 'COMPLETE', 'COMPLETE']);
+        expect(rows.every((row) => row.error === null)).toBe(true);
+        expect(used).toEqual(['tok-1', 'tok-1', 'tok-2', 'tok-2']);
+        expect(aspace.token_count()).toBe(2);
+    });
+
+    it('recovers every row of a tick when the session was dropped', async () => {
+        const objs = [];
+        for (let i = 0; i < 3; i++) {
+            objs.push(await db_helper.seed_object({ uri: `/r/gone-${i}`, display_record: '{}' }));
+        }
+        await model.enqueue_pids(objs.map((o) => o.pid));
+
+        const used = [];
+        const aspace = make_fake_aspace({
+            get_record: async (uri, token) => {
+                used.push(token);
+                if (token === 'tok-1') {
+                    return { status: 412, data: { code: 'SESSION_GONE' }, headers: {} };
+                }
+                return { status: 200, data: { title: 'Fresh' }, headers: {} };
+            },
+        });
+        const worker = create_worker({ aspace });
+        await worker.tick();
+
+        const rows = await db_queue()(QUEUE).select('status', 'error');
+        expect(rows.map((row) => row.status)).toEqual(['COMPLETE', 'COMPLETE', 'COMPLETE']);
+        expect(used).toHaveLength(6);
+        expect(used.filter((token) => token === 'tok-1')).toHaveLength(3);
+    });
+
+    it('does not retry on a second 412 — marks the row failed', async () => {
+        const obj = await db_helper.seed_object({ uri: '/r/session-stuck' });
+        await model.enqueue_single(obj.pid);
+        let calls = 0;
+        const aspace = make_fake_aspace({
+            get_record: async () => {
+                calls += 1;
+                return { status: 412, data: { code: 'SESSION_GONE' }, headers: {} };
+            },
+        });
+        const worker = create_worker({ aspace });
+        await worker.tick();
+        const row = await db_queue()(QUEUE).where({ uuid: obj.pid }).first();
+        expect(row.is_complete).toBe(1);
+        expect(row.error).toMatch(/ArchivesSpace 412/);
+        expect(calls).toBe(2);
+        expect(aspace.token_count()).toBe(2);
+    });
+
     it('skips CANCELLED rows added to the queue while a tick is running', async () => {
         /*
          * Cancelled rows get is_complete=1 immediately, so claim_pending

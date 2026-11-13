@@ -256,7 +256,7 @@ async function process_row(row, aspace, token_holder, get_db_record) {
     }
 
     /* On 401/403, refresh the token and retry once. */
-    if (res.status === 401 || res.status === 403) {
+    if (res.status === 401 || res.status === 403 || res.status === 412) {
         try {
             token_holder[0] = await aspace.get_session_token();
             res = await aspace.get_record(row.uri, token_holder[0]);

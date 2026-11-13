@@ -171,6 +171,7 @@ module.exports = function create_app() {
      * existing /objects/:pid/* routes. Staff-only.
      */
     require('../convert/dashboard_routes')(app);
+    require('../aspace_links/dashboard_routes')(app);
 
     /*
      * Public API v1 — ES-backed search + object detail + thumbnail proxy +

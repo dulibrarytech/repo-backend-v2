@@ -57,6 +57,7 @@ async function reset_data() {
      */
     await db_queue()(tables.convert_queue).del();
     await db_queue()(tables.convert_batches).del();
+    await db_queue()(tables.aspace_links).del();
 }
 
 async function teardown() {

@@ -32,6 +32,7 @@ const {
     set_active_worker: set_active_ingest_worker,
 } = require('./ingester/worker');
 const { create_worker: create_convert_worker } = require('./convert/worker');
+const { create_worker: create_aspace_links_worker } = require('./aspace_links/worker');
 
 const cfg = app_config();
 const app = create_app();
@@ -68,6 +69,7 @@ set_active_ingest_worker(ingest_worker);
  * from the dashboard (/dashboard/admin/convert). See convert/worker.js.
  */
 const convert_worker = create_convert_worker();
+const aspace_links_worker = create_aspace_links_worker();
 
 let server = null;
 let shutting_down = false;
@@ -115,6 +117,7 @@ async function shutdown(signal) {
              * plenty for the abort + the row release to land.
              */
             convert_worker.stop({ timeout_ms: 8000 }),
+            aspace_links_worker.stop({ timeout_ms: 8000 }),
         ]);
         log.info({ event: 'shutdown', msg: 'workers stopped' });
         await db_module.destroy_all();
@@ -198,6 +201,9 @@ if (require.main === module) {
         });
         convert_worker.start().catch((err) => {
             log.error({ event: 'convert_worker_start_failed', err: err.message });
+        });
+        aspace_links_worker.start().catch((err) => {
+            log.error({ event: 'aspace_links_worker_start_failed', err: err.message });
         });
     });
 }

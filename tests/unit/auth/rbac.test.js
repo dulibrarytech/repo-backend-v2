@@ -51,6 +51,12 @@ describe('auth/rbac', () => {
             expect(has_permission('viewer', PERMISSIONS.MANAGE_HANDLES)).toBe(false);
         });
 
+        it('only admin manages ArchivesSpace links', () => {
+            expect(has_permission('admin', PERMISSIONS.MANAGE_ASPACE_LINKS)).toBe(true);
+            expect(has_permission('staff', PERMISSIONS.MANAGE_ASPACE_LINKS)).toBe(false);
+            expect(has_permission('viewer', PERMISSIONS.MANAGE_ASPACE_LINKS)).toBe(false);
+        });
+
         it('unknown role / unknown permission / nullish → false', () => {
             expect(has_permission('nope', PERMISSIONS.VIEW_REPOSITORY)).toBe(false);
             expect(has_permission('admin', 'not_a_permission')).toBe(false);

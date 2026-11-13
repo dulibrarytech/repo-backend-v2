@@ -42,4 +42,5 @@ module.exports = {
     convert_batches: process.env.REPO_CONVERT_BATCHES || 'tbl_convert_batches',
     kaltura_ids: process.env.REPO_KALTURA_IDS || 'tbl_kaltura_ids',
     kaltura_package_queue: process.env.REPO_KALTURA_PACKAGE_QUEUE || 'tbl_kaltura_package_queue',
+    aspace_links: process.env.REPO_ASPACE_LINKS || 'tbl_aspace_links',
 };

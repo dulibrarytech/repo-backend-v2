@@ -26,6 +26,7 @@ const { randomUUID } = require('node:crypto');
 const aspace_default = require('../libs/archivesspace');
 const repo_model_default = require('./model');
 const handles_default = require('../libs/handles');
+const aspace_links_model = require('../aspace_links/model');
 const log = require('../libs/log');
 
 /*
@@ -135,6 +136,11 @@ async function provision_collection({ uri, parent_collection_pid } = {}, deps = 
             parent_collection_pid: parent_collection_pid || null,
             handle: handle_url || null,
         });
+        if (handle_url) {
+            await aspace_links_model.enqueue([uri]).catch((err) => {
+                log.warn({ event: 'collection_aspace_link_queue_failed', uri, err: err.message });
+            });
+        }
         return {
             ok: true,
             collection_pid: created.pid,

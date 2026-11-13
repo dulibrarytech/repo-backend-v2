@@ -47,6 +47,7 @@ const model_default = require('../model');
 const jobs_default = require('../jobs');
 const kaltura_model_default = require('../../kaltura/model');
 const convert_model_default = require('../../convert/model');
+const aspace_links_model_default = require('../../aspace_links/model');
 const { ValidationError } = require('../../libs/errors');
 const app_config = require('../../config/app');
 const { sleep_or_abort } = require('../lib/polling');
@@ -80,6 +81,7 @@ async function run(row, deps = {}) {
     const jobs = deps.jobs || jobs_default;
     const kaltura_model = deps.kaltura_model || kaltura_model_default;
     const convert_model = deps.convert_model || convert_model_default;
+    const aspace_links_model = deps.aspace_links_model || aspace_links_model_default;
     const signal = deps.signal;
 
     if (!row.sip_uuid || row.sip_uuid === 'PENDING') {
@@ -331,6 +333,24 @@ async function run(row, deps = {}) {
         } else {
             log.warn({
                 event: 'ingest_convert_autoqueue_failed',
+                queue_id: row.id,
+                pid: object_row.pid,
+                err: err.message,
+            });
+        }
+    }
+
+    if (handle_url) {
+        try {
+            await aspace_links_model.enqueue([object_row.uri]);
+            log.info({
+                event: 'ingest_aspace_link_queued',
+                queue_id: row.id,
+                pid: object_row.pid,
+            });
+        } catch (err) {
+            log.warn({
+                event: 'ingest_aspace_link_queue_failed',
                 queue_id: row.id,
                 pid: object_row.pid,
                 err: err.message,

@@ -10,6 +10,7 @@ const {
     create_holder,
     holder_for,
     fetch_record_with_retry,
+    request_with_retry,
 } = require('../../../libs/aspace_session');
 
 function make_aspace({ tokens = ['tok-1', 'tok-2', 'tok-3'], responses = [] } = {}) {
@@ -87,6 +88,19 @@ describe('libs/aspace_session', () => {
             const res = await fetch_record_with_retry('/r/2', { aspace, sleep: no_sleep });
             expect(res.status).toBe(200);
             expect(aspace.calls.logins).toBe(2); // initial mint + refresh
+            expect(aspace.calls.gets[1].token).toBe('tok-2');
+        });
+
+        it('refreshes the session once when it is gone (412) and re-fetches', async () => {
+            const aspace = make_aspace({
+                responses: [
+                    { status: 412, data: { code: 'SESSION_GONE' } },
+                    { status: 200, data: { title: 'ok' } },
+                ],
+            });
+            const res = await fetch_record_with_retry('/r/2b', { aspace, sleep: no_sleep });
+            expect(res.status).toBe(200);
+            expect(aspace.calls.logins).toBe(2);
             expect(aspace.calls.gets[1].token).toBe('tok-2');
         });
 
@@ -181,6 +195,83 @@ describe('libs/aspace_session', () => {
              * dead session.
              */
             expect(aspace.calls.logins).toBe(3);
+        });
+    });
+
+    describe('request_with_retry', () => {
+        it('runs the call with the shared session token and returns its response', async () => {
+            const aspace = make_aspace();
+            const tokens = [];
+            const res = await request_with_retry(
+                async (token) => {
+                    tokens.push(token);
+                    return { status: 200, data: { status: 'Updated' } };
+                },
+                { aspace, sleep: no_sleep }
+            );
+            expect(res.data.status).toBe('Updated');
+            expect(tokens).toEqual(['tok-1']);
+            expect(aspace.calls.logins).toBe(1);
+        });
+
+        it('refreshes the session once on 403 and returns the second answer', async () => {
+            const aspace = make_aspace();
+            const tokens = [];
+            const res = await request_with_retry(
+                async (token) => {
+                    tokens.push(token);
+                    return { status: 403, data: { error: 'Access denied' } };
+                },
+                { aspace, sleep: no_sleep }
+            );
+            expect(res.status).toBe(403);
+            expect(tokens).toEqual(['tok-1', 'tok-2']);
+        });
+
+        it('signs in again when ArchivesSpace says the session is gone (412)', async () => {
+            const aspace = make_aspace();
+            const tokens = [];
+            const res = await request_with_retry(
+                async (token) => {
+                    tokens.push(token);
+                    return tokens.length === 1
+                        ? { status: 412, data: { code: 'SESSION_GONE' } }
+                        : { status: 200, data: [] };
+                },
+                { aspace, sleep: no_sleep }
+            );
+            expect(res.status).toBe(200);
+            expect(tokens).toEqual(['tok-1', 'tok-2']);
+            expect(aspace.calls.logins).toBe(2);
+        });
+
+        it('returns a 409 conflict to the caller without retrying', async () => {
+            const aspace = make_aspace();
+            let calls = 0;
+            const res = await request_with_retry(
+                async () => {
+                    calls++;
+                    return { status: 409, data: { error: 'modified' } };
+                },
+                { aspace, sleep: no_sleep }
+            );
+            expect(res.status).toBe(409);
+            expect(calls).toBe(1);
+        });
+
+        it('retries a 5xx answer and names the label when attempts run out', async () => {
+            const aspace = make_aspace();
+            let calls = 0;
+            await expect(
+                request_with_retry(
+                    async () => {
+                        calls++;
+                        return { status: 503, data: null };
+                    },
+                    { aspace, attempts: 2, sleep: no_sleep, label: '/repositories/2/resources/7' }
+                )
+            ).rejects.toThrow('ArchivesSpace /repositories/2/resources/7 returned HTTP 503');
+            expect(calls).toBe(2);
         });
     });
 });

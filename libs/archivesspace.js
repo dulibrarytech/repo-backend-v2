@@ -24,7 +24,7 @@
 const http_default = require('axios');
 const app_config = require('../config/app');
 const log = require('./log');
-const { UpstreamError, UnauthorizedError } = require('./errors');
+const { UpstreamError, UnauthorizedError, ForbiddenError } = require('./errors');
 const { transform } = require('./archivesspace_transform');
 
 function is_configured() {
@@ -67,6 +67,24 @@ const RESOLVE_PARAMS = [
  * the module-level axios import. Production callers get the default.
  */
 function create_client(http = http_default) {
+    async function get_native(uri, token, params) {
+        const cfg = app_config().archivespace;
+        if (typeof uri !== 'string' || !uri.startsWith('/')) {
+            throw new UpstreamError(`Invalid ArchivesSpace URI: ${uri}`);
+        }
+        try {
+            return await http.get(`${base_url()}${uri}`, {
+                timeout: cfg.timeout_ms,
+                headers: { 'X-ArchivesSpace-Session': token },
+                params,
+                validateStatus: () => true,
+            });
+        } catch (err) {
+            log.warn({ event: 'aspace_fetch_failed', uri, err: err.message });
+            throw new UpstreamError(`ArchivesSpace fetch failed: ${err.message}`);
+        }
+    }
+
     return {
         is_configured,
 
@@ -190,6 +208,34 @@ function create_client(http = http_default) {
             } catch (err) {
                 log.warn({ event: 'aspace_fetch_failed', uri, err: err.message });
                 throw new UpstreamError(`ArchivesSpace fetch failed: ${err.message}`);
+            }
+        },
+
+        get_native,
+
+        async get_native_set(listing_uri, ids, token) {
+            return get_native(listing_uri, token, { id_set: ids.join(',') });
+        },
+
+        async update_record(uri, record, token) {
+            const cfg = app_config().archivespace;
+            if (!cfg.writes_enabled) {
+                throw new ForbiddenError(
+                    'ArchivesSpace writes are disabled (ASPACE_WRITES_ENABLED is off)'
+                );
+            }
+            if (typeof uri !== 'string' || !uri.startsWith('/')) {
+                throw new UpstreamError(`Invalid ArchivesSpace URI: ${uri}`);
+            }
+            try {
+                return await http.post(`${base_url()}${uri}`, record, {
+                    timeout: cfg.timeout_ms,
+                    headers: { 'X-ArchivesSpace-Session': token },
+                    validateStatus: () => true,
+                });
+            } catch (err) {
+                log.warn({ event: 'aspace_update_failed', uri, err: err.message });
+                throw new UpstreamError(`ArchivesSpace update failed: ${err.message}`);
             }
         },
 

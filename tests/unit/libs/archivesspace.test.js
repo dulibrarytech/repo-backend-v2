@@ -8,7 +8,7 @@
 
 const aspace_module = require('../../../libs/archivesspace');
 const app_config = require('../../../config/app');
-const { UpstreamError, UnauthorizedError } = require('../../../libs/errors');
+const { UpstreamError, UnauthorizedError, ForbiddenError } = require('../../../libs/errors');
 
 /*
  * Tiny axios-shaped fake. Each method records its calls and returns
@@ -345,6 +345,119 @@ describe('libs/archivesspace', () => {
             await expect(client.ping()).resolves.toBe(false);
             // No HTTP attempted when unconfigured.
             expect(http.calls.post).toHaveLength(0);
+        });
+    });
+
+    describe('get_native', () => {
+        it('GETs <base><uri> with the session header, no suffix and no params', async () => {
+            const http = make_fake_http();
+            const raw = { jsonmodel_type: 'archival_object', lock_version: 4 };
+            http.set_response({ status: 200, data: raw });
+            const client = aspace_module.create_client(http);
+            const res = await client.get_native('/repositories/2/archival_objects/12', 'tok');
+            expect(res.data).toBe(raw);
+            const call = http.calls.get[0];
+            expect(call.url).toBe('https://aspace.example/api/repositories/2/archival_objects/12');
+            expect(call.opts.headers['X-ArchivesSpace-Session']).toBe('tok');
+            expect(call.opts.timeout).toBe(5000);
+            expect(call.opts.params).toBeUndefined();
+        });
+
+        it('rejects URIs that do not start with /', async () => {
+            const client = aspace_module.create_client(make_fake_http());
+            await expect(client.get_native('repositories/2/resources/12', 'tok')).rejects.toThrow(
+                /Invalid ArchivesSpace URI/
+            );
+        });
+
+        it('returns 4xx responses without throwing', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 404, data: { error: 'ArchivalObject not found' } });
+            const client = aspace_module.create_client(http);
+            const res = await client.get_native('/repositories/2/archival_objects/1', 'tok');
+            expect(res.status).toBe(404);
+        });
+
+        it('throws UpstreamError on transport failure', async () => {
+            const http = make_fake_http();
+            http.set_response({ throw: new Error('ECONNRESET') });
+            const client = aspace_module.create_client(http);
+            await expect(client.get_native('/foo', 'tok')).rejects.toBeInstanceOf(UpstreamError);
+        });
+    });
+
+    describe('get_native_set', () => {
+        it('GETs the listing with the ids as one comma-separated id_set', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 200, data: [] });
+            const client = aspace_module.create_client(http);
+            await client.get_native_set('/repositories/2/archival_objects', [5, 9, 12], 'tok');
+            const call = http.calls.get[0];
+            expect(call.url).toBe('https://aspace.example/api/repositories/2/archival_objects');
+            expect(call.opts.params).toEqual({ id_set: '5,9,12' });
+            expect(call.opts.headers['X-ArchivesSpace-Session']).toBe('tok');
+        });
+    });
+
+    describe('update_record', () => {
+        const uri = '/repositories/2/archival_objects/12';
+        const record = { jsonmodel_type: 'archival_object', lock_version: 4, title: 'Item' };
+
+        it('refuses, without any request, unless ASPACE_WRITES_ENABLED is on', async () => {
+            const http = make_fake_http();
+            const client = aspace_module.create_client(http);
+            await expect(client.update_record(uri, record, 'tok')).rejects.toBeInstanceOf(
+                ForbiddenError
+            );
+            expect(http.calls.post).toHaveLength(0);
+        });
+
+        describe('with ASPACE_WRITES_ENABLED on', () => {
+            beforeEach(() => {
+                process.env.ASPACE_WRITES_ENABLED = '1';
+                app_config._reset();
+            });
+
+            it('POSTs the whole record to <base><uri> with the session header', async () => {
+                const http = make_fake_http();
+                http.set_response({ status: 200, data: { status: 'Updated', lock_version: 5 } });
+                const client = aspace_module.create_client(http);
+                const res = await client.update_record(uri, record, 'tok');
+                expect(res.status).toBe(200);
+                const call = http.calls.post[0];
+                expect(call.url).toBe(
+                    'https://aspace.example/api/repositories/2/archival_objects/12'
+                );
+                expect(call.body).toBe(record);
+                expect(call.opts.headers['X-ArchivesSpace-Session']).toBe('tok');
+                expect(call.opts.timeout).toBe(5000);
+            });
+
+            it('returns a 409 conflict without throwing', async () => {
+                const http = make_fake_http();
+                http.set_response({ status: 409, data: { error: 'modified since you fetched' } });
+                const client = aspace_module.create_client(http);
+                const res = await client.update_record(uri, record, 'tok');
+                expect(res.status).toBe(409);
+            });
+
+            it('rejects URIs that do not start with /', async () => {
+                const http = make_fake_http();
+                const client = aspace_module.create_client(http);
+                await expect(client.update_record('repositories/2', record, 'tok')).rejects.toThrow(
+                    /Invalid ArchivesSpace URI/
+                );
+                expect(http.calls.post).toHaveLength(0);
+            });
+
+            it('throws UpstreamError on transport failure', async () => {
+                const http = make_fake_http();
+                http.set_response({ throw: new Error('ETIMEDOUT') });
+                const client = aspace_module.create_client(http);
+                await expect(client.update_record(uri, record, 'tok')).rejects.toBeInstanceOf(
+                    UpstreamError
+                );
+            });
         });
     });
 });

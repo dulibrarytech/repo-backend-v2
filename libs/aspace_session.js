@@ -111,16 +111,7 @@ function holder_for(aspace = aspace_default) {
     return holder;
 }
 
-/*
- * Fetch one record with session reuse + bounded retry.
- *
- * Returns the final { status, data } response for DEFINITIVE
- * statuses — the caller keeps its own 200/404/auth mapping. Throws
- * (the last transport error) only after `attempts` tries. Backoff:
- * base_ms * 2^(attempt-1), scaled by 0.5–1.5 jitter so concurrent
- * retries don't re-align into a new burst.
- */
-async function fetch_record_with_retry(uri, opts = {}) {
+async function request_with_retry(call, opts = {}) {
     const aspace = opts.aspace || aspace_default;
     const session = opts.session || holder_for(aspace);
     const attempts = opts.attempts || DEFAULT_ATTEMPTS;
@@ -144,8 +135,8 @@ async function fetch_record_with_retry(uri, opts = {}) {
         try {
             await _pace(min_interval_ms, sleep);
             let token = await session.get();
-            let res = await aspace.get_record(uri, token);
-            if (res.status === 401 || res.status === 403) {
+            let res = await call(token);
+            if (res.status === 401 || res.status === 403 || res.status === 412) {
                 /*
                  * Session expired or was culled server-side — refresh
                  * once and re-fetch. A 401 that SURVIVES the refresh
@@ -153,10 +144,10 @@ async function fetch_record_with_retry(uri, opts = {}) {
                  */
                 session.invalidate();
                 token = await session.get();
-                res = await aspace.get_record(uri, token);
+                res = await call(token);
             }
             if (res.status >= 500 || res.status === 429) {
-                last_err = new Error(`ArchivesSpace ${uri} returned HTTP ${res.status}`);
+                last_err = new Error(`ArchivesSpace ${opts.label} returned HTTP ${res.status}`);
             } else {
                 return res;
             }
@@ -173,7 +164,7 @@ async function fetch_record_with_retry(uri, opts = {}) {
             const delay = Math.round(base_ms * 2 ** (attempt - 1) * (0.5 + Math.random()));
             log.warn({
                 event: 'aspace_fetch_retry',
-                uri,
+                uri: opts.label,
                 attempt,
                 of: attempts,
                 delay_ms: delay,
@@ -185,4 +176,22 @@ async function fetch_record_with_retry(uri, opts = {}) {
     throw last_err;
 }
 
-module.exports = { create_holder, holder_for, fetch_record_with_retry };
+/*
+ * Fetch one record with session reuse + bounded retry.
+ *
+ * Returns the final { status, data } response for DEFINITIVE
+ * statuses — the caller keeps its own 200/404/auth mapping. Throws
+ * (the last transport error) only after `attempts` tries. Backoff:
+ * base_ms * 2^(attempt-1), scaled by 0.5–1.5 jitter so concurrent
+ * retries don't re-align into a new burst.
+ */
+async function fetch_record_with_retry(uri, opts = {}) {
+    const aspace = opts.aspace || aspace_default;
+    return request_with_retry((token) => aspace.get_record(uri, token), {
+        ...opts,
+        aspace,
+        label: uri,
+    });
+}
+
+module.exports = { create_holder, holder_for, fetch_record_with_retry, request_with_retry };

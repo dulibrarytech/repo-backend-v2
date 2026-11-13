@@ -1,0 +1,74 @@
+<h1 class="page-title">ArchivesSpace Links</h1>
+<p class="page-subtitle">
+    Keeps each ArchivesSpace record pointing at the handle of its repository
+    object. New ingests are checked automatically.
+</p>
+
+<div class="content-card">
+    <div class="content-card-header">
+        <h2 style="font-size: 18px; margin: 0;">Status</h2>
+        <div class="control-group">
+            <span class="htmx-indicator">
+                <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+            </span>
+        </div>
+    </div>
+
+    <div id="aspace-links-status"
+         hx-get="<%= dashboard_base %>/admin/aspace-links/status"
+         hx-trigger="every 10s, aspace-links-status from:body"
+         hx-swap="innerHTML"
+         role="status"
+         aria-live="polite"
+         aria-atomic="false">
+        <%- include('../partials/aspace_links_status', {
+            dashboard_base: dashboard_base,
+            summary: summary,
+            labels: labels,
+            worker_enabled: worker_enabled,
+            writes_enabled: writes_enabled
+        }) %>
+    </div>
+
+    <%
+        let confirm_text = 'Check every repository record against ArchivesSpace? Nothing will be changed. This runs in the background and can take over an hour.';
+        if (writes_enabled) {
+            confirm_text = 'Check every repository record against ArchivesSpace and update the ones that are out of date? This runs in the background and can take a few hours.';
+        }
+        if (!worker_enabled) {
+            confirm_text = 'Queue every repository record for a check? Automatic checking is off, so nothing is checked until it is turned on.';
+        }
+    %>
+    <form hx-post="<%= dashboard_base %>/admin/aspace-links/check-all"
+          hx-target="#aspace-links-status"
+          hx-swap="innerHTML"
+          style="margin: 0;">
+        <button type="submit"
+                class="btn btn-primary"
+                data-confirm="<%= confirm_text %>"
+                data-confirm-title="Check all records?"
+                data-confirm-label="Check all">
+            Check all records
+        </button>
+    </form>
+</div>
+
+<div class="content-card" style="margin-top: 16px;">
+    <div id="aspace-links-list"
+         hx-get="<%= dashboard_base %>/admin/aspace-links/list"
+         hx-trigger="aspace-links-changed from:body"
+         hx-include="#aspace-links-state"
+         hx-swap="innerHTML"
+         role="region"
+         aria-label="Records"
+         aria-live="polite"
+         aria-atomic="false">
+        <%- include('../partials/aspace_links_list', {
+            dashboard_base: dashboard_base,
+            rows: rows,
+            total: total,
+            state_filter: state_filter,
+            labels: labels
+        }) %>
+    </div>
+</div>

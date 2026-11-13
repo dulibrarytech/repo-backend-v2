@@ -1,0 +1,82 @@
+<div class="content-card-header">
+    <h2 style="font-size: 18px; margin: 0;">Records</h2>
+    <div class="control-group">
+        <label for="aspace-links-state" class="visually-hidden">Show records by result</label>
+        <select id="aspace-links-state"
+                name="state"
+                class="form-select form-select-sm"
+                style="width: auto;"
+                hx-get="<%= dashboard_base %>/admin/aspace-links/list"
+                hx-target="#aspace-links-list"
+                hx-swap="innerHTML">
+            <option value=""<%= state_filter === '' ? ' selected' : '' %>>Needs attention</option>
+            <% Object.keys(labels).forEach(function (state) { %>
+                <option value="<%= state %>"<%= state_filter === state ? ' selected' : '' %>><%= labels[state] %></option>
+            <% }); %>
+        </select>
+        <% if (state_filter && rows.length > 0) { %>
+            <form hx-post="<%= dashboard_base %>/admin/aspace-links/recheck"
+                  hx-target="#aspace-links-list"
+                  hx-swap="innerHTML"
+                  style="margin: 0;">
+                <input type="hidden" name="state" value="<%= state_filter %>">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">
+                    Check these again
+                </button>
+            </form>
+        <% } %>
+        <span class="htmx-indicator">
+            <span class="spinner-border spinner-border-sm text-muted" role="status" aria-label="Loading"></span>
+        </span>
+    </div>
+</div>
+
+<% if (rows.length === 0) { %>
+    <p class="text-muted" style="margin: 0;">
+        <% if (state_filter) { %>
+            No records with this result.
+        <% } else { %>
+            No records need attention.
+        <% } %>
+    </p>
+<% } else { %>
+    <table class="queue-table">
+        <caption class="visually-hidden">ArchivesSpace records and the result of their last check</caption>
+        <thead>
+            <tr>
+                <th>ArchivesSpace record</th>
+                <th>Repository object</th>
+                <th>Result</th>
+                <th>Checked (UTC)</th>
+            </tr>
+        </thead>
+        <tbody>
+        <% rows.forEach(function (row) { %>
+            <tr>
+                <td><code><%= row.uri %></code></td>
+                <td>
+                    <% row.pids.forEach(function (pid) { %>
+                        <div><code><%= pid %></code></div>
+                    <% }); %>
+                </td>
+                <td>
+                    <%= labels[row.state] || row.state %>
+                    <% row.notes.forEach(function (note) { %>
+                        <div style="font-size: 12px; color: var(--text-muted, #6c757d); word-break: break-word;">
+                            <%= note %>
+                        </div>
+                    <% }); %>
+                </td>
+                <td style="white-space: nowrap;">
+                    <%= row.checked_at ? new Date(row.checked_at).toISOString().slice(0, 16).replace('T', ' ') : '' %>
+                </td>
+            </tr>
+        <% }); %>
+        </tbody>
+    </table>
+    <% if (total > rows.length) { %>
+        <p class="text-muted" style="margin: 12px 0 0; font-size: 13px;">
+            Showing the <%= rows.length %> most recent of <%= total.toLocaleString() %>.
+        </p>
+    <% } %>
+<% } %>
