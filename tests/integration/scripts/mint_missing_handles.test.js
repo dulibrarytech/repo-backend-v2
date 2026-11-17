@@ -191,6 +191,35 @@ describe('scripts/mint_missing_handles run', () => {
         expect(await row_of(MISSING)).toEqual(before);
     });
 
+    it('gives a handle to an object that has none only when the object is named', async () => {
+        const server = handle_server();
+        const uri = '/repositories/2/archival_objects/5150';
+        const nameless = await db_helper.seed_object({
+            uri,
+            handle: '',
+            created: '2023-09-14 01:00:00',
+            display_record: JSON.stringify({ title: 'No handle yet' }),
+        });
+
+        const swept = await run({ ...WINDOW, execute: true }, server);
+        expect(swept.by_pid.get(nameless.pid).skipped).toBe('unexpected stored handle');
+        expect(server.held.has(nameless.pid)).toBe(false);
+        expect((await row_of(nameless.pid)).handle).toBe('');
+
+        const chosen = await run({ pids: [nameless.pid], execute: true }, server);
+        expect(chosen.by_pid.get(nameless.pid)).toMatchObject({ mint: true, store: true });
+        expect(server.held.get(nameless.pid)).toBe(target(nameless.pid));
+        const row = await row_of(nameless.pid);
+        expect(row.handle).toBe(handle(nameless.pid));
+        expect(JSON.parse(row.display_record)).toEqual({
+            title: 'No handle yet',
+            handle: handle(nameless.pid),
+        });
+        expect(await db_queue()(tables.aspace_links).where({ uri }).first()).toMatchObject({
+            status: 'PENDING',
+        });
+    });
+
     it('never creates a handle for a deleted object or an unexpected stored value', async () => {
         const server = handle_server();
         const before = [await row_of(DELETED), await row_of(TEST)];

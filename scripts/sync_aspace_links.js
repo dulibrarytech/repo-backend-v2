@@ -19,15 +19,16 @@ const REPORTED_STATES = [...sync.ATTENTION_STATES, 'invalid_uri', 'orphan_link']
 
 const USAGE = `Usage: node scripts/sync_aspace_links.js [options]
 
-Checks that each ArchivesSpace record carries its repository handle: the
-"${link.LINK_TITLE}" link on the record, and the identifier of its digital
-object. Reports the differences. Writes nothing unless --execute is given.
+Adds the "${link.LINK_TITLE}" link to each ArchivesSpace record that has
+none yet, and the handle as the identifier of its digital object. A record
+that already has a link is never changed, and records already recorded as
+linked are not read at all. Reports what it finds. Writes nothing unless
+--execute is given.
 
   --execute            write the changes to ArchivesSpace
                        (also needs ASPACE_WRITES_ENABLED=1 on this host, and
                        ASPACE_WRITES_FROM_DEV=1 on a development host when
                        ArchivesSpace is on another machine)
-  --publish            also publish links that are correct but unpublished
   --pids a,b           only the records these repository objects point at
   --since YYYY-MM-DD   only records with an object created on or after this date
                        (the date in the database server's time zone)
@@ -46,7 +47,6 @@ function is_calendar_date(text) {
 function parse_args(argv) {
     const o = {
         execute: false,
-        publish: false,
         help: false,
         pids: null,
         since: null,
@@ -56,7 +56,6 @@ function parse_args(argv) {
     for (let i = 2; i < argv.length; i++) {
         const a = argv[i];
         if (a === '--execute') o.execute = true;
-        else if (a === '--publish') o.publish = true;
         else if (a === '--help') o.help = true;
         else if (a === '--out') o.out = String(argv[++i] || '');
         else if (a === '--pids') {
@@ -103,23 +102,16 @@ function print_summary(results, args, write) {
 
     const changed = results.filter((r) => ['pending', 'updated', 'failed'].includes(r.state));
     const changes = [
-        ...changed
-            .filter((r) => ['add', 'update', 'publish', 'remove'].includes(r.link))
-            .map((r) => `link ${r.link}`),
+        ...changed.map(() => 'link add'),
         ...changed
             .filter((r) => r.digital_object === 'update')
             .map(() => 'digital object identifier'),
     ];
     if (changes.length > 0) {
-        write(`\n  changes ${args.execute ? 'attempted' : 'that would be written'}\n`);
+        write(`\n  changes ${args.execute ? 'planned' : 'that would be written'}\n`);
         for (const [change, n] of tally(changes)) {
             write(`    ${String(n).padStart(6)}  ${change}\n`);
         }
-    }
-
-    const unpublished = results.filter((r) => r.link === 'unpublished').length;
-    if (unpublished > 0) {
-        write(`\n  ${unpublished} correct link(s) are unpublished; --publish would publish them\n`);
     }
 
     for (const state of REPORTED_STATES) {
@@ -165,7 +157,6 @@ async function run(args, deps) {
     write('\nSync repository handle links into ArchivesSpace\n');
     write(`  ArchivesSpace  ${cfg.archivespace.host}\n`);
     write(`  mode           ${args.execute ? 'EXECUTE' : 'dry run (no writes)'}\n`);
-    if (args.publish) write('  publish        correct but unpublished links are published too\n');
     if (args.pids) write(`  pids           ${args.pids.length}\n`);
     if (args.since) write(`  since          ${args.since}\n`);
     if (args.execute) {
@@ -174,9 +165,14 @@ async function run(args, deps) {
         );
     }
 
+    const linked = deps.linked_uris ? await deps.linked_uris() : new Set();
     const selected = select_targets(sync.build_targets(await deps.load_rows()), args);
-    const targets = selected.targets.sort((a, b) => a.listing.localeCompare(b.listing));
+    const targets = selected.targets
+        .filter((target) => !linked.has(target.uri))
+        .sort((a, b) => a.listing.localeCompare(b.listing));
     write(`\n  ${targets.length} ArchivesSpace record(s) to check\n`);
+    const skipped = selected.targets.length - targets.length;
+    if (skipped > 0) write(`  ${skipped} record(s) already linked, skipped\n`);
 
     const results = [];
     if (args.out) fs.writeFileSync(args.out, '');
@@ -188,13 +184,15 @@ async function run(args, deps) {
     };
     keep(selected.invalid.map((row) => ({ uri: row.uri, pids: [row.pid], state: 'invalid_uri' })));
 
-    const options = { prefix, publish: args.publish, execute: args.execute };
+    const options = { prefix, execute: args.execute };
+    let read_at = new Date();
     const sync_deps = {
         ...deps,
+        loaders: deps,
         on_outcome: async ({ result }) => {
             if (!result) return;
             keep([result]);
-            if (args.execute && deps.store) await deps.store(result);
+            if (args.execute && deps.store) await deps.store(result, read_at);
         },
         on_written: deps.log_change,
     };
@@ -202,6 +200,7 @@ async function run(args, deps) {
     let failures_in_a_row = 0;
     for (let at = 0; at < targets.length && !halted; at += args.batch_size) {
         const uris = targets.slice(at, at + args.batch_size).map((target) => target.uri);
+        read_at = new Date();
         const fresh = await sync.load_targets(uris, deps);
         const batch = uris.filter((uri) => fresh.has(uri)).map((uri) => fresh.get(uri));
         const synced = await sync.sync_targets(batch, { ...options, failures_in_a_row }, sync_deps);
@@ -234,14 +233,16 @@ async function main() {
         return 0;
     }
     const aspace = aspace_default;
-    const tables_ready = args.execute && (await links_model.is_ready().catch(() => false));
+    const tables_ready = await links_model.is_ready().catch(() => false);
     const deps = {
         aspace,
         write: (text) => process.stdout.write(text),
         load_rows: links_model.load_object_rows,
         load_rows_for: links_model.load_object_rows_for,
-        store: tables_ready ? links_model.store : null,
-        log_change: tables_ready ? links_model.log_change : null,
+        linked_uris: tables_ready ? links_model.linked_uris : null,
+        linked_handles: tables_ready ? links_model.linked_handles : null,
+        store: args.execute && tables_ready ? links_model.store : null,
+        log_change: args.execute && tables_ready ? links_model.log_change : null,
         request: (call, label) =>
             aspace_session.request_with_retry(call, {
                 aspace,

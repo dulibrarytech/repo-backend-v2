@@ -60,6 +60,7 @@ const tables = require('../config/db_tables');
 const app_config = require('../config/app');
 const handles = require('../libs/handles');
 const handle_writer = require('../libs/handle_writer');
+const links_model = require('../aspace_links/model');
 
 const DEFAULT_MAX_AGE_DAYS = 7;
 
@@ -87,7 +88,7 @@ function parse_args(argv) {
 /* The one DB read assess() needs, isolated so it can be injected. */
 async function fetch_object_row(pid) {
     return db()(tables.objects)
-        .select('pid', 'handle', 'is_active', 'is_published')
+        .select('pid', 'uri', 'handle', 'is_active', 'is_published')
         .where({ pid })
         .first();
 }
@@ -103,6 +104,7 @@ async function fetch_object_row(pid) {
 async function assess(pid, args, now, deps = {}) {
     const fetch_row = deps.fetch_row || fetch_object_row;
     const handles_client = deps.handles || handles;
+    const is_linked = deps.is_linked || links_model.is_linked_for;
 
     const cfg = app_config().handles;
     const verdict = { pid, ok: false, reason: null, handle: null, minted_at: null };
@@ -116,6 +118,12 @@ async function assess(pid, args, now, deps = {}) {
     /* Guard 2 + 3: never touch a live or published object's handle. */
     if (row.is_active === 1) { verdict.reason = 'object is ACTIVE'; return verdict; }
     if (row.is_published === 1) { verdict.reason = 'object is PUBLISHED'; return verdict; }
+    if (await is_linked(row.uri, pid)) {
+        verdict.reason =
+            'its ArchivesSpace record links to this handle; remove the link there, then use ' +
+            'Check these again under "Links to a deleted object"';
+        return verdict;
+    }
 
     let resolved;
     try {

@@ -205,24 +205,17 @@ describe('repository/model — DB integration', () => {
         ).rejects.toBeInstanceOf(NotFoundError);
     });
 
-    it('queues the ArchivesSpace record of an object it publishes, suppresses or deletes', async () => {
+    it('queues the ArchivesSpace record of an object it deletes, not of one it publishes or suppresses', async () => {
         const uri = '/repositories/2/archival_objects/5150';
         const queued = () => db_queue()(tables.aspace_links).where({ uri }).first();
         const seeded = await db_helper.seed_object({ uri, is_published: 0 });
 
         await repo_model.publish(seeded.pid);
-        expect(await queued()).toMatchObject({ status: 'PENDING' });
-
-        await db_queue()(tables.aspace_links).del();
         await repo_model.bulk_suppress([seeded.pid]);
-        expect(await queued()).toMatchObject({ status: 'PENDING' });
-
-        await db_queue()(tables.aspace_links).del();
         await repo_model.bulk_publish([seeded.pid]);
-        expect(await queued()).toMatchObject({ status: 'PENDING' });
-
         await repo_model.suppress(seeded.pid);
-        await db_queue()(tables.aspace_links).del();
+        expect(await queued()).toBeUndefined();
+
         await repo_model.soft_delete(seeded.pid, { delete_reason: 'test', actor: 'tester' });
         expect(await queued()).toMatchObject({ status: 'PENDING' });
 

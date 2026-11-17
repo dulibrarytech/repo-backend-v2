@@ -20,7 +20,6 @@ function row(overrides = {}) {
         handle: handle(PID),
         object_type: 'object',
         is_active: 1,
-        is_published: 1,
         created: new Date('2026-06-15T12:00:00Z'),
         ...overrides,
     };

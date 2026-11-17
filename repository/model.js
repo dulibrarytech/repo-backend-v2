@@ -251,9 +251,7 @@ async function set_publish_state(pid, value) {
         .where({ pid })
         .update({ is_published: value ? 1 : 0, is_updated: 1 });
     if (affected === 0) throw new NotFoundError(`Object ${pid} not found`);
-    const row = await get(pid);
-    await aspace_links.enqueue_safely([row.uri], 'object_publish_state');
-    return row;
+    return get(pid);
 }
 
 async function publish(pid) {
@@ -473,11 +471,6 @@ async function set_publish_state_bulk(pids, value) {
         .whereIn('pid', unique)
         .andWhere('is_active', 1)
         .update({ is_published: value ? 1 : 0, is_updated: 1 });
-    const changed = await db()(tables.objects).select('uri').whereIn('pid', unique);
-    await aspace_links.enqueue_safely(
-        changed.map((row) => row.uri),
-        'objects_publish_state'
-    );
     return { affected, pids: unique };
 }
 

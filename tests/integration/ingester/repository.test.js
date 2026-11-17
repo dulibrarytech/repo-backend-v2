@@ -384,6 +384,37 @@ describe('ingester/stages/repository', () => {
         expect(await db_queue()(tables.aspace_links)).toHaveLength(0);
     });
 
+    it('queues no link check for a test batch, which gets no handle on purpose', async () => {
+        const row = await seed_row({ metadata_uri: '/repositories/2/archival_objects/77' });
+        const out = await stage.run(row, {
+            duracloud: make_duracloud({ mets_xml: happy_mets() }),
+            handles: { ...make_handles(), is_skipped_batch: () => true },
+            model,
+        });
+        expect(out.ok).toBe(true);
+        expect(await db_queue()(tables.aspace_links)).toHaveLength(0);
+    });
+
+    it.each([
+        ['is refused', { status: 500 }],
+        ['cannot be asked for', { throws: true }],
+    ])('queues the record, so it is reported, when its handle %s', async (_label, failure) => {
+        const row = await seed_row({ metadata_uri: '/repositories/2/archival_objects/77' });
+        const out = await stage.run(row, {
+            duracloud: make_duracloud({ mets_xml: happy_mets() }),
+            handles: make_handles(failure),
+            model,
+        });
+        expect(out.ok).toBe(true);
+
+        const queued = await db_queue()(tables.aspace_links);
+        expect(queued).toHaveLength(1);
+        expect(queued[0]).toMatchObject({
+            uri: '/repositories/2/archival_objects/77',
+            status: 'PENDING',
+        });
+    });
+
     it('a link-queue failure never unwinds the completed ingest', async () => {
         const row = await seed_row();
         const out = await stage.run(row, {

@@ -24,7 +24,7 @@ const STATE_LABELS = Object.freeze({
     invalid_handle: 'Object has no usable handle',
     pending: 'Needs an update',
     unpublished_link: 'Link is not published',
-    unpublished_object: 'Object is not published',
+    link_removed: 'Link was removed in ArchivesSpace',
     orphan_link: 'Links to a deleted object',
     updated: 'Updated',
     in_sync: 'Up to date',
@@ -69,12 +69,6 @@ function notes_of(row) {
     const detail = row.detail || {};
     const notes = [];
     if (detail.link === 'add') notes.push('Found no repository link on the record.');
-    if (detail.link === 'update') notes.push(`Found the link pointing at ${detail.link_previous}`);
-    if (detail.link === 'remove') {
-        notes.push(
-            `Found the link ${detail.link_previous} published although the repository object is not.`
-        );
-    }
     if (detail.digital_object === 'update') {
         notes.push(`Found the digital object identifier ${detail.digital_object_previous}`);
     }

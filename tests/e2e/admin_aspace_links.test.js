@@ -7,9 +7,10 @@ const db_helper = require('../helpers/db');
 const jwt = require('../../libs/jwt');
 const app_config = require('../../config/app');
 const model = require('../../aspace_links/model');
+const { LINKED_STATES } = require('../../aspace_links/sync');
 const { db_queue } = require('../../config/db');
 const tables = require('../../config/db_tables');
-const { PID, TWIN, AO, RESOURCE, handle } = require('../helpers/aspace_links');
+const { PID, TWIN, AO, RESOURCE } = require('../helpers/aspace_links');
 
 const BASE = '/repo/dashboard/admin/aspace-links';
 const SECOND = '/repositories/2/archival_objects/2';
@@ -63,6 +64,7 @@ describe('admin ArchivesSpace links — e2e', () => {
             const res = await supertest(app).get(BASE).set('Cookie', cookie);
             expect(res.status).toBe(200);
             expect(res.text).toContain('<h1 class="page-title">ArchivesSpace Links</h1>');
+            expect(res.text).toContain('A record that already has a link is never changed.');
             expect(res.text).toContain('id="aspace-links-status"');
             expect(res.text).toContain(`${BASE}/status`);
             expect(res.text).toContain('id="aspace-links-list"');
@@ -89,7 +91,7 @@ describe('admin ArchivesSpace links — e2e', () => {
             [{ ASPACE_LINKS_WORKER_ENABLED: '1' }, 'Nothing will be changed.'],
             [
                 { ASPACE_LINKS_WORKER_ENABLED: '1', ASPACE_WRITES_ENABLED: '1' },
-                'update the ones that are out of date',
+                'Records already known to have a link are skipped.',
             ],
         ])('words the confirmation for %j', async (env, wording) => {
             const cookie = await cookie_for(
@@ -99,6 +101,23 @@ describe('admin ArchivesSpace links — e2e', () => {
             await with_env(env, async () => {
                 const res = await supertest(app).get(BASE).set('Cookie', cookie);
                 expect(res.text).toContain(wording);
+            });
+        });
+
+        it.each([
+            [{ ASPACE_LINKS_WORKER_ENABLED: '1' }, true],
+            [{ ASPACE_LINKS_WORKER_ENABLED: '1', ASPACE_WRITES_ENABLED: '1' }, true],
+            [{}, false],
+        ])('says how long a first check takes, for %j: %j', async (env, said) => {
+            const cookie = await cookie_for(`links-admin-hour-${Object.keys(env).length}`, 'admin');
+            await with_env(env, async () => {
+                const res = await supertest(app).get(BASE).set('Cookie', cookie);
+                expect(res.text).toContain('known to have a link');
+                expect(
+                    res.text.includes(
+                        'The first time it reads every record, which takes about an hour.'
+                    )
+                ).toBe(said);
             });
         });
 
@@ -234,8 +253,7 @@ describe('admin ArchivesSpace links — e2e', () => {
             await seed_checked(SECOND, { state: 'in_sync' });
             await seed_checked(RESOURCE, {
                 state: 'failed',
-                link: 'update',
-                link_previous: handle(TWIN),
+                link: 'add',
                 error: `${RESOURCE}: HTTP 400: refused`,
             });
 
@@ -245,28 +263,10 @@ describe('admin ArchivesSpace links — e2e', () => {
             expect(res.text).toContain(`<code>${TWIN}</code>`);
             expect(res.text).toContain('More than one object shares this record');
             expect(res.text).toContain('Update failed');
-            expect(res.text).toContain(`Found the link pointing at ${handle(TWIN)}`);
+            expect(res.text).toContain('Found no repository link on the record.');
             expect(res.text).toContain('HTTP 400: refused');
             expect(res.text).not.toContain(`<code>${SECOND}</code>`);
             expect(res.text).not.toContain('Check these again');
-        });
-
-        it('says when a link is waiting to be removed, and which one', async () => {
-            const cookie = await cookie_for('links-admin-remove', 'admin');
-            await seed_checked(AO, {
-                state: 'pending',
-                handle: handle(PID),
-                link: 'remove',
-                link_previous: handle(PID),
-            });
-
-            const res = await supertest(app)
-                .get(`${BASE}/list?state=pending`)
-                .set('Cookie', cookie);
-            expect(res.text).toContain(`<code>${AO}</code>`);
-            expect(res.text).toContain(
-                `Found the link ${handle(PID)} published although the repository object is not.`
-            );
         });
 
         it('shows why a record needs a review, in the default view', async () => {
@@ -292,16 +292,59 @@ describe('admin ArchivesSpace links — e2e', () => {
         it('filters by one result and offers to check those again', async () => {
             const cookie = await cookie_for('links-admin-9', 'admin');
             await seed_checked(AO, { state: 'contested' });
-            await seed_checked(SECOND, { state: 'in_sync' });
+            await seed_checked(SECOND, { state: 'failed' });
 
             const res = await supertest(app)
-                .get(`${BASE}/list?state=in_sync`)
+                .get(`${BASE}/list?state=contested`)
                 .set('Cookie', cookie);
-            expect(res.text).toContain(`<code>${SECOND}</code>`);
-            expect(res.text).not.toContain(`<code>${AO}</code>`);
-            expect(res.text).toContain('<option value="in_sync" selected>Up to date</option>');
+            expect(res.text).toContain(`<code>${AO}</code>`);
+            expect(res.text).not.toContain(`<code>${SECOND}</code>`);
+            expect(res.text).toContain(
+                '<option value="contested" selected>More than one object shares this record</option>'
+            );
             expect(res.text).toContain('Check these again');
-            expect(res.text).toContain('name="state" value="in_sync"');
+            expect(res.text).toContain('name="state" value="contested"');
+        });
+
+        it.each(LINKED_STATES)(
+            'lists the records with the result %s and offers to check those again',
+            async (state) => {
+                const cookie = await cookie_for(`links-admin-linked-${state}`, 'admin');
+                await seed_checked(SECOND, { state });
+                const res = await supertest(app)
+                    .get(`${BASE}/list?state=${state}`)
+                    .set('Cookie', cookie);
+                expect(res.text).toContain(`<code>${SECOND}</code>`);
+                expect(res.text).toContain('Check these again');
+                expect(res.text).toContain(`name="state" value="${state}"`);
+            }
+        );
+
+        it('names a record whose link was removed in ArchivesSpace', async () => {
+            const cookie = await cookie_for('links-admin-removed', 'admin');
+            await seed_checked(SECOND, { state: 'link_removed', link: 'add' });
+            const res = await supertest(app)
+                .get(`${BASE}/list?state=link_removed`)
+                .set('Cookie', cookie);
+            expect(res.text).toContain(
+                '<option value="link_removed" selected>Link was removed in ArchivesSpace</option>'
+            );
+            expect(res.text).toContain('Found no repository link on the record.');
+        });
+
+        it('offers Check these again on the page for the chosen result, never for the default view', async () => {
+            const cookie = await cookie_for('links-admin-page-recheck', 'admin');
+            await seed_checked(AO, { state: 'failed' });
+            await seed_checked(SECOND, { state: 'updated' });
+
+            const failed = await supertest(app).get(`${BASE}?state=failed`).set('Cookie', cookie);
+            expect(failed.text).toContain('Check these again');
+            const updated = await supertest(app).get(`${BASE}?state=updated`).set('Cookie', cookie);
+            expect(updated.text).toContain(`<code>${SECOND}</code>`);
+            expect(updated.text).toContain('Check these again');
+            const attention = await supertest(app).get(BASE).set('Cookie', cookie);
+            expect(attention.text).toContain(`<code>${AO}</code>`);
+            expect(attention.text).not.toContain('Check these again');
         });
 
         it('falls back to the default view for an unknown result', async () => {
@@ -407,6 +450,20 @@ describe('admin ArchivesSpace links — e2e', () => {
             expect(await row_for(SECOND)).toMatchObject({ status: 'PENDING' });
         });
 
+        it('leaves out the records that already have a link', async () => {
+            const cookie = await cookie_for('links-admin-13-linked', 'admin');
+            await db_helper.seed_object({ pid: PID, uri: AO });
+            await db_helper.seed_object({ pid: TWIN, uri: SECOND });
+            await seed_checked(AO, { state: 'in_sync' });
+
+            const res = await supertest(app).post(`${BASE}/check-all`).set('Cookie', cookie);
+            expect(JSON.parse(res.headers['hx-trigger']).toast.message).toBe(
+                'Queued 1 record to check.'
+            );
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'in_sync' });
+            expect(await row_for(SECOND)).toMatchObject({ status: 'PENDING' });
+        });
+
         it('is forbidden for staff and queues nothing', async () => {
             const cookie = await cookie_for('links-staff-3', 'staff');
             await db_helper.seed_object({ pid: PID, uri: AO });
@@ -438,6 +495,26 @@ describe('admin ArchivesSpace links — e2e', () => {
             expect(await row_for(SECOND)).toMatchObject({ status: 'DONE' });
             expect(res.text).toContain('No records with this result.');
         });
+
+        it.each(LINKED_STATES)(
+            'queues the records with the result %s again, keeping what was found',
+            async (state) => {
+                const cookie = await cookie_for(`links-admin-recheck-${state}`, 'admin');
+                await seed_checked(AO, { state });
+
+                const res = await supertest(app)
+                    .post(`${BASE}/recheck`)
+                    .set('Cookie', cookie)
+                    .type('form')
+                    .send({ state });
+                expect(res.status).toBe(200);
+                expect(JSON.parse(res.headers['hx-trigger']).toast).toEqual({
+                    level: 'success',
+                    message: 'Queued 1 record to check again.',
+                });
+                expect(await row_for(AO)).toMatchObject({ status: 'PENDING', state });
+            }
+        );
 
         it('changes nothing and says so for an unknown result', async () => {
             const cookie = await cookie_for('links-admin-15', 'admin');

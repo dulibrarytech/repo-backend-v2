@@ -29,6 +29,10 @@ const handles_default = require('../libs/handles');
 const aspace_links_model = require('../aspace_links/model');
 const log = require('../libs/log');
 
+function mints_handles(handles) {
+    return Boolean(handles && handles.is_configured && handles.is_configured());
+}
+
 /*
  * Best-effort handle mint for a freshly-generated collection PID. Returns
  * the handle URL on success, '' on any failure (unconfigured, HTTP error,
@@ -36,7 +40,7 @@ const log = require('../libs/log');
  * flaky handle service; an admin can backfill later.
  */
 async function mint_collection_handle(handles, pid) {
-    if (!handles || !handles.is_configured || !handles.is_configured()) {
+    if (!mints_handles(handles)) {
         log.info({ event: 'collection_handle_skipped', pid, reason: 'not_configured' });
         return '';
     }
@@ -136,7 +140,7 @@ async function provision_collection({ uri, parent_collection_pid } = {}, deps = 
             parent_collection_pid: parent_collection_pid || null,
             handle: handle_url || null,
         });
-        if (handle_url) {
+        if (handle_url || mints_handles(handles)) {
             await aspace_links_model.enqueue([uri]).catch((err) => {
                 log.error({ event: 'collection_aspace_link_queue_failed', uri, err: err.message });
             });

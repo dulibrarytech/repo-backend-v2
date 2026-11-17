@@ -71,12 +71,13 @@ async function ask(handles, pid) {
     }
 }
 
-async function assess(row, handles, prefix) {
+async function assess(row, handles, prefix, named = false) {
     const plan = { pid: row.pid, mint: false, store: false, skipped: null, failed: null };
     if (row.is_active !== 1) return { ...plan, skipped: 'deleted object' };
 
     const stored = link.handle_id(row.handle) === `${prefix}/${row.pid}`.toLowerCase();
-    if (!stored && !MINT_FAILURE.test(String(row.handle))) {
+    const never_stored = named && (row.handle === null || row.handle === '');
+    if (!stored && !never_stored && !MINT_FAILURE.test(String(row.handle))) {
         return { ...plan, skipped: 'unexpected stored handle' };
     }
     try {
@@ -144,7 +145,7 @@ async function run(args, deps = {}) {
 
     const rows = await load_rows(args);
     const plans = [];
-    for (const row of rows) plans.push(await assess(row, handles, prefix));
+    for (const row of rows) plans.push(await assess(row, handles, prefix, Boolean(args.pids)));
     for (const pid of args.pids || []) {
         if (!rows.some((row) => row.pid === pid)) {
             plans.push({ pid, mint: false, store: false, skipped: 'no such object', failed: null });

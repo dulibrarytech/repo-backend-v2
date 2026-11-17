@@ -6,6 +6,7 @@ const { db_queue } = require('../../../config/db');
 const tables = require('../../../config/db_tables');
 const log = require('../../../libs/log');
 const { provision_collection } = require('../../../repository/collection_provision');
+const cleanup = require('../../../scripts/delete_object_handles');
 const { PID, GONE, AO, RESOURCE, handle } = require('../../helpers/aspace_links');
 
 const SECOND = '/repositories/2/archival_objects/2';
@@ -90,6 +91,136 @@ describe('aspace_links/model', () => {
             const rows = await all_rows();
             expect(rows.map((row) => row.uri).sort()).toEqual([AO, SECOND, RESOURCE].sort());
         });
+
+        it('leaves out the records already linked, and queues the others again', async () => {
+            const uri_of = (n) => `/repositories/2/archival_objects/${100 + n}`;
+            const states = [
+                'in_sync',
+                'updated',
+                'unpublished_link',
+                'orphan_link',
+                'needs_review',
+                'failed',
+                'contested',
+            ];
+            for (const [n, state] of states.entries()) {
+                await db_helper.seed_object({ uri: uri_of(n) });
+                await model.store(result({ uri: uri_of(n), state }));
+            }
+            await db_helper.seed_object({ uri: uri_of(9) });
+
+            expect(await model.enqueue_all()).toBe(4);
+            const waiting = await db_queue()(tables.aspace_links)
+                .where({ status: 'PENDING' })
+                .orderBy('uri', 'asc');
+            expect(waiting.map((row) => row.uri)).toEqual([
+                uri_of(4),
+                uri_of(5),
+                uri_of(6),
+                uri_of(9),
+            ]);
+        });
+    });
+
+    describe('linked_uris', () => {
+        it('lists the records whose last finished check found a link', async () => {
+            await model.store(result({ uri: AO, state: 'in_sync' }));
+            await model.store(result({ uri: SECOND, state: 'needs_review' }));
+            await model.store(result({ uri: THIRD, state: 'orphan_link' }));
+            await model.store(result({ uri: RESOURCE, state: 'updated' }));
+            await model.enqueue([RESOURCE]);
+
+            expect([...(await model.linked_uris())].sort()).toEqual([AO, THIRD].sort());
+        });
+
+        it('counts a record whose link was removed in ArchivesSpace as settled', async () => {
+            await db_helper.seed_object({ uri: AO });
+            await model.store(result({ uri: AO, state: 'link_removed' }));
+
+            expect([...(await model.linked_uris())]).toEqual([AO]);
+            expect(await model.enqueue_all()).toBe(0);
+        });
+    });
+
+    describe('enqueue_all and stored addresses', () => {
+        it('leaves out a linked record whose stored address ends in a line break', async () => {
+            await db_helper.seed_object({ uri: `${AO}\n` });
+            await db_helper.seed_object({ uri: ` ${SECOND} ` });
+            await db_helper.seed_object({ uri: THIRD });
+            await model.store(result({ uri: AO, state: 'in_sync' }));
+            await model.store(result({ uri: SECOND, state: 'updated' }));
+
+            expect(await model.enqueue_all()).toBe(1);
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'in_sync' });
+            expect(await row_for(SECOND)).toMatchObject({ status: 'DONE', state: 'updated' });
+            expect(await row_for(THIRD)).toMatchObject({ status: 'PENDING' });
+        });
+    });
+
+    describe('linked_handles', () => {
+        it('gives the handle each record is remembered to have been linked with', async () => {
+            const marked = { state: 'contested', handle: undefined, linked: handle(GONE) };
+            await model.store(result({ uri: AO, state: 'in_sync' }));
+            await model.store(result({ uri: SECOND, ...marked }));
+            await model.store(result({ uri: THIRD, state: 'needs_review' }));
+            await model.store(result({ uri: RESOURCE, state: 'link_removed' }));
+            await model.enqueue([RESOURCE]);
+            await model.claim(10);
+
+            const found = await model.linked_handles([AO, SECOND, THIRD, RESOURCE, `${AO}9`]);
+            expect([...found].sort()).toEqual(
+                [
+                    [AO, handle(PID)],
+                    [SECOND, handle(GONE)],
+                    [RESOURCE, handle(PID)],
+                ].sort()
+            );
+        });
+
+        it('remembers nothing for a link that belonged to a deleted object', async () => {
+            await model.store({ uri: AO, pids: [GONE], state: 'orphan_link' });
+            expect([...(await model.linked_handles([AO]))]).toEqual([]);
+            expect([...(await model.linked_handles([]))]).toEqual([]);
+        });
+    });
+
+    describe('is_linked_for', () => {
+        it.each([
+            ['links to the deleted object', { state: 'orphan_link', pids: [GONE] }, true],
+            ['was linked for it at its last check', { state: 'updated', pids: [GONE] }, true],
+            ['is linked for another object', { state: 'in_sync', pids: [PID] }, false],
+            ['was never linked', { state: 'failed', pids: [GONE] }, false],
+        ])('says whether the record %s', async (_label, stored, expected) => {
+            await model.store(result({ uri: AO, ...stored }));
+            expect(await model.is_linked_for(`${AO}\n`, GONE)).toBe(expected);
+        });
+
+        it('is false without a record of the object', async () => {
+            expect(await model.is_linked_for(AO, GONE)).toBe(false);
+            expect(await model.is_linked_for('', GONE)).toBe(false);
+            expect(await model.is_linked_for(null, GONE)).toBe(false);
+        });
+
+        it('stops the handle cleanup script for an object its record still links to', async () => {
+            const deleted = await db_helper.seed_object({
+                pid: GONE,
+                uri: AO,
+                handle: handle(GONE),
+                is_active: 0,
+            });
+            await model.store({ uri: AO, pids: [GONE], state: 'orphan_link' });
+            const handles = {
+                get_handle: async () => {
+                    throw new Error('the handle server was asked');
+                },
+            };
+
+            const verdict = await cleanup.assess(deleted.pid, { max_age_days: 7 }, Date.now(), {
+                handles,
+            });
+            expect(verdict.ok).toBe(false);
+            expect(verdict.reason).toMatch(/^its ArchivesSpace record links to this handle/);
+        });
     });
 
     describe('load_object_rows', () => {
@@ -98,15 +229,7 @@ describe('aspace_links/model', () => {
             const rows = await model.load_object_rows();
             expect(rows).toHaveLength(1);
             expect(Object.keys(rows[0]).sort()).toEqual(
-                [
-                    'created',
-                    'handle',
-                    'is_active',
-                    'is_published',
-                    'object_type',
-                    'pid',
-                    'uri',
-                ].sort()
+                ['created', 'handle', 'is_active', 'object_type', 'pid', 'uri'].sort()
             );
             expect(rows[0]).toMatchObject({ pid: PID, uri: AO, is_active: 1 });
         });
@@ -211,6 +334,17 @@ describe('aspace_links/model', () => {
             await model.store(result({ uri: SECOND, state: 'in_sync' }));
             expect(await row_for(AO)).toMatchObject({ status: 'IN_PROGRESS', state: null });
             expect(await row_for(SECOND)).toMatchObject({ status: 'PENDING', state: null });
+        });
+
+        it('drops a result worked out before the record was last checked', async () => {
+            const read_at = new Date(Date.now() - 60000);
+            await model.store(result({ state: 'orphan_link', pids: [GONE] }));
+
+            await model.store(result({ state: 'in_sync' }), read_at);
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'orphan_link' });
+
+            await model.store(result({ state: 'in_sync' }), new Date(Date.now() + 60000));
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'in_sync' });
         });
     });
 
@@ -526,10 +660,25 @@ describe('aspace_links/model', () => {
             expect((await all_rows()).map((row) => row.uri)).toEqual([uri]);
         });
 
-        it('queues nothing when the collection has no handle', async () => {
+        it('queues nothing when handles are not set up on this server', async () => {
             const out = await provision_collection({ uri }, { aspace, handles: handles(false) });
             expect(out).toMatchObject({ ok: true, created: true });
             expect(await all_rows()).toHaveLength(0);
+        });
+
+        it.each([
+            ['refuses the new handle', async () => ({ status: 500 })],
+            [
+                'cannot be reached',
+                async () => {
+                    throw new Error('connect ECONNREFUSED');
+                },
+            ],
+        ])('queues the collection when the handle server %s', async (_label, create_handle) => {
+            const failing = { is_configured: () => true, create_handle };
+            const out = await provision_collection({ uri }, { aspace, handles: failing });
+            expect(out).toMatchObject({ ok: true, created: true });
+            expect((await all_rows()).map((row) => row.uri)).toEqual([uri]);
         });
     });
 });

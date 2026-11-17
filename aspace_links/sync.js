@@ -6,13 +6,19 @@ const RECORD_URI = /^\/repositories\/(\d+)\/(archival_objects|resources)\/(\d+)$
 const DIGITAL_OBJECT_URI = /^(\/repositories\/\d+\/digital_objects)\/(\d+)$/;
 const MAX_FAILURES_IN_A_ROW = 5;
 const MAX_REPLANS = 3;
-const IN_PLACE_ACTIONS = Object.freeze(['none', 'object_unpublished']);
 const ATTENTION_STATES = Object.freeze([
     'failed',
     'contested',
     'needs_review',
     'record_not_found',
     'invalid_handle',
+]);
+const LINKED_STATES = Object.freeze([
+    'in_sync',
+    'updated',
+    'unpublished_link',
+    'link_removed',
+    'orphan_link',
 ]);
 
 function record_uri(value) {
@@ -47,19 +53,40 @@ function build_targets(rows) {
 async function load_targets(uris, loaders) {
     const by_uri = (rows) =>
         new Map(build_targets(rows).targets.map((target) => [target.uri, target]));
-    const found = by_uri(await loaders.load_rows_for(uris));
-    return uris.every((uri) => found.has(uri)) ? found : by_uri(await loaders.load_rows());
+    let found = by_uri(await loaders.load_rows_for(uris));
+    if (!uris.every((uri) => found.has(uri))) found = by_uri(await loaders.load_rows());
+    if (loaders.linked_handles) {
+        for (const [uri, handle] of await loaders.linked_handles(uris)) {
+            if (found.has(uri)) found.get(uri).linked = handle;
+        }
+    }
+    return found;
+}
+
+function own_handle(row, options) {
+    return link.handle_id(row.handle) === `${options.prefix}/${row.pid}`.toLowerCase();
+}
+
+function kept_link(target) {
+    const id = link.handle_id(target.linked);
+    return Boolean(id) && target.live.some((row) => link.handle_id(row.handle) === id);
+}
+
+function base_of(target) {
+    const base = { uri: target.uri, pids: target.live.map((row) => row.pid) };
+    return kept_link(target) ? { ...base, linked: target.linked } : base;
 }
 
 function digital_object_refs_for(target, record) {
-    if (!record || target.live.length !== 1) return [];
+    if (!record || target.live.length !== 1 || kept_link(target)) return [];
     const row = target.live[0];
-    if (row.object_type === 'collection' || row.is_published !== 1) return [];
+    if (row.object_type === 'collection') return [];
+    if (link.plan_link(record, row.handle).action !== 'add') return [];
     return link.digital_object_refs(record);
 }
 
 function assess(target, record, digital_objects, options) {
-    const base = { uri: target.uri, pids: target.live.map((row) => row.pid) };
+    const base = base_of(target);
     const done = (state, extra = {}) => ({ result: { ...base, state, ...extra }, changes: [] });
 
     if (target.live.length > 1) return done('contested');
@@ -73,50 +100,59 @@ function assess(target, record, digital_objects, options) {
     }
 
     const row = target.live[0];
-    if (link.handle_id(row.handle) !== `${options.prefix}/${row.pid}`.toLowerCase()) {
-        return done('invalid_handle');
-    }
+    if (!own_handle(row, options)) return done('invalid_handle');
     if (!record) return done('record_not_found');
 
-    const published = row.is_published === 1;
-    const plan_link = (source) =>
-        link.plan_link(source, row.handle, {
-            publish: options.publish,
-            object_published: published,
-        });
+    const plan_link = (source) => link.plan_link(source, row.handle);
     const planned = plan_link(record);
     if (planned.action === 'ambiguous') {
         return done('needs_review', { note: 'The record has more than one repository link.' });
     }
+    const detail = { handle: row.handle, link: planned.action };
+    if (planned.action === 'other_link') {
+        return done('needs_review', {
+            ...detail,
+            link_previous: planned.previous,
+            note:
+                `The record already links to ${planned.previous}. To replace it, remove ` +
+                'that link in ArchivesSpace, then use Check these again.',
+        });
+    }
+    if (planned.action === 'none') return done('in_sync', detail);
+    if (planned.action === 'unpublished') return done('unpublished_link', detail);
+    if (base.linked) return done('link_removed', detail);
+
+    const refs = row.object_type === 'collection' ? [] : link.digital_object_refs(record);
+    if (refs.length > 1) {
+        return done('needs_review', {
+            ...detail,
+            digital_object: 'multiple',
+            note: 'More than one digital object is attached to the record.',
+        });
+    }
 
     const changes = [];
-    const detail = { handle: row.handle, link: planned.action };
-    if (published) detail.digital_object = 'absent';
-    if (planned.previous !== undefined) detail.link_previous = planned.previous;
-
-    const refs = digital_object_refs_for(target, record);
-    if (refs.length > 1) {
-        detail.digital_object = 'multiple';
-        detail.note = 'More than one digital object is attached to the record.';
-    }
+    detail.digital_object = 'absent';
     if (refs.length === 1) {
         const digital_object = digital_objects.get(refs[0]);
-        const plan_id = (source) => link.plan_digital_object(source, row.handle);
-        let planned_id = { action: 'not_found' };
-        if (digital_object) {
-            const shared = link
-                .linked_records(digital_object)
-                .some((linked) => linked !== target.uri);
-            planned_id = shared ? { action: 'shared' } : plan_id(digital_object);
-        }
-        detail.digital_object = planned_id.action;
         detail.digital_object_uri = refs[0];
         if (!digital_object) {
-            detail.note = 'The digital object attached to the record could not be read.';
+            return done('needs_review', {
+                ...detail,
+                digital_object: 'not_found',
+                note: 'The digital object attached to the record could not be read.',
+            });
         }
-        if (planned_id.action === 'shared') {
-            detail.note = 'The digital object is also attached to another record.';
+        if (link.linked_records(digital_object).some((linked) => linked !== target.uri)) {
+            return done('needs_review', {
+                ...detail,
+                digital_object: 'shared',
+                note: 'The digital object is also attached to another record.',
+            });
         }
+        const plan_id = (source) => link.plan_digital_object(source, row.handle);
+        const planned_id = plan_id(digital_object);
+        detail.digital_object = planned_id.action;
         if (planned_id.record) {
             detail.digital_object_previous = planned_id.previous;
             changes.push({
@@ -127,16 +163,8 @@ function assess(target, record, digital_objects, options) {
             });
         }
     }
-    if (planned.record) {
-        changes.push({ uri: target.uri, field: 'link', ...planned, replan: plan_link });
-    }
-
-    let state = 'in_sync';
-    if (changes.length > 0) state = 'pending';
-    else if (detail.note) state = 'needs_review';
-    else if (planned.action === 'unpublished') state = 'unpublished_link';
-    else if (planned.action === 'object_unpublished') state = 'unpublished_object';
-    return { result: { ...base, state, ...detail }, changes };
+    changes.push({ uri: target.uri, field: 'link', ...planned, replan: plan_link });
+    return { result: { ...base, state: 'pending', ...detail }, changes };
 }
 
 function error_text(res) {
@@ -229,7 +257,7 @@ async function write_change(change, deps) {
         if (fresh.status !== 200) return { ok: false, error: error_text(fresh) };
         plan = change.replan(fresh.data);
         if (!plan.record) {
-            if (IN_PLACE_ACTIONS.includes(plan.action)) {
+            if (plan.action === 'none') {
                 return {
                     ok: true,
                     written: { action: change.action, previous: change.previous ?? null },
@@ -251,8 +279,6 @@ async function write_change(change, deps) {
 }
 
 async function apply_changes(assessed, deps) {
-    const errors = [];
-    let transient = false;
     for (const change of assessed.changes) {
         let outcome;
         try {
@@ -267,22 +293,18 @@ async function apply_changes(assessed, deps) {
                 uri: change.uri,
                 field: change.field,
                 ...outcome.written,
-                value: outcome.written.action === 'remove' ? null : assessed.result.handle,
+                value: assessed.result.handle,
                 pids: assessed.result.pids,
             });
         }
         if (!outcome.ok) {
-            errors.push(`${change.uri}: ${outcome.error}`);
-            transient = transient || Boolean(outcome.transient);
+            assessed.result.state = 'failed';
+            assessed.result.error = `${change.uri}: ${outcome.error}`;
+            return Boolean(outcome.transient);
         }
     }
-    if (errors.length > 0) {
-        assessed.result.state = 'failed';
-        assessed.result.error = errors.join('; ');
-    } else {
-        assessed.result.state = assessed.result.note ? 'needs_review' : 'updated';
-    }
-    return { ok: errors.length === 0, transient };
+    assessed.result.state = 'updated';
+    return false;
 }
 
 async function settle(run, target, result) {
@@ -292,12 +314,13 @@ async function settle(run, target, result) {
 }
 
 function unreadable_result(target, err) {
-    return {
-        uri: target.uri,
-        pids: target.live.map((row) => row.pid),
-        state: 'needs_review',
-        error: err.message,
-    };
+    return { ...base_of(target), state: 'needs_review', error: err.message };
+}
+
+async function current(run, target) {
+    if (!run.deps.loaders) return target;
+    const fresh = await load_targets([target.uri], run.deps.loaders);
+    return fresh.get(target.uri) || { ...target, live: [], deleted: [] };
 }
 
 async function sync_group(run, group, read) {
@@ -309,10 +332,15 @@ async function sync_group(run, group, read) {
             continue;
         }
         const record = read.records.get(target.uri);
-        const assessed = assess(target, record, read.digital_objects, run.options);
-        if (assessed && run.options.execute && assessed.changes.length > 0) {
-            const applied = await apply_changes(assessed, run.deps);
-            run.failures_in_a_row = applied.transient ? run.failures_in_a_row + 1 : 0;
+        const to_write = (found) => found && run.options.execute && found.changes.length > 0;
+        let assessed = assess(target, record, read.digital_objects, run.options);
+        if (to_write(assessed)) {
+            const fresh = await current(run, target);
+            assessed = assess(fresh, record, read.digital_objects, run.options);
+        }
+        if (to_write(assessed)) {
+            const transient = await apply_changes(assessed, run.deps);
+            run.failures_in_a_row = transient ? run.failures_in_a_row + 1 : 0;
         }
         await settle(run, target, assessed ? assessed.result : null);
         if (run.failures_in_a_row >= MAX_FAILURES_IN_A_ROW) {
@@ -349,7 +377,11 @@ async function sync_targets(targets, options, deps) {
     for (const [listing, group] of by_listing) {
         if (run.should_stop()) return finish();
         const reads = { unreadable: new Map(), unread_in_a_row: 0 };
-        const readable = group.filter((target) => target.live.length <= 1);
+        const readable = group.filter(
+            (target) =>
+                target.live.length === 0 ||
+                (target.live.length === 1 && own_handle(target.live[0], options))
+        );
         const records = await read_ids(
             listing,
             readable.map((target) => target.id),
@@ -370,6 +402,7 @@ async function sync_targets(targets, options, deps) {
 
 module.exports = {
     ATTENTION_STATES,
+    LINKED_STATES,
     MAX_FAILURES_IN_A_ROW,
     auth_failure,
     record_uri,

@@ -27,7 +27,7 @@ const {
 
 const SECOND = '/repositories/2/archival_objects/2';
 
-const seed = (overrides) => db_helper.seed_object({ is_published: 1, ...overrides });
+const seed = db_helper.seed_object;
 
 const row_for = (uri) => db_queue()(tables.aspace_links).where({ uri }).first();
 const changes_for = (record_uri) =>
@@ -382,7 +382,7 @@ describe('aspace_links/worker', () => {
             const row = await row_for(AO);
             expect(row).toMatchObject({ status: 'DONE', state: 'failed' });
             expect(row.error).toMatch(/HTTP 403: refused 403 \(the ArchivesSpace account may not/);
-            expect(aspace.store.get(AO).external_documents).toEqual([link_doc(handle(PID))]);
+            expect(aspace.store.get(AO).external_documents).toEqual([]);
         });
 
         it('does not let one record that keeps failing hold up the record behind it', async () => {
@@ -585,8 +585,8 @@ describe('aspace_links/worker', () => {
         });
     });
 
-    describe('publish state, leases and logins', () => {
-        it('writes the link once the object is published, removes it on suppress, and adds it back', async () => {
+    describe('linking once, leases and logins', () => {
+        it('links the record of a new object before it is published, then never touches it again', async () => {
             set_env({ ASPACE_WRITES_ENABLED: '1' });
             await db_helper.seed_object({
                 pid: PID,
@@ -598,30 +598,160 @@ describe('aspace_links/worker', () => {
             const aspace = make_aspace([archival_object(), digital_object()]);
 
             await worker_for(aspace).tick();
-            expect(aspace.calls.posts).toEqual([]);
-            expect(await row_for(AO)).toMatchObject({
-                status: 'DONE',
-                state: 'unpublished_object',
-            });
-
-            await repo_model.publish(PID);
-            expect(await row_for(AO)).toMatchObject({ status: 'PENDING' });
-            await worker_for(aspace).tick();
             expect(aspace.calls.posts.map((post) => post.uri)).toEqual([DO, AO]);
             expect(aspace.store.get(AO).external_documents).toEqual([link_doc(handle(PID))]);
-
-            await repo_model.suppress(PID);
-            await worker_for(aspace).tick();
-            expect(aspace.store.get(AO).external_documents).toEqual([]);
+            expect(aspace.store.get(DO).digital_object_id).toBe(handle(PID));
             expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'updated' });
 
             await repo_model.publish(PID);
-            await worker_for(aspace).tick();
-            expect(aspace.store.get(AO).external_documents).toEqual([link_doc(handle(PID))]);
-            expect(aspace.store.get(DO).digital_object_id).toBe(handle(PID));
+            await repo_model.suppress(PID);
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'updated' });
+
+            aspace.store.set(AO, archival_object({ lock_version: 30 }));
+            expect(await model.enqueue_all()).toBe(0);
+            expect(await worker_for(aspace).tick()).toBe('idle');
+            expect(aspace.calls.posts).toHaveLength(2);
             expect(
                 (await changes_for(AO)).map((change) => `${change.field} ${change.action}`)
-            ).toEqual(['digital_object_id update', 'link add', 'link remove', 'link add']);
+            ).toEqual(['digital_object_id update', 'link add']);
+        });
+
+        it('reports a link staff removed when asked to check again, and never adds it back', async () => {
+            set_env({ ASPACE_WRITES_ENABLED: '1' });
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await model.enqueue([AO]);
+            const aspace = make_aspace([archival_object(), digital_object()]);
+            await worker_for(aspace).tick();
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'updated' });
+
+            aspace.store.set(AO, archival_object({ lock_version: 30 }));
+            for (const state of ['updated', 'link_removed']) {
+                expect(await model.requeue_state(state)).toBe(1);
+                expect(await worker_for(aspace).tick()).toBe('worked');
+                expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'link_removed' });
+                expect(await model.enqueue_all()).toBe(0);
+            }
+            expect(aspace.calls.posts).toHaveLength(2);
+            expect(aspace.store.get(AO).external_documents).toEqual([]);
+
+            aspace.store.set(
+                AO,
+                archival_object({ lock_version: 31, external_documents: [link_doc(handle(PID))] })
+            );
+            await model.requeue_state('link_removed');
+            await worker_for(aspace).tick();
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'in_sync' });
+            expect(aspace.calls.posts).toHaveLength(2);
+            expect(
+                (await changes_for(AO)).map((change) => `${change.field} ${change.action}`)
+            ).toEqual(['digital_object_id update', 'link add']);
+        });
+
+        it('does not link a record again after a second object came and went', async () => {
+            set_env({ ASPACE_WRITES_ENABLED: '1' });
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await model.enqueue([AO]);
+            const aspace = make_aspace([archival_object(), digital_object()]);
+            await worker_for(aspace).tick();
+            aspace.store.set(AO, archival_object({ lock_version: 30 }));
+
+            await seed({ pid: TWIN, uri: AO, handle: handle(TWIN) });
+            await model.enqueue([AO]);
+            await worker_for(aspace).tick();
+            const shared = await row_for(AO);
+            expect(shared).toMatchObject({ status: 'DONE', state: 'contested' });
+            expect(JSON.parse(shared.detail)).toEqual({ linked: handle(PID) });
+
+            await repo_model.soft_delete(TWIN, { delete_reason: 'duplicate', actor: 'tester' });
+            expect(await row_for(AO)).toMatchObject({ status: 'PENDING' });
+            await worker_for(aspace).tick();
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'link_removed' });
+            expect(aspace.calls.posts).toHaveLength(2);
+            expect(aspace.store.get(AO).external_documents).toEqual([]);
+        });
+
+        it('clears a report once staff have fixed the record and ask for another check', async () => {
+            set_env({ ASPACE_WRITES_ENABLED: '1' });
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await seed({ pid: GONE, uri: SECOND, handle: handle(GONE), is_active: 0 });
+            const left_behind = { uri: SECOND, lock_version: 3, instances: [] };
+            const aspace = make_aspace([
+                archival_object({
+                    external_documents: [link_doc(handle(PID), { publish: false })],
+                }),
+                { ...left_behind, external_documents: [link_doc(handle(GONE))] },
+            ]);
+            await model.enqueue([AO, SECOND]);
+            await worker_for(aspace).tick();
+            expect(await row_for(AO)).toMatchObject({ state: 'unpublished_link' });
+            expect(await row_for(SECOND)).toMatchObject({ state: 'orphan_link' });
+
+            aspace.store.set(AO, archival_object({ external_documents: [link_doc(handle(PID))] }));
+            aspace.store.set(SECOND, { ...left_behind, external_documents: [] });
+            expect(await model.enqueue_all()).toBe(0);
+            await model.requeue_state('unpublished_link');
+            await model.requeue_state('orphan_link');
+            await worker_for(aspace).tick();
+
+            expect(aspace.calls.posts).toEqual([]);
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'in_sync' });
+            expect(await row_for(SECOND)).toBeUndefined();
+        });
+
+        it('writes nothing for an object deleted while its batch was being checked', async () => {
+            set_env({ ASPACE_WRITES_ENABLED: '1' });
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await model.enqueue([AO]);
+            const aspace = make_aspace([archival_object(), digital_object()]);
+            const list = aspace.get_native_set;
+            let deleted = false;
+            aspace.get_native_set = async (listing, ids) => {
+                if (!deleted) {
+                    deleted = true;
+                    await repo_model.soft_delete(PID, { delete_reason: 'test', actor: 'tester' });
+                }
+                return list(listing, ids);
+            };
+
+            expect(await worker_for(aspace).tick()).toBe('worked');
+            expect(aspace.calls.posts).toEqual([]);
+            expect(await row_for(AO)).toMatchObject({ status: 'PENDING' });
+            await worker_for(aspace).tick();
+            expect(aspace.calls.posts).toEqual([]);
+            expect(await row_for(AO)).toBeUndefined();
+        });
+
+        it('tries again at start, once writes are on, what failed or was held back', async () => {
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await seed({ pid: TWIN, uri: SECOND, handle: handle(TWIN) });
+            await model.enqueue([AO, SECOND]);
+            const aspace = make_aspace([
+                archival_object(),
+                { uri: SECOND, lock_version: 1, instances: [], external_documents: [] },
+            ]);
+            await worker_for(aspace).tick();
+            const held = await row_for(AO);
+            expect(held).toMatchObject({ status: 'DONE', state: 'needs_review' });
+            expect(JSON.parse(held.detail)).toMatchObject({ digital_object: 'not_found' });
+            await db_queue()(tables.aspace_links)
+                .where({ uri: SECOND })
+                .update({ state: 'failed', error: 'HTTP 503' });
+
+            aspace.store.set(DO, digital_object());
+            expect(await worker_for(aspace).tick()).toBe('idle');
+
+            set_env({ ASPACE_WRITES_ENABLED: '1' });
+            const worker = worker_for(aspace);
+            expect(await worker.tick()).toBe('worked');
+            expect(aspace.calls.posts.map((post) => post.uri)).toEqual([DO, AO, SECOND]);
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'updated' });
+            expect(await row_for(SECOND)).toMatchObject({ status: 'DONE', state: 'updated' });
+
+            await db_queue()(tables.aspace_links)
+                .where({ uri: SECOND })
+                .update({ state: 'failed', error: 'HTTP 503' });
+            expect(await worker.tick()).toBe('idle');
+            expect(await row_for(SECOND)).toMatchObject({ status: 'DONE', state: 'failed' });
         });
 
         it('checks a record again when it is queued while it is being checked', async () => {

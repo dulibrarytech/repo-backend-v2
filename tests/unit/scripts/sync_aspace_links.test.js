@@ -45,7 +45,6 @@ describe('scripts/sync_aspace_links', () => {
         it('defaults to a dry run over everything', () => {
             expect(args()).toEqual({
                 execute: false,
-                publish: false,
                 help: false,
                 pids: null,
                 since: null,
@@ -57,7 +56,6 @@ describe('scripts/sync_aspace_links', () => {
         it('reads every option', () => {
             const parsed = args([
                 '--execute',
-                '--publish',
                 '--pids',
                 `${PID}, ${TWIN}`,
                 '--since',
@@ -69,7 +67,6 @@ describe('scripts/sync_aspace_links', () => {
             ]);
             expect(parsed).toMatchObject({
                 execute: true,
-                publish: true,
                 pids: [PID, TWIN],
                 since: '2026-06-01',
                 out: 'results.ndjson',
@@ -91,6 +88,7 @@ describe('scripts/sync_aspace_links', () => {
             [['--batch-size', '251'], /--batch-size must be between 1 and 250/],
             [['--batch-size', 'many'], /--batch-size must be between 1 and 250/],
             [['--all'], /unknown arg: --all/],
+            [['--publish'], /unknown arg: --publish/],
         ])('rejects %j', (extra, message) => {
             expect(() => args(extra)).toThrow(message);
         });
@@ -218,14 +216,17 @@ describe('scripts/sync_aspace_links', () => {
             expect(aspace.calls.posts.map((post) => post.uri)).toEqual([DO, AO]);
         });
 
-        it('counts the links a dry run would remove', async () => {
-            const aspace = make_aspace([
-                archival_object({ instances: [], external_documents: [link_doc(handle(PID))] }),
-            ]);
-            const deps = make_deps(aspace, [row({ is_published: 0 })]);
+        it('skips the records already recorded as linked, and says how many', async () => {
+            const aspace = make_aspace(records());
+            const deps = { ...make_deps(aspace, rows()), linked_uris: async () => new Set([AO]) };
             await script.run(args(), deps);
-            expect(deps.output.join('')).toMatch(/1 {2}link remove/);
-            expect(aspace.calls.posts).toEqual([]);
+            const text = deps.output.join('');
+
+            expect(text).toContain('1 ArchivesSpace record(s) to check');
+            expect(text).toContain('1 record(s) already linked, skipped');
+            expect(aspace.calls.sets.map((set) => set.listing)).toEqual([
+                '/repositories/2/resources',
+            ]);
         });
 
         it('refuses --execute, before any request, while writes are disabled', async () => {
@@ -319,7 +320,9 @@ describe('scripts/sync_aspace_links', () => {
                 expect(code).toBe(1);
                 expect(text).toContain('0 updated, 1 failed');
                 expect(text).toContain(`${DO}: HTTP 400: refused 400`);
-                expect(aspace.calls.posts.map((post) => post.uri)).toEqual([DO, AO]);
+                expect(aspace.calls.posts.map((post) => post.uri)).toEqual([DO]);
+                expect(text).toContain('changes planned');
+                expect(text).not.toContain('attempted');
             });
         });
 
@@ -394,14 +397,94 @@ describe('scripts/sync_aspace_links', () => {
             const deps = {
                 ...make_deps(aspace, objects),
                 store: async (result) => {
-                    stored.push(`${result.uri} ${result.state} ${result.link}`);
-                    if (result.uri === AO) objects[1] = { ...objects[1], is_published: 0 };
+                    stored.push(`${result.uri} ${result.state}`);
+                    if (result.uri === AO) objects[1] = { ...objects[1], is_active: 0 };
                 },
             };
 
             await script.run(args(['--execute', '--batch-size', '1']), deps);
-            expect(stored).toEqual([`${AO} updated add`, `${second} updated remove`]);
-            expect(aspace.store.get(second).external_documents).toEqual([]);
+            expect(stored).toEqual([`${AO} updated`, `${second} orphan_link`]);
+            expect(aspace.store.get(second).external_documents).toEqual([link_doc(handle(TWIN))]);
+        });
+
+        it('writes nothing for an object deleted after its batch was read', async () => {
+            process.env.ASPACE_WRITES_ENABLED = '1';
+            app_config._reset();
+            const aspace = make_aspace([archival_object(), digital_object()]);
+            const objects = [row()];
+            const list = aspace.get_native_set;
+            aspace.get_native_set = async (listing, ids) => {
+                objects[0] = { ...objects[0], is_active: 0 };
+                return list(listing, ids);
+            };
+            const stored = [];
+            const deps = {
+                ...make_deps(aspace, objects),
+                store: async (result) => stored.push(result),
+            };
+
+            expect(await script.run(args(['--execute']), deps)).toBe(0);
+            expect(aspace.calls.posts).toEqual([]);
+            expect(stored).toEqual([]);
+        });
+
+        it('does not link again a record remembered to have had its link', async () => {
+            process.env.ASPACE_WRITES_ENABLED = '1';
+            app_config._reset();
+            const aspace = make_aspace([archival_object(), digital_object()]);
+            const stored = [];
+            const deps = {
+                ...make_deps(aspace, [row()]),
+                linked_handles: async (uris) => new Map(uris.map((uri) => [uri, handle(PID)])),
+                store: async (result) => stored.push(`${result.uri} ${result.state}`),
+            };
+
+            expect(await script.run(args(['--execute']), deps)).toBe(0);
+            expect(aspace.calls.posts).toEqual([]);
+            expect(stored).toEqual([`${AO} link_removed`]);
+        });
+
+        it('hands each result over with the time its batch was read', async () => {
+            process.env.ASPACE_WRITES_ENABLED = '1';
+            app_config._reset();
+            vi.useFakeTimers({ toFake: ['Date'] });
+            try {
+                vi.setSystemTime(new Date('2026-11-17T10:00:00Z'));
+                const base = make_deps(make_aspace(records()), rows());
+                const read = [];
+                const deps = {
+                    ...base,
+                    load_rows_for: async (uris) => {
+                        vi.setSystemTime(Date.now() + 60000);
+                        return base.load_rows_for(uris);
+                    },
+                    store: async (result, read_at) =>
+                        read.push(`${result.uri} ${read_at.toISOString()}`),
+                };
+                await script.run(args(['--execute', '--batch-size', '1']), deps);
+                expect(read).toEqual([
+                    `${AO} 2026-11-17T10:00:00.000Z`,
+                    `${RESOURCE} 2026-11-17T10:02:00.000Z`,
+                ]);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it('counts as skipped only the linked records among those chosen', async () => {
+            const linked_uris = async () => new Set([AO, '/repositories/2/archival_objects/7']);
+            const chosen = async (pid) => {
+                const deps = { ...make_deps(make_aspace(records()), rows()), linked_uris };
+                await script.run(args(['--pids', pid]), deps);
+                return deps.output.join('');
+            };
+
+            const linked = await chosen(PID);
+            expect(linked).toContain('0 ArchivesSpace record(s) to check');
+            expect(linked).toContain('1 record(s) already linked, skipped');
+            const other = await chosen(COLLECTION);
+            expect(other).toContain('1 ArchivesSpace record(s) to check');
+            expect(other).not.toContain('already linked');
         });
 
         it('says why a record needs a review', async () => {

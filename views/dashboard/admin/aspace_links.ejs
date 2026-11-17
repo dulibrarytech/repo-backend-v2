@@ -1,7 +1,7 @@
 <h1 class="page-title">ArchivesSpace Links</h1>
 <p class="page-subtitle">
-    Keeps each ArchivesSpace record pointing at the handle of its repository
-    object. New ingests are checked automatically.
+    Adds the handle of each newly ingested object to its ArchivesSpace record.
+    A record that already has a link is never changed.
 </p>
 
 <div class="content-card">
@@ -35,12 +35,12 @@
          data-last="<%= summary.waiting_error || '' %>"></div>
 
     <%
-        let confirm_text = 'Check every repository record against ArchivesSpace? Nothing will be changed. This runs in the background and can take over an hour.';
+        let confirm_text = 'Check every record that is not already known to have a link? Nothing will be changed. This runs in the background. The first time it reads every record, which takes about an hour.';
         if (writes_enabled) {
-            confirm_text = 'Check every repository record against ArchivesSpace and update the ones that are out of date? This runs in the background and can take a few hours.';
+            confirm_text = 'Add a link to each ArchivesSpace record found without one? Records already known to have a link are skipped. This runs in the background. The first time it reads every record, which takes about an hour.';
         }
         if (!worker_enabled) {
-            confirm_text = 'Queue every repository record for a check? Automatic checking is off, so nothing is checked until it is turned on.';
+            confirm_text = 'Queue every record that is not already known to have a link for a check? Automatic checking is off, so nothing is checked until it is turned on.';
         }
     %>
     <form hx-post="<%= dashboard_base %>/admin/aspace-links/check-all"

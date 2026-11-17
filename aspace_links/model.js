@@ -56,7 +56,6 @@ const OBJECT_COLUMNS = Object.freeze([
     'handle',
     'object_type',
     'is_active',
-    'is_published',
     'created',
 ]);
 
@@ -103,9 +102,46 @@ async function enqueue_safely(uris, context) {
     }
 }
 
+async function linked_uris() {
+    const rows = await db_queue()(LINKS)
+        .select('uri')
+        .where({ status: STATUS.DONE })
+        .whereIn('state', sync.LINKED_STATES);
+    return new Set(rows.map((row) => row.uri));
+}
+
+function linked_handle(row) {
+    const detail = parse(row.detail, {});
+    if (detail.linked) return detail.linked;
+    return sync.LINKED_STATES.includes(row.state) ? detail.handle || null : null;
+}
+
+async function linked_handles(uris) {
+    const handles = new Map();
+    for (let at = 0; at < uris.length; at += CHUNK) {
+        const rows = await db_queue()(LINKS)
+            .select('uri', 'state', 'detail')
+            .whereIn('uri', uris.slice(at, at + CHUNK));
+        for (const row of rows) {
+            const handle = linked_handle(row);
+            if (handle) handles.set(row.uri, handle);
+        }
+    }
+    return handles;
+}
+
+async function is_linked_for(uri, pid) {
+    const record = sync.record_uri(uri);
+    if (!record || !(await is_ready())) return false;
+    const row = await db_queue()(LINKS).select('state', 'pids').where({ uri: record }).first();
+    if (!row || !sync.LINKED_STATES.includes(row.state)) return false;
+    return parse(row.pids, []).includes(pid);
+}
+
 async function enqueue_all() {
+    const linked = await linked_uris();
     const rows = await db()(OBJECTS).select('uri');
-    return enqueue(rows.map((row) => row.uri));
+    return enqueue(rows.map((row) => row.uri).filter((uri) => !linked.has(sync.record_uri(uri))));
 }
 
 function requeue_state(state) {
@@ -164,11 +200,14 @@ async function record(row, result) {
         .update(result_columns(result));
 }
 
-async function store(result) {
+async function store(result, read_at = new Date()) {
     const uri = sync.record_uri(result.uri);
     if (!uri) return;
     const columns = result_columns(result);
-    const updated = await db_queue()(LINKS).where({ uri, status: STATUS.DONE }).update(columns);
+    const updated = await db_queue()(LINKS)
+        .where({ uri, status: STATUS.DONE })
+        .andWhere((query) => query.whereNull('checked_at').orWhere('checked_at', '<=', read_at))
+        .update(columns);
     if (updated === 0) {
         await db_queue()(LINKS)
             .insert({ uri, ...columns })
@@ -266,6 +305,9 @@ module.exports = {
     load_object_rows_for,
     enqueue,
     enqueue_safely,
+    linked_uris,
+    linked_handles,
+    is_linked_for,
     enqueue_all,
     requeue_state,
     claim,

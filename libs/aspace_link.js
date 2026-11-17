@@ -17,52 +17,26 @@ function documents_of(record) {
     return Array.isArray(record.external_documents) ? record.external_documents : [];
 }
 
-function plan_link(record, handle, options = {}) {
+function plan_link(record, handle) {
     const id = handle_id(handle);
     const documents = documents_of(record);
     const titled = documents.filter((doc) => is_link_title(doc.title));
     if (titled.length > 1) return { action: 'ambiguous' };
 
-    const { position: _position, ...kept } = record;
-    if (options.object_published === false) {
-        const ours = titled[0];
-        if (!ours || ours.publish !== true || handle_id(ours.location) !== id) {
-            return { action: 'object_unpublished' };
-        }
-        return {
-            action: 'remove',
-            previous: ours.location,
-            record: { ...kept, external_documents: documents.filter((doc) => doc !== ours) },
-        };
-    }
     const current = titled[0] || documents.find((doc) => handle_id(doc.location) === id);
-    if (!current) {
-        const added = {
-            jsonmodel_type: 'external_document',
-            title: LINK_TITLE,
-            location: handle,
-            publish: true,
-        };
-        return { action: 'add', record: { ...kept, external_documents: [...documents, added] } };
+    if (current && handle_id(current.location) !== id) {
+        return { action: 'other_link', previous: current.location };
     }
+    if (current) return { action: current.publish === true ? 'none' : 'unpublished' };
 
-    const replace_with = (changes) => ({
-        ...kept,
-        external_documents: documents.map((doc) =>
-            doc === current ? { ...doc, ...changes } : doc
-        ),
-    });
-
-    if (handle_id(current.location) !== id) {
-        return {
-            action: 'update',
-            previous: current.location,
-            record: replace_with({ location: handle }),
-        };
-    }
-    if (current.publish === true) return { action: 'none' };
-    if (!options.publish) return { action: 'unpublished' };
-    return { action: 'publish', record: replace_with({ publish: true }) };
+    const { position: _position, ...kept } = record;
+    const added = {
+        jsonmodel_type: 'external_document',
+        title: LINK_TITLE,
+        location: handle,
+        publish: true,
+    };
+    return { action: 'add', record: { ...kept, external_documents: [...documents, added] } };
 }
 
 function linked_handle_ids(record) {

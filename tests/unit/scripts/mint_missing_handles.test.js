@@ -169,6 +169,44 @@ describe('scripts/mint_missing_handles', () => {
             });
         });
 
+        describe('for an object named on the command line', () => {
+            const named = (handle, answer) =>
+                script.assess(
+                    { pid: PID, handle, is_active: 1 },
+                    resolver([answer]),
+                    '10176',
+                    true
+                );
+
+            it.each([
+                ['nothing', null],
+                ['an empty string', ''],
+            ])('creates and stores a handle when the row holds %s', async (_label, handle) => {
+                expect(await named(handle, null)).toMatchObject({
+                    mint: true,
+                    store: true,
+                    skipped: null,
+                });
+                expect(await named(handle, on_server())).toMatchObject({
+                    mint: false,
+                    store: true,
+                    skipped: null,
+                });
+            });
+
+            it.each([
+                ['a test value', 'test-handle'],
+                ['another object’s handle', `https://hdl.handle.net/10176/${OTHER}`],
+                ['a line break only', '\n'],
+            ])('still skips a stored handle that is %s', async (_label, handle) => {
+                expect(await named(handle, null)).toMatchObject({
+                    mint: false,
+                    store: false,
+                    skipped: 'unexpected stored handle',
+                });
+            });
+        });
+
         it('does not treat an unanswered lookup as a missing handle', async () => {
             expect(await assess({}, new Error('Handle resolve returned 500'))).toMatchObject({
                 mint: false,

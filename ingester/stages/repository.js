@@ -189,6 +189,7 @@ async function run(row, deps = {}) {
      * ends up empty and the row still ingests.
      */
     let handle_url = null;
+    let mint_failed = false;
     const skip_mint = Boolean(
         handles.is_skipped_batch && handles.is_skipped_batch(row.batch)
     );
@@ -206,6 +207,7 @@ async function run(row, deps = {}) {
                 handle_url = h.handle;
             } else {
                 /* Non-201 — log and carry on without a handle. */
+                mint_failed = true;
                 log.warn({
                     event: 'handle_create_non_201',
                     queue_id: row.id,
@@ -213,6 +215,7 @@ async function run(row, deps = {}) {
                 });
             }
         } catch (err) {
+            mint_failed = true;
             log.warn({
                 event: 'handle_create_threw',
                 queue_id: row.id,
@@ -340,7 +343,7 @@ async function run(row, deps = {}) {
         }
     }
 
-    if (handle_url) {
+    if (handle_url || mint_failed) {
         try {
             await aspace_links_model.enqueue([object_row.uri]);
             log.info({

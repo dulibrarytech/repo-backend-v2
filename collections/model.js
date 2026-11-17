@@ -534,14 +534,6 @@ async function set_members_publish_state(collection_pid, value) {
         .where({ is_member_of_collection: collection_pid, is_active: 1 })
         .whereNot({ object_type: 'collection' })
         .update({ is_published: value ? 1 : 0, is_updated: 1 });
-    const members = await db()(tables.objects)
-        .select('uri')
-        .where({ is_member_of_collection: collection_pid, is_active: 1 })
-        .whereNot({ object_type: 'collection' });
-    await aspace_links.enqueue_safely(
-        members.map((member) => member.uri),
-        'collection_members_publish_state'
-    );
     return { affected };
 }
 

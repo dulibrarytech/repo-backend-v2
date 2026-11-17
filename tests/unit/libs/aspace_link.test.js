@@ -136,107 +136,29 @@ describe('libs/aspace_link', () => {
             expect(plan).toEqual({ action: 'none' });
         });
 
-        it('repoints a link that holds another handle and keeps its publish flag', () => {
-            const stale = doc({ location: OTHER_HANDLE, publish: false, lock_version: 7 });
-            const plan = link.plan_link(record([stale]), HANDLE);
-            expect(plan.action).toBe('update');
-            expect(plan.previous).toBe(OTHER_HANDLE);
-            expect(plan.record.external_documents).toEqual([{ ...stale, location: HANDLE }]);
-
-            const published = doc({ location: OTHER_HANDLE, publish: true });
-            const kept = link.plan_link(record([published]), HANDLE);
-            expect(kept.record.external_documents[0]).toMatchObject({
-                location: HANDLE,
-                publish: true,
+        it('leaves a link that holds another handle as it is, and says where it points', () => {
+            const stale = doc({ location: OTHER_HANDLE, publish: false });
+            expect(link.plan_link(record([stale]), HANDLE)).toEqual({
+                action: 'other_link',
+                previous: OTHER_HANDLE,
             });
         });
 
-        describe('when the repository object is not published', () => {
-            const hidden = { object_published: false };
-
-            it('adds and repoints nothing', () => {
-                expect(link.plan_link(record([]), HANDLE, hidden)).toEqual({
-                    action: 'object_unpublished',
-                });
-                const stale = doc({ location: OTHER_HANDLE });
-                expect(link.plan_link(record([stale]), HANDLE, hidden)).toEqual({
-                    action: 'object_unpublished',
-                });
-            });
-
-            it('removes a published link to the object, keeping every other document', () => {
-                const unrelated = doc({ title: 'WorldCat', location: 'https://worldcat.org/1' });
-                const shown = doc({ location: HTTP_HANDLE, publish: true });
-                const original = { ...record([unrelated, shown]), position: 2 };
-                const before = JSON.parse(JSON.stringify(original));
-                const plan = link.plan_link(original, HANDLE, hidden);
-                expect(plan).toEqual({
-                    action: 'remove',
-                    previous: HTTP_HANDLE,
-                    record: { ...record([unrelated]) },
-                });
-                expect(original).toEqual(before);
-            });
-
-            it('removes only the link it owns, under any variant of its title', () => {
-                const curated = doc({
-                    title: 'James B. Radetsky Digital Papers',
-                    location: HANDLE,
-                });
-                const variant = doc({ title: 'Special Collections@DU' });
-                const plan = link.plan_link(record([variant, curated]), HANDLE, hidden);
-                expect(plan).toEqual({
-                    action: 'remove',
-                    previous: HTTP_HANDLE,
-                    record: record([curated]),
-                });
-            });
-
-            it('leaves a document with a title of its own that links to the object', () => {
-                const curated = doc({ title: 'Archived Website (crawled 2016)', location: HANDLE });
-                expect(link.plan_link(record([curated]), HANDLE, hidden)).toEqual({
-                    action: 'object_unpublished',
-                });
-            });
-
-            it('adds the link back when the object is published again', () => {
-                const removed = link.plan_link(record([doc()]), HANDLE, hidden).record;
-                const plan = link.plan_link(removed, HANDLE);
-                expect(plan.action).toBe('add');
-                expect(plan.record.external_documents).toEqual([doc({ location: HANDLE })]);
-            });
-
-            it('leaves an unpublished link to the object alone', () => {
-                const quiet = doc({ location: HANDLE, publish: false });
-                expect(link.plan_link(record([quiet]), HANDLE, hidden)).toEqual({
-                    action: 'object_unpublished',
-                });
-                expect(
-                    link.plan_link({ uri: '/repositories/2/resources/9' }, HANDLE, hidden)
-                ).toEqual({ action: 'object_unpublished' });
-            });
-        });
-
-        it('replaces a location that is not a handle', () => {
+        it('leaves a location that is not a handle as it is', () => {
             const broken = doc({ location: 'Error: Unable to create new handle' });
-            const plan = link.plan_link(record([broken]), HANDLE);
-            expect(plan.action).toBe('update');
-            expect(plan.record.external_documents[0].location).toBe(HANDLE);
+            expect(link.plan_link(record([broken]), HANDLE)).toEqual({
+                action: 'other_link',
+                previous: 'Error: Unable to create new handle',
+            });
         });
 
-        it('recognises the link by a title variant and keeps that title', () => {
-            const variant = doc({ title: 'Special Collections@DU', location: OTHER_HANDLE });
-            const plan = link.plan_link(record([variant]), HANDLE);
-            expect(plan.action).toBe('update');
-            expect(plan.record.external_documents[0].title).toBe('Special Collections@DU');
-        });
-
-        it('changes only the link when the record has several documents', () => {
-            const unrelated = doc({ title: 'WorldCat', location: 'https://worldcat.org/1' });
-            const stale = doc({ location: OTHER_HANDLE });
-            const plan = link.plan_link(record([unrelated, stale]), HANDLE);
-            expect(plan.record.external_documents[0]).toBe(unrelated);
-            expect(plan.record.external_documents[1].location).toBe(HANDLE);
+        it('recognises the link by a title variant', () => {
+            const variant = (location) => doc({ title: 'Special Collections@DU', location });
+            expect(link.plan_link(record([variant(HANDLE)]), HANDLE)).toEqual({ action: 'none' });
+            expect(link.plan_link(record([variant(OTHER_HANDLE)]), HANDLE)).toEqual({
+                action: 'other_link',
+                previous: OTHER_HANDLE,
+            });
         });
 
         it('reports ambiguous when two documents carry the repository title', () => {
@@ -244,35 +166,34 @@ describe('libs/aspace_link', () => {
             expect(plan).toEqual({ action: 'ambiguous' });
         });
 
-        it('reports a correct link that is not published', () => {
+        it('reports a correct link that is not published, and leaves it unpublished', () => {
             const plan = link.plan_link(record([doc({ publish: false })]), HANDLE);
             expect(plan).toEqual({ action: 'unpublished' });
         });
 
-        it('publishes a correct link only when asked, leaving its location alone', () => {
-            const plan = link.plan_link(record([doc({ publish: false })]), HANDLE, {
-                publish: true,
-            });
-            expect(plan.action).toBe('publish');
-            expect(plan.record.external_documents).toEqual([doc({ publish: true })]);
-        });
-
-        it('leaves the position of the record out of what is sent back', () => {
-            const placed = (documents) => ({ ...record(documents), position: 4 });
-            const added = link.plan_link(placed([]), HANDLE);
-            const repointed = link.plan_link(placed([doc({ location: OTHER_HANDLE })]), HANDLE);
-            const published = link.plan_link(placed([doc({ publish: false })]), HANDLE, {
-                publish: true,
-            });
-
-            for (const plan of [added, repointed, published]) {
-                expect(plan.record).not.toHaveProperty('position');
-                expect(plan.record.lock_version).toBe(3);
+        it('changes a record only by adding a link to one that has none', () => {
+            const existing = [
+                [doc()],
+                [doc({ location: HANDLE, publish: false })],
+                [doc({ location: OTHER_HANDLE })],
+                [doc({ title: 'Archived Website (crawled 2016)', location: HANDLE })],
+                [doc({ location: 'Error: Unable to create new handle' })],
+                [doc(), doc({ title: 'Special Collections@DU', location: OTHER_HANDLE })],
+            ];
+            for (const documents of existing) {
+                expect(link.plan_link(record(documents), HANDLE)).not.toHaveProperty('record');
             }
         });
 
+        it('leaves the position of the record out of what is sent back', () => {
+            const plan = link.plan_link({ ...record([]), position: 4 }, HANDLE);
+            expect(plan.record).not.toHaveProperty('position');
+            expect(plan.record.lock_version).toBe(3);
+        });
+
         it('does not modify the record it was given', () => {
-            const original = { ...record([doc({ location: OTHER_HANDLE })]), position: 4 };
+            const unrelated = doc({ title: 'WorldCat', location: 'https://worldcat.org/1' });
+            const original = { ...record([unrelated]), position: 4 };
             const before = JSON.parse(JSON.stringify(original));
             link.plan_link(original, HANDLE);
             expect(original).toEqual(before);

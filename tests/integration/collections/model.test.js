@@ -311,7 +311,7 @@ describe('collections/model — DB integration', () => {
             return collection;
         }
 
-        it('queues the ArchivesSpace records of the members it publishes', async () => {
+        it('queues no ArchivesSpace record of the members it publishes or suppresses', async () => {
             const collection = await db_helper.seed_object({
                 object_type: 'collection',
                 is_published: 1,
@@ -324,11 +324,8 @@ describe('collections/model — DB integration', () => {
                 });
             }
             await collections_model.publish_members(collection.pid);
-            const queued = await db_queue()(tables.aspace_links).orderBy('uri', 'asc');
-            expect(queued.map((row) => row.uri)).toEqual([
-                '/repositories/2/archival_objects/701',
-                '/repositories/2/archival_objects/702',
-            ]);
+            await collections_model.suppress_members(collection.pid);
+            expect(await db_queue()(tables.aspace_links)).toEqual([]);
         });
 
         it('publish_members flips every active non-collection member', async () => {

@@ -121,6 +121,43 @@ describe('scripts/delete_object_handles', () => {
             expect(v.reason).toMatch(/PUBLISHED/);
         });
 
+        it('refuses a handle its ArchivesSpace record still links to, and says what to do', async () => {
+            const asked = [];
+            const linked = {
+                ...deps({ row: { uri: '/repositories/2/archival_objects/77\n' } }),
+                is_linked: async (uri, pid) => {
+                    asked.push([uri, pid]);
+                    return true;
+                },
+            };
+            const v = await script.assess(PID, { max_age_days: 7 }, NOW, linked);
+            expect(v.ok).toBe(false);
+            expect(v.reason).toBe(
+                'its ArchivesSpace record links to this handle; remove the link there, then use ' +
+                    'Check these again under "Links to a deleted object"'
+            );
+            expect(asked).toEqual([['/repositories/2/archival_objects/77\n', PID]]);
+        });
+
+        it('accepts the handle once its ArchivesSpace record no longer links to it', async () => {
+            const unlinked = { ...deps(), is_linked: async () => false };
+            const v = await script.assess(PID, { max_age_days: 7 }, NOW, unlinked);
+            expect(v.ok).toBe(true);
+        });
+
+        it('never asks about the ArchivesSpace record of a live or published object', async () => {
+            const is_linked = vi.fn(async () => true);
+            const live = { ...deps({ row: { is_active: 1 } }), is_linked };
+            const shown = { ...deps({ row: { is_published: 1 } }), is_linked };
+            expect((await script.assess(PID, { max_age_days: 7 }, NOW, live)).reason).toMatch(
+                /ACTIVE/
+            );
+            expect((await script.assess(PID, { max_age_days: 7 }, NOW, shown)).reason).toMatch(
+                /PUBLISHED/
+            );
+            expect(is_linked).not.toHaveBeenCalled();
+        });
+
         it('refuses a pid with no object row', async () => {
             expect((await assess({ row: null })).reason).toMatch(/no tbl_objects row/);
         });

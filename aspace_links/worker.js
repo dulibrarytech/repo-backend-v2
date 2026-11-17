@@ -11,6 +11,7 @@ const BUSY_DELAY_MS = 1000;
 const POLL_MS = 60000;
 const MAX_BATCH_SIZE = 250;
 const DELAY_AFTER = Object.freeze({ worked: BUSY_DELAY_MS, halted: model_default.RETRY_MS });
+const RETRIED_AT_START = Object.freeze(['pending', 'failed', 'needs_review']);
 
 function create_worker({ aspace = aspace_default, model = model_default, request } = {}) {
     let running = false;
@@ -57,9 +58,10 @@ function create_worker({ aspace = aspace_default, model = model_default, request
         const released = await model.release();
         if (released > 0) log.info({ event: 'aspace_links_released', count: released });
         if (requeued || !cfg.archivespace.writes_enabled) return;
-        const count = await model.requeue_state('pending');
+        let count = 0;
+        for (const state of RETRIED_AT_START) count += await model.requeue_state(state);
         requeued = true;
-        if (count > 0) log.info({ event: 'aspace_links_pending_requeued', count });
+        if (count > 0) log.info({ event: 'aspace_links_requeued_at_start', count });
     }
 
     async function tick_once() {
@@ -88,11 +90,13 @@ function create_worker({ aspace = aspace_default, model = model_default, request
             waiting.delete(target.uri);
         };
 
+        const loaders = {
+            load_rows_for: model.load_object_rows_for,
+            load_rows: model.load_object_rows,
+            linked_handles: model.linked_handles,
+        };
         try {
-            const targets = await sync.load_targets([...waiting.keys()], {
-                load_rows_for: model.load_object_rows_for,
-                load_rows: model.load_object_rows,
-            });
+            const targets = await sync.load_targets([...waiting.keys()], loaders);
             const gone = claimed.filter((row) => !targets.has(row.uri));
             await model.remove(gone);
             for (const row of gone) waiting.delete(row.uri);
@@ -102,13 +106,13 @@ function create_worker({ aspace = aspace_default, model = model_default, request
                 [...waiting.keys()].map((uri) => targets.get(uri)),
                 {
                     prefix,
-                    publish: false,
                     execute: cfg.archivespace.writes_enabled,
                     failures_in_a_row,
                 },
                 {
                     aspace,
                     request: send,
+                    loaders,
                     on_outcome: save,
                     on_written: model.log_change,
                     should_stop: () => stopping,
