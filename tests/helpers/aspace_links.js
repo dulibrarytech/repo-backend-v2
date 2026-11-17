@@ -1,5 +1,7 @@
 'use strict';
 
+const aspace_session = require('../../libs/aspace_session');
+
 const PID = '8fd73006-4c1c-478a-989f-153cb8afdf13';
 const TWIN = '1ee3d82a-c988-42a0-bbf3-38d23d86deed';
 const GONE = 'fd9a67c7-b58c-42bf-a2d1-97175acaa96e';
@@ -18,6 +20,7 @@ function row(overrides = {}) {
         handle: handle(PID),
         object_type: 'object',
         is_active: 1,
+        is_published: 1,
         created: new Date('2026-06-15T12:00:00Z'),
         ...overrides,
     };
@@ -47,24 +50,32 @@ function digital_object(overrides = {}) {
     return { uri: DO, lock_version: 1, digital_object_id: 'B133.01.0003.00001', ...overrides };
 }
 
+const UNREACHABLE = 'ArchivesSpace fetch failed: connect ECONNREFUSED 127.0.0.1:8089';
+
 function make_aspace(
     records,
-    { update_statuses = [], configured = true, fail_reads = false } = {}
+    { update_statuses = [], configured = true, fail_reads = false, down = false } = {}
 ) {
     const store = new Map(records.map((record) => [record.uri, record]));
     const calls = { sets: [], gets: [], posts: [] };
+    let reachable = !down;
     return {
         store,
         calls,
+        go_down: () => {
+            reachable = false;
+        },
         is_configured: () => configured,
         async get_native_set(listing, ids) {
             calls.sets.push({ listing, ids });
+            if (!reachable) throw new Error(UNREACHABLE);
             if (fail_reads) return { status: 503, data: { error: 'unavailable' } };
             const data = ids.map((id) => store.get(`${listing}/${id}`)).filter(Boolean);
             return { status: 200, data };
         },
         async get_native(uri) {
             calls.gets.push(uri);
+            if (!reachable) throw new Error(UNREACHABLE);
             return store.has(uri)
                 ? { status: 200, data: store.get(uri) }
                 : { status: 404, data: { error: 'ArchivalObject not found' } };
@@ -79,6 +90,17 @@ function make_aspace(
     };
 }
 
+const SESSION = Object.freeze({ get: async () => 'tok', invalidate: () => {} });
+
+function request(call, label) {
+    return aspace_session.request_with_retry(call, {
+        label,
+        session: SESSION,
+        attempts: 1,
+        min_interval_ms: 0,
+    });
+}
+
 function make_deps(aspace, rows = []) {
     const output = [];
     return {
@@ -86,11 +108,14 @@ function make_deps(aspace, rows = []) {
         output,
         write: (text) => output.push(text),
         load_rows: async () => rows,
-        request: (call) => call('tok'),
+        load_rows_for: async (uris) =>
+            rows.filter((row) => uris.some((uri) => String(row.uri).startsWith(uri))),
+        request,
     };
 }
 
 module.exports = {
+    UNREACHABLE,
     PID,
     TWIN,
     GONE,
@@ -105,5 +130,6 @@ module.exports = {
     archival_object,
     digital_object,
     make_aspace,
+    request,
     make_deps,
 };

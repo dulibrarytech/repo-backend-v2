@@ -4,13 +4,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { db, destroy_all } = require('../config/db');
-const tables = require('../config/db_tables');
+const { destroy_all } = require('../config/db');
 const app_config = require('../config/app');
 const aspace_default = require('../libs/archivesspace');
 const aspace_session = require('../libs/aspace_session');
 const link = require('../libs/aspace_link');
 const sync = require('../aspace_links/sync');
+const links_model = require('../aspace_links/model');
 
 const DEFAULT_BATCH_SIZE = 100;
 const MAX_BATCH_SIZE = 250;
@@ -24,14 +24,24 @@ Checks that each ArchivesSpace record carries its repository handle: the
 object. Reports the differences. Writes nothing unless --execute is given.
 
   --execute            write the changes to ArchivesSpace
-                       (also needs ASPACE_WRITES_ENABLED=1 on this host)
+                       (also needs ASPACE_WRITES_ENABLED=1 on this host, and
+                       ASPACE_WRITES_FROM_DEV=1 on a development host when
+                       ArchivesSpace is on another machine)
   --publish            also publish links that are correct but unpublished
   --pids a,b           only the records these repository objects point at
   --since YYYY-MM-DD   only records with an object created on or after this date
+                       (the date in the database server's time zone)
   --out FILE           write one JSON line per record to FILE
   --batch-size N       records per ArchivesSpace request (1-${MAX_BATCH_SIZE}, default ${DEFAULT_BATCH_SIZE})
   --help               show this text
 `;
+
+function is_calendar_date(text) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+    if (!match) return false;
+    const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+    return date.toISOString().slice(0, 10) === text;
+}
 
 function parse_args(argv) {
     const o = {
@@ -56,8 +66,8 @@ function parse_args(argv) {
                 .filter(Boolean);
         } else if (a === '--since') {
             o.since = String(argv[++i] || '');
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(o.since)) {
-                throw new Error('--since must be YYYY-MM-DD');
+            if (!is_calendar_date(o.since)) {
+                throw new Error('--since must be YYYY-MM-DD, a date that exists');
             }
         } else if (a === '--batch-size') {
             o.batch_size = Number.parseInt(argv[++i], 10);
@@ -94,7 +104,7 @@ function print_summary(results, args, write) {
     const changed = results.filter((r) => ['pending', 'updated', 'failed'].includes(r.state));
     const changes = [
         ...changed
-            .filter((r) => ['add', 'update', 'publish'].includes(r.link))
+            .filter((r) => ['add', 'update', 'publish', 'remove'].includes(r.link))
             .map((r) => `link ${r.link}`),
         ...changed
             .filter((r) => r.digital_object === 'update')
@@ -143,7 +153,10 @@ async function run(args, deps) {
     }
     if (args.execute && !cfg.archivespace.writes_enabled) {
         write(
-            '--execute needs ASPACE_WRITES_ENABLED=1 in the environment of this host.\n' +
+            (cfg.archivespace.writes_requested
+                ? '--execute from a development host to an ArchivesSpace on another machine\n' +
+                  'also needs ASPACE_WRITES_FROM_DEV=1.\n'
+                : '--execute needs ASPACE_WRITES_ENABLED=1 in the environment of this host.\n') +
                 'Nothing was written.\n'
         );
         return 1;
@@ -155,6 +168,11 @@ async function run(args, deps) {
     if (args.publish) write('  publish        correct but unpublished links are published too\n');
     if (args.pids) write(`  pids           ${args.pids.length}\n`);
     if (args.since) write(`  since          ${args.since}\n`);
+    if (args.execute) {
+        write(
+            `  admin page     ${deps.store ? 'updated with each result' : 'not updated (queue tables missing)'}\n`
+        );
+    }
 
     const selected = select_targets(sync.build_targets(await deps.load_rows()), args);
     const targets = selected.targets.sort((a, b) => a.listing.localeCompare(b.listing));
@@ -171,13 +189,23 @@ async function run(args, deps) {
     keep(selected.invalid.map((row) => ({ uri: row.uri, pids: [row.pid], state: 'invalid_uri' })));
 
     const options = { prefix, publish: args.publish, execute: args.execute };
+    const sync_deps = {
+        ...deps,
+        on_outcome: async ({ result }) => {
+            if (!result) return;
+            keep([result]);
+            if (args.execute && deps.store) await deps.store(result);
+        },
+        on_written: deps.log_change,
+    };
     let halted = null;
     let failures_in_a_row = 0;
     for (let at = 0; at < targets.length && !halted; at += args.batch_size) {
-        const batch = targets.slice(at, at + args.batch_size);
-        const synced = await sync.sync_targets(batch, { ...options, failures_in_a_row }, deps);
+        const uris = targets.slice(at, at + args.batch_size).map((target) => target.uri);
+        const fresh = await sync.load_targets(uris, deps);
+        const batch = uris.filter((uri) => fresh.has(uri)).map((uri) => fresh.get(uri));
+        const synced = await sync.sync_targets(batch, { ...options, failures_in_a_row }, sync_deps);
         ({ halted, failures_in_a_row } = synced);
-        keep(synced.outcomes.map((outcome) => outcome.result).filter(Boolean));
         write(`    ${Math.min(at + args.batch_size, targets.length)}/${targets.length}\n`);
     }
 
@@ -206,34 +234,26 @@ async function main() {
         return 0;
     }
     const aspace = aspace_default;
-    let session_used = false;
+    const tables_ready = args.execute && (await links_model.is_ready().catch(() => false));
     const deps = {
         aspace,
         write: (text) => process.stdout.write(text),
-        load_rows: () =>
-            db()(tables.objects).select(
-                'pid',
-                'uri',
-                'handle',
-                'object_type',
-                'is_active',
-                'created'
-            ),
-        request: (call, label) => {
-            session_used = true;
-            return aspace_session.request_with_retry(call, { aspace, label });
-        },
+        load_rows: links_model.load_object_rows,
+        load_rows_for: links_model.load_object_rows_for,
+        store: tables_ready ? links_model.store : null,
+        log_change: tables_ready ? links_model.log_change : null,
+        request: (call, label) =>
+            aspace_session.request_with_retry(call, {
+                aspace,
+                label,
+                min_interval_ms: app_config().aspace_links.min_interval_ms,
+            }),
     };
     try {
         return await run(args, deps);
     } finally {
-        if (session_used) {
-            await aspace_session
-                .holder_for(aspace)
-                .get()
-                .then((token) => aspace.destroy_session_token(token))
-                .catch(() => {});
-        }
+        const token = aspace_session.holder_for(aspace).peek();
+        if (token) await aspace.destroy_session_token(token).catch(() => {});
     }
 }
 
@@ -251,4 +271,4 @@ if (require.main === module) {
         });
 }
 
-module.exports = { parse_args, select_targets, run };
+module.exports = { USAGE, parse_args, select_targets, run };

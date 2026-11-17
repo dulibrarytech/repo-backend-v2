@@ -25,6 +25,7 @@ const tables = require('../config/db_tables');
 const archivematica = require('../libs/archivematica');
 const log = require('../libs/log');
 const projection = require('../libs/object_projection');
+const aspace_links = require('../aspace_links/model');
 const { ConflictError, NotFoundError, ValidationError } = require('../libs/errors');
 
 const PUBLIC_FIELDS = [
@@ -250,7 +251,9 @@ async function set_publish_state(pid, value) {
         .where({ pid })
         .update({ is_published: value ? 1 : 0, is_updated: 1 });
     if (affected === 0) throw new NotFoundError(`Object ${pid} not found`);
-    return get(pid);
+    const row = await get(pid);
+    await aspace_links.enqueue_safely([row.uri], 'object_publish_state');
+    return row;
 }
 
 async function publish(pid) {
@@ -284,7 +287,7 @@ async function soft_delete(pid, { delete_reason, actor } = {}) {
     // Read first, so the published guard runs BEFORE any AM call.
     const row = await db()(tables.objects)
         .where({ pid, is_active: 1 })
-        .select('pid', 'sip_uuid', 'is_published')
+        .select('pid', 'sip_uuid', 'is_published', 'uri')
         .first();
     if (!row) throw new NotFoundError(`Active object ${pid} not found`);
 
@@ -305,6 +308,7 @@ async function soft_delete(pid, { delete_reason, actor } = {}) {
         // A concurrent delete won between the SELECT and the UPDATE.
         throw new NotFoundError(`Active object ${pid} not found`);
     }
+    await aspace_links.enqueue_safely([row.uri], 'object_delete');
     return { ok: true, delete_id: am.delete_id, am };
 }
 
@@ -469,6 +473,11 @@ async function set_publish_state_bulk(pids, value) {
         .whereIn('pid', unique)
         .andWhere('is_active', 1)
         .update({ is_published: value ? 1 : 0, is_updated: 1 });
+    const changed = await db()(tables.objects).select('uri').whereIn('pid', unique);
+    await aspace_links.enqueue_safely(
+        changed.map((row) => row.uri),
+        'objects_publish_state'
+    );
     return { affected, pids: unique };
 }
 
@@ -500,7 +509,7 @@ async function bulk_soft_delete(pids, { delete_reason, actor } = {}) {
     const rows = await db()(tables.objects)
         .whereIn('pid', unique)
         .andWhere({ is_active: 1 })
-        .select('pid', 'sip_uuid', 'is_published');
+        .select('pid', 'sip_uuid', 'is_published', 'uri');
     const published = rows.filter((r) => r.is_published);
     if (published.length > 0) {
         const sample = published
@@ -538,6 +547,10 @@ async function bulk_soft_delete(pids, { delete_reason, actor } = {}) {
         }
     });
 
+    await aspace_links.enqueue_safely(
+        rows.map((row) => row.uri),
+        'objects_delete'
+    );
     const am_failed = am_outcomes.filter((o) => !o.ok).length;
     return { affected, pids: unique, am_failed, am_outcomes };
 }

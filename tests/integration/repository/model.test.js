@@ -3,6 +3,8 @@
 const { randomUUID } = require('node:crypto');
 const repo_model = require('../../../repository/model');
 const db_helper = require('../../helpers/db');
+const { db_queue } = require('../../../config/db');
+const tables = require('../../../config/db_tables');
 const { NotFoundError, ValidationError } = require('../../../libs/errors');
 
 describe('repository/model — DB integration', () => {
@@ -201,6 +203,39 @@ describe('repository/model — DB integration', () => {
         await expect(
             repo_model.soft_delete(seeded.pid, { delete_reason: 'r', actor: 'a' })
         ).rejects.toBeInstanceOf(NotFoundError);
+    });
+
+    it('queues the ArchivesSpace record of an object it publishes, suppresses or deletes', async () => {
+        const uri = '/repositories/2/archival_objects/5150';
+        const queued = () => db_queue()(tables.aspace_links).where({ uri }).first();
+        const seeded = await db_helper.seed_object({ uri, is_published: 0 });
+
+        await repo_model.publish(seeded.pid);
+        expect(await queued()).toMatchObject({ status: 'PENDING' });
+
+        await db_queue()(tables.aspace_links).del();
+        await repo_model.bulk_suppress([seeded.pid]);
+        expect(await queued()).toMatchObject({ status: 'PENDING' });
+
+        await db_queue()(tables.aspace_links).del();
+        await repo_model.bulk_publish([seeded.pid]);
+        expect(await queued()).toMatchObject({ status: 'PENDING' });
+
+        await repo_model.suppress(seeded.pid);
+        await db_queue()(tables.aspace_links).del();
+        await repo_model.soft_delete(seeded.pid, { delete_reason: 'test', actor: 'tester' });
+        expect(await queued()).toMatchObject({ status: 'PENDING' });
+
+        const second = await db_helper.seed_object({
+            uri: '/repositories/2/archival_objects/5151',
+            is_published: 0,
+        });
+        await repo_model.bulk_soft_delete([second.pid], { delete_reason: 'test', actor: 'tester' });
+        expect(
+            await db_queue()(tables.aspace_links)
+                .where({ uri: '/repositories/2/archival_objects/5151' })
+                .first()
+        ).toMatchObject({ status: 'PENDING' });
     });
 
     it('get on missing pid throws NotFoundError', async () => {

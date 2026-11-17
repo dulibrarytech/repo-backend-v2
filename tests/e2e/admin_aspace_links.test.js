@@ -1,6 +1,7 @@
 'use strict';
 
 const supertest = require('supertest');
+const { JSDOM } = require('jsdom');
 const { make_app } = require('../helpers/app');
 const db_helper = require('../helpers/db');
 const jwt = require('../../libs/jwt');
@@ -110,6 +111,38 @@ describe('admin ArchivesSpace links — e2e', () => {
         });
     });
 
+    describe('screen readers', () => {
+        it('does not announce the self-refreshing status panel every 10 seconds', async () => {
+            const cookie = await cookie_for('links-admin-40', 'admin');
+            const page = await supertest(app).get(BASE).set('Cookie', cookie);
+            const panel = /<div id="aspace-links-status"[^>]*>/.exec(page.text)[0];
+            expect(panel).toContain('every 10s');
+            expect(panel).not.toMatch(/aria-live|role=/);
+
+            const status = await supertest(app).get(`${BASE}/status`).set('Cookie', cookie);
+            expect(status.text).toContain('Automatic checking is off.');
+            expect(status.text).not.toContain('role="alert"');
+        });
+
+        it('has a polite region outside the panel that knows the stall already shown', async () => {
+            const cookie = await cookie_for('links-admin-41', 'admin');
+            await model.enqueue([AO]);
+            await model.defer([await row_for(AO)], 'ArchivesSpace could not list records');
+
+            const page = await supertest(app).get(BASE).set('Cookie', cookie);
+            const doc = new JSDOM(page.text).window.document;
+            const region = doc.getElementById('aspace-links-announce');
+            expect(region.getAttribute('aria-live')).toBe('polite');
+            expect(region.getAttribute('data-last')).toBe('ArchivesSpace could not list records');
+            expect(doc.getElementById('aspace-links-status').contains(region)).toBe(false);
+            expect(doc.querySelector('#aspace-links-status [data-stall]')).not.toBeNull();
+
+            const status = await supertest(app).get(`${BASE}/status`).set('Cookie', cookie);
+            expect(status.text).toContain('data-stall="ArchivesSpace could not list records"');
+            expect(status.text).not.toContain('aspace-links-announce');
+        });
+    });
+
     describe('GET /status (polled partial)', () => {
         it('says automatic checking is off by default', async () => {
             const cookie = await cookie_for('links-admin-3', 'admin');
@@ -127,6 +160,29 @@ describe('admin ArchivesSpace links — e2e', () => {
                 expect(res.text).toContain('Nothing is being written to ArchivesSpace.');
                 expect(res.text).not.toContain('Automatic checking is off.');
             });
+        });
+
+        it('names the second switch when a development server would write to another machine', async () => {
+            const cookie = await cookie_for('links-admin-dev', 'admin');
+            await with_env(
+                {
+                    NODE_ENV: 'development',
+                    ARCHIVESPACE_HOST: 'https://archivesspace.example.edu',
+                    ASPACE_LINKS_WORKER_ENABLED: '1',
+                    ASPACE_WRITES_ENABLED: '1',
+                    ASPACE_WRITES_FROM_DEV: '',
+                },
+                async () => {
+                    const res = await supertest(app).get(`${BASE}/status`).set('Cookie', cookie);
+                    expect(res.text).toContain('Nothing is being written to ArchivesSpace.');
+                    expect(res.text).toContain('<code>ASPACE_WRITES_FROM_DEV</code>');
+                    expect(res.text).not.toContain('turn on <code>ASPACE_WRITES_ENABLED</code>');
+
+                    const page = await supertest(app).get(BASE).set('Cookie', cookie);
+                    expect(page.text).toContain('<code>ASPACE_WRITES_FROM_DEV</code>');
+                    expect(page.text).toContain('Nothing will be changed.');
+                }
+            );
         });
 
         it('shows neither warning when the worker and writes are both on', async () => {
@@ -195,6 +251,24 @@ describe('admin ArchivesSpace links — e2e', () => {
             expect(res.text).not.toContain('Check these again');
         });
 
+        it('says when a link is waiting to be removed, and which one', async () => {
+            const cookie = await cookie_for('links-admin-remove', 'admin');
+            await seed_checked(AO, {
+                state: 'pending',
+                handle: handle(PID),
+                link: 'remove',
+                link_previous: handle(PID),
+            });
+
+            const res = await supertest(app)
+                .get(`${BASE}/list?state=pending`)
+                .set('Cookie', cookie);
+            expect(res.text).toContain(`<code>${AO}</code>`);
+            expect(res.text).toContain(
+                `Found the link ${handle(PID)} published although the repository object is not.`
+            );
+        });
+
         it('shows why a record needs a review, in the default view', async () => {
             const cookie = await cookie_for('links-admin-review', 'admin');
             await seed_checked(AO, {
@@ -255,6 +329,61 @@ describe('admin ArchivesSpace links — e2e', () => {
                 .get(`${BASE}/list?state=orphan_link`)
                 .set('Cookie', cookie);
             expect(res.text).toContain('No records with this result.');
+        });
+    });
+
+    describe('before the queue tables exist', () => {
+        const missing =
+            'The ArchivesSpace links tables are missing. ' +
+            'Run npm run migrate:queue on this server first.';
+
+        it('says so on the page and in the status panel instead of failing', async () => {
+            const cookie = await cookie_for('links-admin-30', 'admin');
+            const ready = vi.spyOn(model, 'is_ready').mockResolvedValue(false);
+            try {
+                const page = await supertest(app).get(BASE).set('Cookie', cookie);
+                expect(page.status).toBe(200);
+                expect(page.text).toContain('The ArchivesSpace links tables are missing.');
+
+                const status = await supertest(app).get(`${BASE}/status`).set('Cookie', cookie);
+                expect(status.status).toBe(200);
+                expect(status.text).toContain('<code>npm run migrate:queue</code>');
+                expect(status.text).not.toContain('Automatic checking is off.');
+
+                const list = await supertest(app).get(`${BASE}/list`).set('Cookie', cookie);
+                expect(list.status).toBe(200);
+                expect(list.text).toContain('No records need attention.');
+            } finally {
+                ready.mockRestore();
+            }
+        });
+
+        it('refuses Check all and Check these again with a message, and queues nothing', async () => {
+            const cookie = await cookie_for('links-admin-31', 'admin');
+            await db_helper.seed_object({ pid: PID, uri: AO });
+            const ready = vi.spyOn(model, 'is_ready').mockResolvedValue(false);
+            try {
+                const all = await supertest(app).post(`${BASE}/check-all`).set('Cookie', cookie);
+                expect(all.status).toBe(200);
+                expect(JSON.parse(all.headers['hx-trigger']).toast).toEqual({
+                    level: 'error',
+                    message: missing,
+                });
+
+                const again = await supertest(app)
+                    .post(`${BASE}/recheck`)
+                    .set('Cookie', cookie)
+                    .type('form')
+                    .send({ state: 'failed' });
+                expect(again.status).toBe(200);
+                expect(JSON.parse(again.headers['hx-trigger']).toast).toEqual({
+                    level: 'error',
+                    message: missing,
+                });
+            } finally {
+                ready.mockRestore();
+            }
+            expect(await row_for(AO)).toBeUndefined();
         });
     });
 

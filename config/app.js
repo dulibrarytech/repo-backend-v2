@@ -58,6 +58,14 @@ function positive_integer(name, fallback) {
     return n;
 }
 
+function is_local_url(value) {
+    try {
+        return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(value).hostname);
+    } catch {
+        return false;
+    }
+}
+
 function boolean(name, fallback = false) {
     const v = process.env[name];
     if (v === undefined || v === '') return fallback;
@@ -254,11 +262,17 @@ function build() {
              * transform() rules change.
              */
             transformer_version: optional('ASPACE_TRANSFORMER_VERSION', '1'),
-            writes_enabled: boolean('ASPACE_WRITES_ENABLED', false),
+            writes_requested: boolean('ASPACE_WRITES_ENABLED', false),
+            writes_enabled:
+                boolean('ASPACE_WRITES_ENABLED', false) &&
+                (!is_dev ||
+                    is_local_url(optional('ARCHIVESPACE_HOST', '')) ||
+                    boolean('ASPACE_WRITES_FROM_DEV', false)),
         },
         aspace_links: {
             enabled: boolean('ASPACE_LINKS_WORKER_ENABLED', false),
             batch_size: positive_integer('ASPACE_LINKS_BATCH_SIZE', 100),
+            min_interval_ms: integer('ASPACE_LINKS_MIN_INTERVAL_MS', 10000),
         },
         /*
          * Metadata-refresh worker. Caps ASpace requests in flight; staff

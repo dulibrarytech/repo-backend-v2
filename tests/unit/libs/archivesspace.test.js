@@ -397,6 +397,14 @@ describe('libs/archivesspace', () => {
             expect(call.opts.params).toEqual({ id_set: '5,9,12' });
             expect(call.opts.headers['X-ArchivesSpace-Session']).toBe('tok');
         });
+
+        it('gives a listing at least a minute to answer', async () => {
+            const http = make_fake_http();
+            http.set_response({ status: 200, data: [] });
+            const client = aspace_module.create_client(http);
+            await client.get_native_set('/repositories/2/archival_objects', [5], 'tok');
+            expect(http.calls.get[0].opts.timeout).toBe(60000);
+        });
     });
 
     describe('update_record', () => {

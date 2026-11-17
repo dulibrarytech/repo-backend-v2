@@ -349,7 +349,7 @@ async function run(row, deps = {}) {
                 pid: object_row.pid,
             });
         } catch (err) {
-            log.warn({
+            log.error({
                 event: 'ingest_aspace_link_queue_failed',
                 queue_id: row.id,
                 pid: object_row.pid,

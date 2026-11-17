@@ -9,9 +9,11 @@
 const {
     create_holder,
     holder_for,
+    is_session_rejected,
     fetch_record_with_retry,
     request_with_retry,
 } = require('../../../libs/aspace_session');
+const { UnauthorizedError } = require('../../../libs/errors');
 
 function make_aspace({ tokens = ['tok-1', 'tok-2', 'tok-3'], responses = [] } = {}) {
     let token_i = 0;
@@ -49,6 +51,26 @@ describe('libs/aspace_session', () => {
             const tokens = await Promise.all([holder.get(), holder.get(), holder.get()]);
             expect(tokens).toEqual(['tok-1', 'tok-1', 'tok-1']);
             expect(aspace.calls.logins).toBe(1);
+        });
+
+        it('peek returns the cached token without signing in', async () => {
+            const aspace = make_aspace();
+            const holder = create_holder(aspace);
+            expect(holder.peek()).toBeNull();
+            await holder.get();
+            expect(holder.peek()).toBe('tok-1');
+            expect(aspace.calls.logins).toBe(1);
+        });
+
+        it('invalidate with an old token keeps a newer one', async () => {
+            const aspace = make_aspace();
+            const holder = create_holder(aspace);
+            const first = await holder.get();
+            holder.invalidate(first);
+            const second = await holder.get();
+            holder.invalidate(first);
+            expect(holder.peek()).toBe(second);
+            expect(aspace.calls.logins).toBe(2);
         });
 
         it('invalidate forces a fresh mint', async () => {
@@ -214,7 +236,7 @@ describe('libs/aspace_session', () => {
             expect(aspace.calls.logins).toBe(1);
         });
 
-        it('refreshes the session once on 403 and returns the second answer', async () => {
+        it('returns a 403 refusal at once, keeping the session', async () => {
             const aspace = make_aspace();
             const tokens = [];
             const res = await request_with_retry(
@@ -225,7 +247,49 @@ describe('libs/aspace_session', () => {
                 { aspace, sleep: no_sleep }
             );
             expect(res.status).toBe(403);
-            expect(tokens).toEqual(['tok-1', 'tok-2']);
+            expect(tokens).toEqual(['tok-1']);
+            expect(aspace.calls.logins).toBe(1);
+            expect(await holder_for(aspace).get()).toBe('tok-1');
+        });
+
+        it('does not retry a login that ArchivesSpace refuses', async () => {
+            const aspace = {
+                calls: { logins: 0 },
+                async get_session_token() {
+                    this.calls.logins++;
+                    throw new UnauthorizedError('ArchivesSpace login rejected: HTTP 403');
+                },
+            };
+            let calls = 0;
+            await expect(
+                request_with_retry(
+                    async () => {
+                        calls++;
+                        return { status: 200, data: [] };
+                    },
+                    { aspace, sleep: no_sleep }
+                )
+            ).rejects.toThrow(UnauthorizedError);
+            expect(aspace.calls.logins).toBe(1);
+            expect(calls).toBe(0);
+        });
+
+        it('keeps the reason and the status ArchivesSpace gave with a 5xx', async () => {
+            const aspace = make_aspace();
+            const err = await request_with_retry(
+                async () => ({ status: 500, data: { error: 'Sequel::DatabaseError' } }),
+                { aspace, attempts: 1, sleep: no_sleep, label: '/repositories/2/digital_objects/9' }
+            ).catch((thrown) => thrown);
+            expect(err.message).toBe(
+                'ArchivesSpace /repositories/2/digital_objects/9 returned HTTP 500: ' +
+                    'Sequel::DatabaseError'
+            );
+            expect(err.status).toBe(500);
+        });
+
+        it('treats 401 and 412 as a session that must be renewed, nothing else', () => {
+            expect([401, 412].every(is_session_rejected)).toBe(true);
+            expect([200, 403, 404, 409, 500].some(is_session_rejected)).toBe(false);
         });
 
         it('signs in again when ArchivesSpace says the session is gone (412)', async () => {

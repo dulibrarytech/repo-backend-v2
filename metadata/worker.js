@@ -19,6 +19,7 @@
 const app_config = require('../config/app');
 const log = require('../libs/log');
 const aspace_default = require('../libs/archivesspace');
+const { is_session_rejected } = require('../libs/aspace_session');
 const repo_model = require('../repository/model');
 const display_envelope = require('../libs/display_envelope');
 const model = require('./model');
@@ -245,10 +246,29 @@ async function roll_up(row, outcome) {
  * `token_holder` is a mutable single-element array, so a 401-driven
  * refresh updates the token shared by concurrent fetches in the tick.
  */
+const refreshing = new WeakMap();
+
+function refresh_token(aspace, token_holder, stale) {
+    if (token_holder[0] !== stale) return Promise.resolve(token_holder[0]);
+    let pending = refreshing.get(token_holder);
+    if (!pending) {
+        pending = aspace
+            .get_session_token()
+            .then((token) => {
+                token_holder[0] = token;
+                return token;
+            })
+            .finally(() => refreshing.delete(token_holder));
+        refreshing.set(token_holder, pending);
+    }
+    return pending;
+}
+
 async function process_row(row, aspace, token_holder, get_db_record) {
+    const sent = token_holder[0];
     let res;
     try {
-        res = await aspace.get_record(row.uri, token_holder[0]);
+        res = await aspace.get_record(row.uri, sent);
     } catch (err) {
         const result = await model.mark_failed(row.id, err.message);
         if (result.outcome === 'dead_lettered') await roll_up(row, 'dead_lettered');
@@ -256,10 +276,10 @@ async function process_row(row, aspace, token_holder, get_db_record) {
     }
 
     /* On 401/403, refresh the token and retry once. */
-    if (res.status === 401 || res.status === 403 || res.status === 412) {
+    if (is_session_rejected(res.status)) {
         try {
-            token_holder[0] = await aspace.get_session_token();
-            res = await aspace.get_record(row.uri, token_holder[0]);
+            const token = await refresh_token(aspace, token_holder, sent);
+            res = await aspace.get_record(row.uri, token);
         } catch (err) {
             const result = await model.mark_failed(row.id, `auth refresh failed: ${err.message}`);
             if (result.outcome === 'dead_lettered') await roll_up(row, 'dead_lettered');

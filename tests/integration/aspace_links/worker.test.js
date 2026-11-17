@@ -3,6 +3,9 @@
 const { create_worker } = require('../../../aspace_links/worker');
 const model = require('../../../aspace_links/model');
 const app_config = require('../../../config/app');
+const log = require('../../../libs/log');
+const repo_model = require('../../../repository/model');
+const aspace_session = require('../../../libs/aspace_session');
 const db_helper = require('../../helpers/db');
 const { db_queue } = require('../../../config/db');
 const tables = require('../../../config/db_tables');
@@ -18,12 +21,18 @@ const {
     archival_object,
     digital_object,
     make_aspace,
+    request,
+    UNREACHABLE,
 } = require('../../helpers/aspace_links');
 
 const SECOND = '/repositories/2/archival_objects/2';
 
+const seed = (overrides) => db_helper.seed_object({ is_published: 1, ...overrides });
+
 const row_for = (uri) => db_queue()(tables.aspace_links).where({ uri }).first();
-const worker_for = (aspace) => create_worker({ aspace, request: (call) => call('tok') });
+const changes_for = (record_uri) =>
+    db_queue()(tables.aspace_link_changes).where({ record_uri }).orderBy('id', 'asc');
+const worker_for = (aspace) => create_worker({ aspace, request });
 
 function set_env(values) {
     Object.assign(process.env, values);
@@ -70,7 +79,7 @@ describe('aspace_links/worker', () => {
         });
 
         it('reports what a record needs and writes nothing while writes are off', async () => {
-            await db_helper.seed_object({ pid: PID, uri: AO, handle: handle(PID) });
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
             await model.enqueue([AO]);
             const aspace = make_aspace([archival_object(), digital_object()]);
 
@@ -84,7 +93,7 @@ describe('aspace_links/worker', () => {
 
         it('writes the identifier and then the link when writes are on', async () => {
             set_env({ ASPACE_WRITES_ENABLED: '1' });
-            await db_helper.seed_object({ pid: PID, uri: `${AO}\n`, handle: handle(PID) });
+            await seed({ pid: PID, uri: `${AO}\n`, handle: handle(PID) });
             await model.enqueue([AO]);
             const aspace = make_aspace([archival_object(), digital_object()]);
 
@@ -94,9 +103,120 @@ describe('aspace_links/worker', () => {
             expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'updated' });
         });
 
+        it('keeps every write, with the value it replaced, in the change history', async () => {
+            set_env({ ASPACE_WRITES_ENABLED: '1' });
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await model.enqueue([AO]);
+            const aspace = make_aspace([archival_object(), digital_object()]);
+
+            await worker_for(aspace).tick();
+            await model.requeue_state('updated');
+            await worker_for(aspace).tick();
+
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'in_sync' });
+            const changes = await changes_for(AO);
+            expect(
+                changes.map((change) => ({
+                    uri: change.uri,
+                    field: change.field,
+                    action: change.action,
+                    previous: change.previous,
+                    value: change.value,
+                    pids: JSON.parse(change.pids),
+                }))
+            ).toEqual([
+                {
+                    uri: DO,
+                    field: 'digital_object_id',
+                    action: 'update',
+                    previous: 'B133.01.0003.00001',
+                    value: handle(PID),
+                    pids: [PID],
+                },
+                {
+                    uri: AO,
+                    field: 'link',
+                    action: 'add',
+                    previous: null,
+                    value: handle(PID),
+                    pids: [PID],
+                },
+            ]);
+            expect(changes[0].created_at).toBeTruthy();
+        });
+
+        it('keeps what it already wrote when ArchivesSpace goes away before a later listing', async () => {
+            set_env({ ASPACE_WRITES_ENABLED: '1' });
+            const resource_of = (n) => `/repositories/2/resources/${900 + n}`;
+            const pid_of = (n) => `00000000-0000-4000-8000-00000000090${n}`;
+            const numbers = [1, 2];
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            for (const n of numbers) {
+                await seed({
+                    pid: pid_of(n),
+                    uri: resource_of(n),
+                    handle: handle(pid_of(n)),
+                    object_type: 'collection',
+                });
+            }
+            await model.enqueue([AO, ...numbers.map(resource_of)]);
+            const aspace = make_aspace([archival_object(), digital_object()]);
+            const list = aspace.get_native_set;
+            aspace.get_native_set = async (listing, ids) => {
+                if (listing.endsWith('/resources')) aspace.go_down();
+                return list(listing, ids);
+            };
+
+            expect(await worker_for(aspace).tick()).toBe('failed');
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'updated' });
+            expect((await changes_for(AO)).map((change) => change.uri)).toEqual([DO, AO]);
+            for (const n of numbers) {
+                const row = await row_for(resource_of(n));
+                expect(row).toMatchObject({ status: 'PENDING', state: null, error: UNREACHABLE });
+                expect(row.next_attempt_at).not.toBeNull();
+            }
+        });
+
+        it('checks again, once writes are on, the records it could only report before', async () => {
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await model.enqueue([AO]);
+            const aspace = make_aspace([archival_object(), digital_object()]);
+            await worker_for(aspace).tick();
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'pending' });
+
+            set_env({ ASPACE_WRITES_ENABLED: '1' });
+            expect(await worker_for(aspace).tick()).toBe('worked');
+            expect(aspace.calls.posts.map((post) => post.uri)).toEqual([DO, AO]);
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'updated' });
+        });
+
+        it('waits while the queue tables are missing, and says so once', async () => {
+            await model.enqueue([AO]);
+            const aspace = make_aspace([]);
+            const missing = { ...model, is_ready: async () => false };
+            const worker = create_worker({
+                aspace,
+                model: missing,
+                request,
+            });
+            const error = vi.spyOn(log, 'error').mockImplementation(() => {});
+            try {
+                expect(await worker.tick()).toBe('idle');
+                expect(await worker.tick()).toBe('idle');
+                expect(error).toHaveBeenCalledTimes(1);
+                expect(error.mock.calls[0][0]).toMatchObject({
+                    event: 'aspace_links_table_missing',
+                });
+            } finally {
+                error.mockRestore();
+            }
+            expect(aspace.calls.sets).toEqual([]);
+            expect(await row_for(AO)).toMatchObject({ status: 'PENDING' });
+        });
+
         it('leaves an up-to-date record alone', async () => {
             set_env({ ASPACE_WRITES_ENABLED: '1' });
-            await db_helper.seed_object({ pid: PID, uri: AO, handle: handle(PID) });
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
             await model.enqueue([AO]);
             const aspace = make_aspace([
                 archival_object({ external_documents: [link_doc(old_handle(PID))] }),
@@ -118,7 +238,7 @@ describe('aspace_links/worker', () => {
         });
 
         it('drops a record only a deleted object pointed at, when no link is left', async () => {
-            await db_helper.seed_object({
+            await seed({
                 pid: GONE,
                 uri: AO,
                 handle: handle(GONE),
@@ -131,8 +251,9 @@ describe('aspace_links/worker', () => {
             expect(await row_for(AO)).toBeUndefined();
         });
 
-        it('keeps a record that still links to a deleted object', async () => {
-            await db_helper.seed_object({
+        it('only reports a published link to a deleted object, even with writes on', async () => {
+            set_env({ ASPACE_WRITES_ENABLED: '1' });
+            await seed({
                 pid: GONE,
                 uri: AO,
                 handle: handle(GONE),
@@ -147,15 +268,17 @@ describe('aspace_links/worker', () => {
             ]);
 
             await worker_for(aspace).tick();
+            expect(aspace.calls.posts).toEqual([]);
             const row = await row_for(AO);
             expect(row).toMatchObject({ status: 'DONE', state: 'orphan_link' });
             expect(JSON.parse(row.pids)).toEqual([GONE]);
+            expect(await changes_for(AO)).toEqual([]);
         });
 
         it('reports a record two live objects share, without reading or writing', async () => {
             set_env({ ASPACE_WRITES_ENABLED: '1' });
-            await db_helper.seed_object({ pid: PID, uri: AO, handle: handle(PID) });
-            await db_helper.seed_object({ pid: TWIN, uri: AO, handle: handle(TWIN) });
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await seed({ pid: TWIN, uri: AO, handle: handle(TWIN) });
             await model.enqueue([AO]);
             const aspace = make_aspace([archival_object(), digital_object()]);
 
@@ -167,22 +290,74 @@ describe('aspace_links/worker', () => {
             expect(JSON.parse(row.pids).sort()).toEqual([PID, TWIN].sort());
         });
 
-        it('puts the batch off and records why when ArchivesSpace cannot be read', async () => {
-            await db_helper.seed_object({ pid: PID, uri: AO, handle: handle(PID) });
+        it('puts the batch off and records why when ArchivesSpace cannot be reached', async () => {
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
             await model.enqueue([AO]);
-            const aspace = make_aspace([], { fail_reads: true });
+            const aspace = make_aspace([], { down: true });
 
             expect(await worker_for(aspace).tick()).toBe('failed');
             const row = await row_for(AO);
-            expect(row).toMatchObject({ status: 'PENDING', state: null });
-            expect(row.error).toMatch(/could not list .*archival_objects \(HTTP 503/);
+            expect(row).toMatchObject({ status: 'PENDING', state: null, error: UNREACHABLE });
             expect(row.next_attempt_at).not.toBeNull();
             expect(await model.claim(10)).toHaveLength(0);
         });
 
+        it('reports a record ArchivesSpace cannot return, instead of trying it again and again', async () => {
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await model.enqueue([AO]);
+            const aspace = make_aspace([], { fail_reads: true });
+
+            expect(await worker_for(aspace).tick()).toBe('worked');
+            const row = await row_for(AO);
+            expect(row).toMatchObject({ status: 'DONE', state: 'needs_review' });
+            expect(row.error).toBe(
+                'ArchivesSpace /repositories/2/archival_objects returned HTTP 503: unavailable'
+            );
+            expect(await model.claim(10)).toHaveLength(0);
+        });
+
+        it('hands back, on its next tick, rows it could not put off', async () => {
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await model.enqueue([AO]);
+            let refusals = 1;
+            const flaky = {
+                ...model,
+                defer: async (rows, reason) => {
+                    if (refusals > 0) {
+                        refusals -= 1;
+                        throw new Error('Connection lost: The server closed the connection.');
+                    }
+                    return model.defer(rows, reason);
+                },
+            };
+            let reachable = false;
+            const worker = create_worker({
+                aspace: make_aspace([archival_object(), digital_object()]),
+                model: flaky,
+                request: (call, label) => {
+                    if (!reachable) throw new Error(UNREACHABLE);
+                    return request(call, label);
+                },
+            });
+            const error = vi.spyOn(log, 'error').mockImplementation(() => {});
+            try {
+                expect(await worker.tick()).toBe('failed');
+                expect(await row_for(AO)).toMatchObject({ status: 'IN_PROGRESS' });
+                expect(error).toHaveBeenCalledWith(
+                    expect.objectContaining({ event: 'aspace_links_defer_failed', rows: 1 })
+                );
+            } finally {
+                error.mockRestore();
+            }
+
+            reachable = true;
+            expect(await worker.tick()).toBe('worked');
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'pending' });
+        });
+
         it('marks a refused update failed at once, so it shows without waiting', async () => {
             set_env({ ASPACE_WRITES_ENABLED: '1' });
-            await db_helper.seed_object({ pid: PID, uri: AO, handle: handle(PID) });
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
             await model.enqueue([AO]);
             const aspace = make_aspace([archival_object(), digital_object()], {
                 update_statuses: [400],
@@ -197,7 +372,7 @@ describe('aspace_links/worker', () => {
 
         it('records a refusal for lack of permission against that record only', async () => {
             set_env({ ASPACE_WRITES_ENABLED: '1' });
-            await db_helper.seed_object({ pid: PID, uri: AO, handle: handle(PID) });
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
             await model.enqueue([AO]);
             const aspace = make_aspace([archival_object(), digital_object()], {
                 update_statuses: [403],
@@ -212,8 +387,8 @@ describe('aspace_links/worker', () => {
 
         it('does not let one record that keeps failing hold up the record behind it', async () => {
             set_env({ ASPACE_WRITES_ENABLED: '1' });
-            await db_helper.seed_object({ pid: PID, uri: AO, handle: handle(PID) });
-            await db_helper.seed_object({ pid: TWIN, uri: SECOND, handle: handle(TWIN) });
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await seed({ pid: TWIN, uri: SECOND, handle: handle(TWIN) });
             await model.enqueue([AO, SECOND]);
             const aspace = make_aspace([
                 archival_object(),
@@ -240,7 +415,39 @@ describe('aspace_links/worker', () => {
             const uri_of = (n) => `/repositories/2/archival_objects/${100 + n}`;
             const numbers = [1, 2, 3, 4, 5, 6, 7];
             for (const n of numbers) {
-                await db_helper.seed_object({
+                await seed({
+                    pid: pid_of(n),
+                    uri: uri_of(n),
+                    handle: handle(pid_of(n)),
+                });
+            }
+            await model.enqueue(numbers.map(uri_of));
+            const aspace = make_aspace(
+                numbers.map((n) => archival_object({ uri: uri_of(n), instances: [] })),
+                { update_statuses: Array(7).fill(503) }
+            );
+
+            expect(await worker_for(aspace).tick()).toBe('halted');
+            expect(aspace.calls.posts).toHaveLength(5);
+            for (const n of [1, 2, 3, 4, 5]) {
+                expect(await row_for(uri_of(n))).toMatchObject({ status: 'DONE', state: 'failed' });
+            }
+            for (const n of [6, 7]) {
+                const row = await row_for(uri_of(n));
+                expect(row).toMatchObject({ status: 'PENDING', state: null });
+                expect(row.error).toMatch(/^5 updates in a row failed\. Last: .*HTTP 503/);
+                expect(row.next_attempt_at).not.toBeNull();
+            }
+            expect((await model.summary()).waiting_error).toMatch(/^5 updates in a row failed/);
+        });
+
+        it('does not stop for updates ArchivesSpace refuses for a reason of the record', async () => {
+            set_env({ ASPACE_WRITES_ENABLED: '1' });
+            const pid_of = (n) => `00000000-0000-4000-8000-00000000000${n}`;
+            const uri_of = (n) => `/repositories/2/archival_objects/${100 + n}`;
+            const numbers = [1, 2, 3, 4, 5, 6, 7];
+            for (const n of numbers) {
+                await seed({
                     pid: pid_of(n),
                     uri: uri_of(n),
                     handle: handle(pid_of(n)),
@@ -252,30 +459,219 @@ describe('aspace_links/worker', () => {
                 { update_statuses: Array(7).fill(400) }
             );
 
-            expect(await worker_for(aspace).tick()).toBe('failed');
-            expect(aspace.calls.posts).toHaveLength(5);
-            for (const n of [1, 2, 3, 4, 5]) {
+            expect(await worker_for(aspace).tick()).toBe('worked');
+            expect(aspace.calls.posts).toHaveLength(7);
+            for (const n of numbers) {
                 expect(await row_for(uri_of(n))).toMatchObject({ status: 'DONE', state: 'failed' });
             }
-            for (const n of [6, 7]) {
-                const row = await row_for(uri_of(n));
-                expect(row).toMatchObject({ status: 'PENDING', state: null });
-                expect(row.error).toMatch(/^5 updates in a row failed\. Last: .*HTTP 400/);
-                expect(row.next_attempt_at).not.toBeNull();
+        });
+
+        it('counts failures across ticks, so failures spread over batches still stop it', async () => {
+            set_env({ ASPACE_WRITES_ENABLED: '1', ASPACE_LINKS_BATCH_SIZE: '4' });
+            const pid_of = (n) => `00000000-0000-4000-8000-00000000000${n}`;
+            const uri_of = (n) => `/repositories/2/archival_objects/${100 + n}`;
+            const numbers = [1, 2, 3, 4, 5, 6];
+            for (const n of numbers) {
+                await seed({
+                    pid: pid_of(n),
+                    uri: uri_of(n),
+                    handle: handle(pid_of(n)),
+                });
             }
-            expect((await model.summary()).waiting_error).toMatch(/^5 updates in a row failed/);
+            await model.enqueue(numbers.map(uri_of));
+            const aspace = make_aspace(
+                numbers.map((n) => archival_object({ uri: uri_of(n), instances: [] })),
+                { update_statuses: Array(6).fill(503) }
+            );
+            const worker = worker_for(aspace);
+
+            expect(await worker.tick()).toBe('worked');
+            expect(await worker.tick()).toBe('halted');
+            expect(aspace.calls.posts).toHaveLength(5);
+            const left = await row_for(uri_of(6));
+            expect(left).toMatchObject({ status: 'PENDING', state: null });
+            expect(left.error).toMatch(/^5 updates in a row failed/);
+        });
+
+        it('needs only one more failure to stop again after it has stopped', async () => {
+            set_env({ ASPACE_WRITES_ENABLED: '1' });
+            const pid_of = (n) => `00000000-0000-4000-8000-00000000000${n}`;
+            const uri_of = (n) => `/repositories/2/archival_objects/${100 + n}`;
+            const first = [1, 2, 3, 4, 5];
+            for (const n of [...first, 6, 7]) {
+                await seed({
+                    pid: pid_of(n),
+                    uri: uri_of(n),
+                    handle: handle(pid_of(n)),
+                });
+            }
+            await model.enqueue(first.map(uri_of));
+            const aspace = make_aspace(
+                [1, 2, 3, 4, 5, 6, 7].map((n) =>
+                    archival_object({ uri: uri_of(n), instances: [] })
+                ),
+                { update_statuses: Array(7).fill(503) }
+            );
+            const worker = worker_for(aspace);
+            expect(await worker.tick()).toBe('halted');
+
+            await model.enqueue([uri_of(6), uri_of(7)]);
+            expect(await worker.tick()).toBe('halted');
+            expect(aspace.calls.posts).toHaveLength(6);
+            expect(await row_for(uri_of(6))).toMatchObject({ status: 'DONE', state: 'failed' });
+            expect(await row_for(uri_of(7))).toMatchObject({ status: 'PENDING' });
         });
 
         it('checks no more records per tick than the batch size', async () => {
             set_env({ ASPACE_LINKS_BATCH_SIZE: '1' });
-            await db_helper.seed_object({ pid: PID, uri: AO, handle: handle(PID) });
-            await db_helper.seed_object({ pid: TWIN, uri: SECOND, handle: handle(TWIN) });
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await seed({ pid: TWIN, uri: SECOND, handle: handle(TWIN) });
             await model.enqueue([AO, SECOND]);
             const aspace = make_aspace([]);
 
             await worker_for(aspace).tick();
             expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'record_not_found' });
             expect(await row_for(SECOND)).toMatchObject({ status: 'PENDING' });
+        });
+    });
+
+    describe('reading and pacing', () => {
+        it('loads only the object rows of the records it checks', async () => {
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await model.enqueue([AO]);
+            const every_row = vi.spyOn(model, 'load_object_rows');
+            try {
+                await worker_for(make_aspace([archival_object(), digital_object()])).tick();
+                expect(every_row).not.toHaveBeenCalled();
+                expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'pending' });
+            } finally {
+                every_row.mockRestore();
+            }
+        });
+
+        it('reads every row before dropping a record whose object rows it cannot find', async () => {
+            await model.enqueue([SECOND]);
+            const every_row = vi.spyOn(model, 'load_object_rows');
+            try {
+                await worker_for(make_aspace([])).tick();
+                expect(every_row).toHaveBeenCalledTimes(1);
+                expect(await row_for(SECOND)).toBeUndefined();
+            } finally {
+                every_row.mockRestore();
+            }
+        });
+
+        it('paces its requests by ASPACE_LINKS_MIN_INTERVAL_MS, not the ingest setting', async () => {
+            set_env({
+                ARCHIVESPACE_HOST: 'https://aspace.example',
+                ARCHIVESPACE_USER: 'links',
+                ARCHIVESPACE_PASSWORD: 'secret',
+                ASPACE_FETCH_MIN_INTERVAL_MS: '0',
+                ASPACE_LINKS_MIN_INTERVAL_MS: '2500',
+            });
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await model.enqueue([AO]);
+            const request = vi
+                .spyOn(aspace_session, 'request_with_retry')
+                .mockResolvedValue({ status: 200, data: [] });
+            try {
+                await create_worker().tick();
+                expect(request).toHaveBeenCalled();
+                expect(request.mock.calls[0][1]).toMatchObject({ min_interval_ms: 2500 });
+                expect(await row_for(AO)).toMatchObject({ state: 'record_not_found' });
+            } finally {
+                request.mockRestore();
+            }
+        });
+    });
+
+    describe('publish state, leases and logins', () => {
+        it('writes the link once the object is published, removes it on suppress, and adds it back', async () => {
+            set_env({ ASPACE_WRITES_ENABLED: '1' });
+            await db_helper.seed_object({
+                pid: PID,
+                uri: AO,
+                handle: handle(PID),
+                is_published: 0,
+            });
+            await model.enqueue([AO]);
+            const aspace = make_aspace([archival_object(), digital_object()]);
+
+            await worker_for(aspace).tick();
+            expect(aspace.calls.posts).toEqual([]);
+            expect(await row_for(AO)).toMatchObject({
+                status: 'DONE',
+                state: 'unpublished_object',
+            });
+
+            await repo_model.publish(PID);
+            expect(await row_for(AO)).toMatchObject({ status: 'PENDING' });
+            await worker_for(aspace).tick();
+            expect(aspace.calls.posts.map((post) => post.uri)).toEqual([DO, AO]);
+            expect(aspace.store.get(AO).external_documents).toEqual([link_doc(handle(PID))]);
+
+            await repo_model.suppress(PID);
+            await worker_for(aspace).tick();
+            expect(aspace.store.get(AO).external_documents).toEqual([]);
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'updated' });
+
+            await repo_model.publish(PID);
+            await worker_for(aspace).tick();
+            expect(aspace.store.get(AO).external_documents).toEqual([link_doc(handle(PID))]);
+            expect(aspace.store.get(DO).digital_object_id).toBe(handle(PID));
+            expect(
+                (await changes_for(AO)).map((change) => `${change.field} ${change.action}`)
+            ).toEqual(['digital_object_id update', 'link add', 'link remove', 'link add']);
+        });
+
+        it('checks a record again when it is queued while it is being checked', async () => {
+            set_env({ ASPACE_WRITES_ENABLED: '1' });
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await model.enqueue([AO]);
+            const aspace = make_aspace([archival_object(), digital_object()]);
+            const list = aspace.get_native_set;
+            let queued_again = false;
+            aspace.get_native_set = async (listing, ids) => {
+                if (!queued_again) {
+                    queued_again = true;
+                    await model.enqueue([AO]);
+                }
+                return list(listing, ids);
+            };
+
+            expect(await worker_for(aspace).tick()).toBe('worked');
+            expect(await row_for(AO)).toMatchObject({ status: 'PENDING' });
+            expect(await worker_for(aspace).tick()).toBe('worked');
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'in_sync' });
+        });
+
+        it('hands back records a stopped worker left in progress', async () => {
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await model.enqueue([AO]);
+            await model.claim(10);
+            const aspace = make_aspace([archival_object(), digital_object()]);
+
+            expect(await worker_for(aspace).tick()).toBe('worked');
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'pending' });
+        });
+
+        it('pauses, and puts the batch off, when ArchivesSpace refuses the login', async () => {
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
+            await model.enqueue([AO]);
+            const refused = Object.assign(new Error('ArchivesSpace login rejected: HTTP 403'), {
+                status: 401,
+            });
+            const worker = create_worker({
+                aspace: make_aspace([]),
+                request: async () => {
+                    throw refused;
+                },
+            });
+
+            expect(await worker.tick()).toBe('halted');
+            const row = await row_for(AO);
+            expect(row).toMatchObject({ status: 'PENDING' });
+            expect(row.error).toMatch(/login rejected/);
         });
     });
 
@@ -287,9 +683,39 @@ describe('aspace_links/worker', () => {
             await worker.stop();
         });
 
+        it('pauses for the retry time after it stops on failed updates', async () => {
+            set_env({ ASPACE_LINKS_WORKER_ENABLED: '1', ASPACE_WRITES_ENABLED: '1' });
+            const pid_of = (n) => `00000000-0000-4000-8000-00000000000${n}`;
+            const uri_of = (n) => `/repositories/2/archival_objects/${100 + n}`;
+            const numbers = [1, 2, 3, 4, 5];
+            for (const n of numbers) {
+                await seed({
+                    pid: pid_of(n),
+                    uri: uri_of(n),
+                    handle: handle(pid_of(n)),
+                });
+            }
+            await model.enqueue(numbers.map(uri_of));
+            const aspace = make_aspace(
+                numbers.map((n) => archival_object({ uri: uri_of(n), instances: [] })),
+                { update_statuses: Array(5).fill(503) }
+            );
+            const timeout = vi.spyOn(global, 'setTimeout');
+            const worker = worker_for(aspace);
+            try {
+                await worker.start();
+                await vi.waitFor(() => {
+                    expect(timeout.mock.calls.some(([, ms]) => ms === model.RETRY_MS)).toBe(true);
+                });
+            } finally {
+                await worker.stop({ timeout_ms: 200 });
+                timeout.mockRestore();
+            }
+        });
+
         it('starts when enabled, works the queue, and stops', async () => {
             set_env({ ASPACE_LINKS_WORKER_ENABLED: '1' });
-            await db_helper.seed_object({ pid: PID, uri: AO, handle: handle(PID) });
+            await seed({ pid: PID, uri: AO, handle: handle(PID) });
             await model.enqueue([AO]);
             const worker = worker_for(make_aspace([archival_object(), digital_object()]));
 

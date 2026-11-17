@@ -2,12 +2,14 @@
 
 const { db, db_queue } = require('../config/db');
 const tables = require('../config/db_tables');
+const log = require('../libs/log');
 const sync = require('./sync');
 
 const OBJECTS = tables.objects;
 const LINKS = tables.aspace_links;
+const CHANGES = tables.aspace_link_changes;
 
-const STATUS = Object.freeze({ PENDING: 'PENDING', DONE: 'DONE' });
+const STATUS = Object.freeze({ PENDING: 'PENDING', IN_PROGRESS: 'IN_PROGRESS', DONE: 'DONE' });
 const RETRY_MS = 5 * 60 * 1000;
 const CHUNK = 500;
 const ERROR_LENGTH = 1000;
@@ -26,8 +28,54 @@ function parse(value, fallback) {
     }
 }
 
+let ready = false;
+
+async function is_ready() {
+    if (!ready) {
+        const queue = db_queue();
+        ready = (await queue.schema.hasTable(LINKS)) && (await queue.schema.hasTable(CHANGES));
+    }
+    return ready;
+}
+
+async function log_change(entry) {
+    await db_queue()(CHANGES).insert({
+        record_uri: entry.record_uri,
+        uri: entry.uri,
+        field: entry.field,
+        action: entry.action,
+        previous: entry.previous ?? null,
+        value: entry.value ?? null,
+        pids: JSON.stringify(entry.pids || []),
+    });
+}
+
+const OBJECT_COLUMNS = Object.freeze([
+    'pid',
+    'uri',
+    'handle',
+    'object_type',
+    'is_active',
+    'is_published',
+    'created',
+]);
+
 function load_object_rows() {
-    return db()(OBJECTS).select('pid', 'uri', 'handle', 'object_type', 'is_active', 'created');
+    return db()(OBJECTS).select(OBJECT_COLUMNS);
+}
+
+function load_object_rows_for(uris) {
+    if (uris.length === 0) return Promise.resolve([]);
+    return db()(OBJECTS)
+        .select(OBJECT_COLUMNS)
+        .where((query) => {
+            for (const uri of uris) {
+                query.orWhereRaw("?? like ? escape '!'", [
+                    'uri',
+                    `${uri.replace(/[!%_]/g, '!$&')}%`,
+                ]);
+            }
+        });
 }
 
 async function enqueue(uris) {
@@ -46,6 +94,15 @@ async function enqueue(uris) {
     return wanted.length;
 }
 
+async function enqueue_safely(uris, context) {
+    try {
+        return await enqueue(uris);
+    } catch (err) {
+        log.error({ event: 'aspace_link_queue_failed', context, err: err.message });
+        return 0;
+    }
+}
+
 async function enqueue_all() {
     const rows = await db()(OBJECTS).select('uri');
     return enqueue(rows.map((row) => row.uri));
@@ -62,49 +119,84 @@ function requeue_state(state) {
 
 function claim(limit) {
     const now = new Date();
+    return db_queue().transaction(async (trx) => {
+        const rows = await trx(LINKS)
+            .where({ status: STATUS.PENDING })
+            .andWhere(function () {
+                this.whereNull('next_attempt_at').orWhere('next_attempt_at', '<=', now);
+            })
+            .orderBy('id', 'asc')
+            .limit(limit);
+        if (rows.length === 0) return rows;
+        await trx(LINKS)
+            .whereIn(
+                'id',
+                rows.map((row) => row.id)
+            )
+            .update({ status: STATUS.IN_PROGRESS, updated_at: trx.fn.now() });
+        return rows.map((row) => ({ ...row, status: STATUS.IN_PROGRESS }));
+    });
+}
+
+function release() {
     return db_queue()(LINKS)
-        .where({ status: STATUS.PENDING })
-        .andWhere(function () {
-            this.whereNull('next_attempt_at').orWhere('next_attempt_at', '<=', now);
-        })
-        .orderBy('id', 'asc')
-        .limit(limit);
+        .where({ status: STATUS.IN_PROGRESS })
+        .update({ status: STATUS.PENDING, updated_at: db_queue().fn.now() });
+}
+
+function result_columns(result) {
+    const { uri: _uri, pids, state, error, ...detail } = result;
+    return {
+        status: STATUS.DONE,
+        state,
+        pids: JSON.stringify(pids || []),
+        detail: JSON.stringify(detail),
+        error: shorten(error),
+        next_attempt_at: null,
+        checked_at: new Date(),
+        updated_at: db_queue().fn.now(),
+    };
 }
 
 async function record(row, result) {
-    const { uri: _uri, pids, state, error, ...detail } = result;
     await db_queue()(LINKS)
-        .where({ id: row.id })
-        .update({
-            status: STATUS.DONE,
-            state,
-            pids: JSON.stringify(pids || []),
-            detail: JSON.stringify(detail),
-            error: shorten(error),
-            next_attempt_at: null,
-            checked_at: new Date(),
-            updated_at: db_queue().fn.now(),
-        });
+        .where({ id: row.id, status: row.status })
+        .update(result_columns(result));
+}
+
+async function store(result) {
+    const uri = sync.record_uri(result.uri);
+    if (!uri) return;
+    const columns = result_columns(result);
+    const updated = await db_queue()(LINKS).where({ uri, status: STATUS.DONE }).update(columns);
+    if (updated === 0) {
+        await db_queue()(LINKS)
+            .insert({ uri, ...columns })
+            .onConflict('uri')
+            .ignore();
+    }
 }
 
 async function defer(rows, error) {
     if (rows.length === 0) return;
     await db_queue()(LINKS)
-        .where({ status: STATUS.PENDING })
+        .whereIn('status', [STATUS.PENDING, STATUS.IN_PROGRESS])
         .whereIn(
             'id',
             rows.map((row) => row.id)
         )
         .update({
+            status: STATUS.PENDING,
             next_attempt_at: new Date(Date.now() + RETRY_MS),
             error: shorten(error),
             updated_at: db_queue().fn.now(),
         });
 }
 
-async function remove(ids) {
-    if (ids.length === 0) return;
-    await db_queue()(LINKS).whereIn('id', ids).del();
+async function remove(rows) {
+    for (const row of rows) {
+        await db_queue()(LINKS).where({ id: row.id, status: row.status }).del();
+    }
 }
 
 async function summary() {
@@ -117,11 +209,11 @@ async function summary() {
     let checked = 0;
     for (const row of rows) {
         const n = Number(row.n || 0);
-        if (row.status === STATUS.PENDING) {
-            waiting += n;
-        } else {
+        if (row.status === STATUS.DONE) {
             checked += n;
             states[row.state] = (states[row.state] || 0) + n;
+        } else {
+            waiting += n;
         }
     }
 
@@ -168,12 +260,18 @@ async function list({ states, limit = 200 } = {}) {
 module.exports = {
     STATUS,
     RETRY_MS,
+    is_ready,
+    log_change,
     load_object_rows,
+    load_object_rows_for,
     enqueue,
+    enqueue_safely,
     enqueue_all,
     requeue_state,
     claim,
+    release,
     record,
+    store,
     defer,
     remove,
     summary,

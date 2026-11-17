@@ -5,6 +5,8 @@ const link = require('../libs/aspace_link');
 const RECORD_URI = /^\/repositories\/(\d+)\/(archival_objects|resources)\/(\d+)$/;
 const DIGITAL_OBJECT_URI = /^(\/repositories\/\d+\/digital_objects)\/(\d+)$/;
 const MAX_FAILURES_IN_A_ROW = 5;
+const MAX_REPLANS = 3;
+const IN_PLACE_ACTIONS = Object.freeze(['none', 'object_unpublished']);
 const ATTENTION_STATES = Object.freeze([
     'failed',
     'contested',
@@ -42,9 +44,17 @@ function build_targets(rows) {
     return { targets: [...targets.values()], invalid };
 }
 
+async function load_targets(uris, loaders) {
+    const by_uri = (rows) =>
+        new Map(build_targets(rows).targets.map((target) => [target.uri, target]));
+    const found = by_uri(await loaders.load_rows_for(uris));
+    return uris.every((uri) => found.has(uri)) ? found : by_uri(await loaders.load_rows());
+}
+
 function digital_object_refs_for(target, record) {
     if (!record || target.live.length !== 1) return [];
-    if (target.live[0].object_type === 'collection') return [];
+    const row = target.live[0];
+    if (row.object_type === 'collection' || row.is_published !== 1) return [];
     return link.digital_object_refs(record);
 }
 
@@ -68,14 +78,20 @@ function assess(target, record, digital_objects, options) {
     }
     if (!record) return done('record_not_found');
 
-    const plan_link = (source) => link.plan_link(source, row.handle, { publish: options.publish });
+    const published = row.is_published === 1;
+    const plan_link = (source) =>
+        link.plan_link(source, row.handle, {
+            publish: options.publish,
+            object_published: published,
+        });
     const planned = plan_link(record);
     if (planned.action === 'ambiguous') {
         return done('needs_review', { note: 'The record has more than one repository link.' });
     }
 
     const changes = [];
-    const detail = { handle: row.handle, link: planned.action, digital_object: 'absent' };
+    const detail = { handle: row.handle, link: planned.action };
+    if (published) detail.digital_object = 'absent';
     if (planned.previous !== undefined) detail.link_previous = planned.previous;
 
     const refs = digital_object_refs_for(target, record);
@@ -86,25 +102,40 @@ function assess(target, record, digital_objects, options) {
     if (refs.length === 1) {
         const digital_object = digital_objects.get(refs[0]);
         const plan_id = (source) => link.plan_digital_object(source, row.handle);
-        const planned_id = digital_object ? plan_id(digital_object) : { action: 'not_found' };
+        let planned_id = { action: 'not_found' };
+        if (digital_object) {
+            const shared = link
+                .linked_records(digital_object)
+                .some((linked) => linked !== target.uri);
+            planned_id = shared ? { action: 'shared' } : plan_id(digital_object);
+        }
         detail.digital_object = planned_id.action;
         detail.digital_object_uri = refs[0];
         if (!digital_object) {
             detail.note = 'The digital object attached to the record could not be read.';
         }
+        if (planned_id.action === 'shared') {
+            detail.note = 'The digital object is also attached to another record.';
+        }
         if (planned_id.record) {
             detail.digital_object_previous = planned_id.previous;
-            changes.push({ uri: refs[0], record: planned_id.record, replan: plan_id });
+            changes.push({
+                uri: refs[0],
+                field: 'digital_object_id',
+                ...planned_id,
+                replan: plan_id,
+            });
         }
     }
     if (planned.record) {
-        changes.push({ uri: target.uri, record: planned.record, replan: plan_link });
+        changes.push({ uri: target.uri, field: 'link', ...planned, replan: plan_link });
     }
 
     let state = 'in_sync';
     if (changes.length > 0) state = 'pending';
     else if (detail.note) state = 'needs_review';
     else if (planned.action === 'unpublished') state = 'unpublished_link';
+    else if (planned.action === 'object_unpublished') state = 'unpublished_object';
     return { result: { ...base, state, ...detail }, changes };
 }
 
@@ -112,6 +143,10 @@ function error_text(res) {
     const error = res.data && res.data.error;
     if (!error) return `HTTP ${res.status}`;
     return `HTTP ${res.status}: ${typeof error === 'string' ? error : JSON.stringify(error)}`;
+}
+
+function auth_failure(err) {
+    return err.status === 401 || err.status === 412;
 }
 
 async function read_set(listing, ids, deps) {
@@ -122,13 +157,48 @@ async function read_set(listing, ids, deps) {
         listing
     );
     if (res.status !== 200 || !Array.isArray(res.data)) {
-        throw new Error(`ArchivesSpace could not list ${listing} (${error_text(res)})`);
+        const err = new Error(`ArchivesSpace could not list ${listing} (${error_text(res)})`);
+        err.status = res.status;
+        throw err;
     }
     for (const record of res.data) records.set(record.uri, record);
     return records;
 }
 
-async function read_digital_objects(refs, deps) {
+async function reachable(listing, deps) {
+    const repository = listing.split('/').slice(0, 3).join('/');
+    try {
+        await deps.request((token) => deps.aspace.get_native(repository, token), repository);
+        return true;
+    } catch (err) {
+        if (auth_failure(err)) throw err;
+        return false;
+    }
+}
+
+async function read_ids(listing, ids, deps, reads) {
+    try {
+        const records = await read_set(listing, ids, deps);
+        reads.unread_in_a_row = 0;
+        return records;
+    } catch (err) {
+        if (auth_failure(err)) throw err;
+        const refused = err.status >= 400 && err.status < 500;
+        if (!refused && !(await reachable(listing, deps))) throw err;
+        if (refused || ids.length === 1) {
+            for (const id of ids) reads.unreadable.set(`${listing}/${id}`, err);
+            if (!refused) reads.unread_in_a_row += 1;
+            if (reads.unread_in_a_row >= MAX_FAILURES_IN_A_ROW) throw err;
+            return new Map();
+        }
+        const middle = Math.ceil(ids.length / 2);
+        const first = await read_ids(listing, ids.slice(0, middle), deps, reads);
+        const second = await read_ids(listing, ids.slice(middle), deps, reads);
+        return new Map([...first, ...second]);
+    }
+}
+
+async function read_digital_objects(refs, deps, reads) {
     const by_listing = new Map();
     for (const ref of refs) {
         const match = DIGITAL_OBJECT_URI.exec(ref);
@@ -138,7 +208,9 @@ async function read_digital_objects(refs, deps) {
     }
     const records = new Map();
     for (const [listing, ids] of by_listing) {
-        for (const [uri, record] of await read_set(listing, ids, deps)) records.set(uri, record);
+        for (const [uri, record] of await read_ids(listing, ids, deps, reads)) {
+            records.set(uri, record);
+        }
     }
     return records;
 }
@@ -147,22 +219,30 @@ async function write_change(change, deps) {
     const post = (record) =>
         deps.request((token) => deps.aspace.update_record(change.uri, record, token), change.uri);
 
-    let res = await post(change.record);
-    if (res.status === 409) {
+    let plan = change;
+    let res = await post(plan.record);
+    for (let replans = 0; res.status === 409 && replans < MAX_REPLANS; replans += 1) {
         const fresh = await deps.request(
             (token) => deps.aspace.get_native(change.uri, token),
             change.uri
         );
         if (fresh.status !== 200) return { ok: false, error: error_text(fresh) };
-        const replanned = change.replan(fresh.data);
-        if (!replanned.record) {
-            return ['none', 'unpublished'].includes(replanned.action)
-                ? { ok: true }
-                : { ok: false, error: 'the record changed while it was being updated; run again' };
+        plan = change.replan(fresh.data);
+        if (!plan.record) {
+            if (IN_PLACE_ACTIONS.includes(plan.action)) {
+                return {
+                    ok: true,
+                    written: { action: change.action, previous: change.previous ?? null },
+                };
+            }
+            if (plan.action === 'unpublished') return { ok: true };
+            return { ok: false, error: 'the record changed while it was being updated; run again' };
         }
-        res = await post(replanned.record);
+        res = await post(plan.record);
     }
-    if (res.status === 200) return { ok: true };
+    if (res.status === 200) {
+        return { ok: true, written: { action: plan.action, previous: plan.previous ?? null } };
+    }
     const hint =
         res.status === 403
             ? ' (the ArchivesSpace account may not be allowed to update this kind of record)'
@@ -172,17 +252,77 @@ async function write_change(change, deps) {
 
 async function apply_changes(assessed, deps) {
     const errors = [];
+    let transient = false;
     for (const change of assessed.changes) {
+        let outcome;
         try {
-            const outcome = await write_change(change, deps);
-            if (!outcome.ok) errors.push(`${change.uri}: ${outcome.error}`);
+            outcome = await write_change(change, deps);
         } catch (err) {
-            errors.push(`${change.uri}: ${err.message}`);
+            if (auth_failure(err)) throw err;
+            outcome = { ok: false, error: err.message, transient: true };
+        }
+        if (outcome.written && deps.on_written) {
+            await deps.on_written({
+                record_uri: assessed.result.uri,
+                uri: change.uri,
+                field: change.field,
+                ...outcome.written,
+                value: outcome.written.action === 'remove' ? null : assessed.result.handle,
+                pids: assessed.result.pids,
+            });
+        }
+        if (!outcome.ok) {
+            errors.push(`${change.uri}: ${outcome.error}`);
+            transient = transient || Boolean(outcome.transient);
         }
     }
-    assessed.result.state = errors.length > 0 ? 'failed' : 'updated';
-    if (errors.length > 0) assessed.result.error = errors.join('; ');
-    return errors.length === 0;
+    if (errors.length > 0) {
+        assessed.result.state = 'failed';
+        assessed.result.error = errors.join('; ');
+    } else {
+        assessed.result.state = assessed.result.note ? 'needs_review' : 'updated';
+    }
+    return { ok: errors.length === 0, transient };
+}
+
+async function settle(run, target, result) {
+    const outcome = { target, result };
+    run.outcomes.push(outcome);
+    if (run.deps.on_outcome) await run.deps.on_outcome(outcome);
+}
+
+function unreadable_result(target, err) {
+    return {
+        uri: target.uri,
+        pids: target.live.map((row) => row.pid),
+        state: 'needs_review',
+        error: err.message,
+    };
+}
+
+async function sync_group(run, group, read) {
+    for (const target of group) {
+        if (run.should_stop()) return true;
+        const failure = read.unreadable.get(target.uri);
+        if (failure) {
+            await settle(run, target, unreadable_result(target, failure));
+            continue;
+        }
+        const record = read.records.get(target.uri);
+        const assessed = assess(target, record, read.digital_objects, run.options);
+        if (assessed && run.options.execute && assessed.changes.length > 0) {
+            const applied = await apply_changes(assessed, run.deps);
+            run.failures_in_a_row = applied.transient ? run.failures_in_a_row + 1 : 0;
+        }
+        await settle(run, target, assessed ? assessed.result : null);
+        if (run.failures_in_a_row >= MAX_FAILURES_IN_A_ROW) {
+            run.halted =
+                `${MAX_FAILURES_IN_A_ROW} updates in a row failed. ` +
+                `Last: ${assessed.result.error}`;
+            return true;
+        }
+    }
+    return false;
 }
 
 async function sync_targets(targets, options, deps) {
@@ -192,47 +332,49 @@ async function sync_targets(targets, options, deps) {
         by_listing.get(target.listing).push(target);
     }
 
-    const outcomes = [];
-    let failures_in_a_row = options.failures_in_a_row || 0;
+    const run = {
+        options,
+        deps,
+        outcomes: [],
+        failures_in_a_row: Math.min(options.failures_in_a_row || 0, MAX_FAILURES_IN_A_ROW - 1),
+        halted: null,
+        should_stop: () => Boolean(deps.should_stop && deps.should_stop()),
+    };
+    const finish = () => ({
+        outcomes: run.outcomes,
+        failures_in_a_row: run.failures_in_a_row,
+        halted: run.halted,
+    });
+
     for (const [listing, group] of by_listing) {
+        if (run.should_stop()) return finish();
+        const reads = { unreadable: new Map(), unread_in_a_row: 0 };
         const readable = group.filter((target) => target.live.length <= 1);
-        const records = await read_set(
+        const records = await read_ids(
             listing,
             readable.map((target) => target.id),
-            deps
+            deps,
+            reads
         );
         const refs = group
             .map((target) => digital_object_refs_for(target, records.get(target.uri)))
             .filter((found) => found.length === 1)
             .map((found) => found[0]);
-        const digital_objects = await read_digital_objects(refs, deps);
-
-        for (const target of group) {
-            const assessed = assess(target, records.get(target.uri), digital_objects, options);
-            if (assessed && options.execute && assessed.changes.length > 0) {
-                const applied = await apply_changes(assessed, deps);
-                failures_in_a_row = applied ? 0 : failures_in_a_row + 1;
-            }
-            outcomes.push({ target, result: assessed ? assessed.result : null });
-            if (failures_in_a_row >= MAX_FAILURES_IN_A_ROW) {
-                return {
-                    outcomes,
-                    failures_in_a_row,
-                    halted:
-                        `${MAX_FAILURES_IN_A_ROW} updates in a row failed. ` +
-                        `Last: ${assessed.result.error}`,
-                };
-            }
+        const digital_objects = await read_digital_objects(refs, deps, reads);
+        if (await sync_group(run, group, { records, digital_objects, ...reads })) {
+            return finish();
         }
     }
-    return { outcomes, failures_in_a_row, halted: null };
+    return finish();
 }
 
 module.exports = {
     ATTENTION_STATES,
     MAX_FAILURES_IN_A_ROW,
+    auth_failure,
     record_uri,
     build_targets,
+    load_targets,
     assess,
     write_change,
     sync_targets,

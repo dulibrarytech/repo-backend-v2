@@ -66,15 +66,17 @@ const RESOLVE_PARAMS = [
  * Factory so tests can pass in an injected http client without touching
  * the module-level axios import. Production callers get the default.
  */
+const LIST_TIMEOUT_MS = 60000;
+
 function create_client(http = http_default) {
-    async function get_native(uri, token, params) {
+    async function get_native(uri, token, params, timeout_ms) {
         const cfg = app_config().archivespace;
         if (typeof uri !== 'string' || !uri.startsWith('/')) {
             throw new UpstreamError(`Invalid ArchivesSpace URI: ${uri}`);
         }
         try {
             return await http.get(`${base_url()}${uri}`, {
-                timeout: cfg.timeout_ms,
+                timeout: timeout_ms || cfg.timeout_ms,
                 headers: { 'X-ArchivesSpace-Session': token },
                 params,
                 validateStatus: () => true,
@@ -214,7 +216,8 @@ function create_client(http = http_default) {
         get_native,
 
         async get_native_set(listing_uri, ids, token) {
-            return get_native(listing_uri, token, { id_set: ids.join(',') });
+            const timeout_ms = Math.max(app_config().archivespace.timeout_ms, LIST_TIMEOUT_MS);
+            return get_native(listing_uri, token, { id_set: ids.join(',') }, timeout_ms);
         },
 
         async update_record(uri, record, token) {

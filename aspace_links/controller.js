@@ -6,6 +6,15 @@ const model = require('./model');
 const { ATTENTION_STATES } = require('./sync');
 
 const LIST_LIMIT = 200;
+const MISSING_TABLES =
+    'The ArchivesSpace links tables are missing. Run npm run migrate:queue on this server first.';
+const EMPTY_SUMMARY = Object.freeze({
+    waiting: 0,
+    checked: 0,
+    states: {},
+    last_checked_at: null,
+    waiting_error: null,
+});
 
 const STATE_LABELS = Object.freeze({
     failed: 'Update failed',
@@ -15,6 +24,7 @@ const STATE_LABELS = Object.freeze({
     invalid_handle: 'Object has no usable handle',
     pending: 'Needs an update',
     unpublished_link: 'Link is not published',
+    unpublished_object: 'Object is not published',
     orphan_link: 'Links to a deleted object',
     updated: 'Updated',
     in_sync: 'Up to date',
@@ -60,6 +70,11 @@ function notes_of(row) {
     const notes = [];
     if (detail.link === 'add') notes.push('Found no repository link on the record.');
     if (detail.link === 'update') notes.push(`Found the link pointing at ${detail.link_previous}`);
+    if (detail.link === 'remove') {
+        notes.push(
+            `Found the link ${detail.link_previous} published although the repository object is not.`
+        );
+    }
     if (detail.digital_object === 'update') {
         notes.push(`Found the digital object identifier ${detail.digital_object_previous}`);
     }
@@ -70,21 +85,23 @@ function notes_of(row) {
 
 async function build_status() {
     const cfg = app_config();
+    const ready = await model.is_ready();
     return {
-        summary: await model.summary(),
+        table_missing: !ready,
+        summary: ready ? await model.summary() : EMPTY_SUMMARY,
         labels: STATE_LABELS,
         worker_enabled: cfg.aspace_links.enabled,
         writes_enabled: cfg.archivespace.writes_enabled,
+        writes_requested: cfg.archivespace.writes_requested,
     };
 }
 
 async function build_list(query = {}) {
     const requested = typeof query.state === 'string' ? query.state : '';
     const state = Object.hasOwn(STATE_LABELS, requested) ? requested : '';
-    const found = await model.list({
-        states: state ? [state] : ATTENTION_STATES,
-        limit: LIST_LIMIT,
-    });
+    const found = (await model.is_ready())
+        ? await model.list({ states: state ? [state] : ATTENTION_STATES, limit: LIST_LIMIT })
+        : { rows: [], total: 0 };
     return {
         rows: found.rows.map((row) => ({ ...row, notes: notes_of(row) })),
         total: found.total,
@@ -112,6 +129,10 @@ async function list_partial(req, res) {
 }
 
 async function check_all(req, res) {
+    if (!(await model.is_ready())) {
+        trigger(res, 'error', MISSING_TABLES);
+        return status_partial(req, res);
+    }
     const count = await model.enqueue_all();
     log.info({ event: 'aspace_links_check_all', actor: actor_of(req), count });
     trigger(res, 'success', `Queued ${count} record${count === 1 ? '' : 's'} to check.`, {
@@ -122,7 +143,9 @@ async function check_all(req, res) {
 
 async function recheck(req, res) {
     const state = String((req.body && req.body.state) || '');
-    if (!Object.hasOwn(STATE_LABELS, state)) {
+    if (!(await model.is_ready())) {
+        trigger(res, 'error', MISSING_TABLES);
+    } else if (!Object.hasOwn(STATE_LABELS, state)) {
         trigger(res, 'error', 'Choose a result to check again.');
     } else {
         const count = await model.requeue_state(state);

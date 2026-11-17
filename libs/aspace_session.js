@@ -31,8 +31,10 @@
 const aspace_default = require('./archivesspace');
 const app_config = require('../config/app');
 const log = require('./log');
+const { UnauthorizedError, ForbiddenError } = require('./errors');
 
 const DEFAULT_ATTEMPTS = 3;
+const SESSION_REJECTED = Object.freeze([401, 412]);
 const DEFAULT_BASE_MS = 1000;
 
 function default_sleep(ms) {
@@ -90,8 +92,11 @@ function create_holder(aspace = aspace_default) {
             token = await minting;
             return token;
         },
-        invalidate() {
-            token = null;
+        invalidate(stale) {
+            if (stale === undefined || token === stale) token = null;
+        },
+        peek() {
+            return token;
         },
     };
 }
@@ -109,6 +114,18 @@ function holder_for(aspace = aspace_default) {
         _holders.set(aspace, holder);
     }
     return holder;
+}
+
+function is_session_rejected(status) {
+    return SESSION_REJECTED.includes(status);
+}
+
+function upstream_error(label, res) {
+    const body = res.data && res.data.error;
+    const text = body ? `: ${typeof body === 'string' ? body : JSON.stringify(body)}` : '';
+    const err = new Error(`ArchivesSpace ${label} returned HTTP ${res.status}${text}`);
+    err.status = res.status;
+    return err;
 }
 
 async function request_with_retry(call, opts = {}) {
@@ -132,32 +149,34 @@ async function request_with_retry(call, opts = {}) {
 
     let last_err = null;
     for (let attempt = 1; attempt <= attempts; attempt++) {
+        let token;
         try {
             await _pace(min_interval_ms, sleep);
-            let token = await session.get();
+            token = await session.get();
             let res = await call(token);
-            if (res.status === 401 || res.status === 403 || res.status === 412) {
+            if (is_session_rejected(res.status)) {
                 /*
                  * Session expired or was culled server-side — refresh
                  * once and re-fetch. A 401 that SURVIVES the refresh
                  * is definitive (bad credentials), not burst noise.
                  */
-                session.invalidate();
+                session.invalidate(token);
                 token = await session.get();
                 res = await call(token);
             }
             if (res.status >= 500 || res.status === 429) {
-                last_err = new Error(`ArchivesSpace ${opts.label} returned HTTP ${res.status}`);
+                last_err = upstream_error(opts.label, res);
             } else {
                 return res;
             }
         } catch (err) {
+            if (err instanceof UnauthorizedError || err instanceof ForbiddenError) throw err;
             /*
              * Transport-level failure (UpstreamError from the client:
              * ECONNRESET, timeout, DNS) — the token may have died with
              * the connection; drop it so the next attempt re-mints.
              */
-            session.invalidate();
+            session.invalidate(token);
             last_err = err;
         }
         if (attempt < attempts) {
@@ -194,4 +213,10 @@ async function fetch_record_with_retry(uri, opts = {}) {
     });
 }
 
-module.exports = { create_holder, holder_for, fetch_record_with_retry, request_with_retry };
+module.exports = {
+    create_holder,
+    holder_for,
+    is_session_rejected,
+    fetch_record_with_retry,
+    request_with_retry,
+};

@@ -136,14 +136,85 @@ describe('libs/aspace_link', () => {
             expect(plan).toEqual({ action: 'none' });
         });
 
-        it('repoints a link that holds another handle, and publishes it', () => {
+        it('repoints a link that holds another handle and keeps its publish flag', () => {
             const stale = doc({ location: OTHER_HANDLE, publish: false, lock_version: 7 });
             const plan = link.plan_link(record([stale]), HANDLE);
             expect(plan.action).toBe('update');
             expect(plan.previous).toBe(OTHER_HANDLE);
-            expect(plan.record.external_documents).toEqual([
-                { ...stale, location: HANDLE, publish: true },
-            ]);
+            expect(plan.record.external_documents).toEqual([{ ...stale, location: HANDLE }]);
+
+            const published = doc({ location: OTHER_HANDLE, publish: true });
+            const kept = link.plan_link(record([published]), HANDLE);
+            expect(kept.record.external_documents[0]).toMatchObject({
+                location: HANDLE,
+                publish: true,
+            });
+        });
+
+        describe('when the repository object is not published', () => {
+            const hidden = { object_published: false };
+
+            it('adds and repoints nothing', () => {
+                expect(link.plan_link(record([]), HANDLE, hidden)).toEqual({
+                    action: 'object_unpublished',
+                });
+                const stale = doc({ location: OTHER_HANDLE });
+                expect(link.plan_link(record([stale]), HANDLE, hidden)).toEqual({
+                    action: 'object_unpublished',
+                });
+            });
+
+            it('removes a published link to the object, keeping every other document', () => {
+                const unrelated = doc({ title: 'WorldCat', location: 'https://worldcat.org/1' });
+                const shown = doc({ location: HTTP_HANDLE, publish: true });
+                const original = { ...record([unrelated, shown]), position: 2 };
+                const before = JSON.parse(JSON.stringify(original));
+                const plan = link.plan_link(original, HANDLE, hidden);
+                expect(plan).toEqual({
+                    action: 'remove',
+                    previous: HTTP_HANDLE,
+                    record: { ...record([unrelated]) },
+                });
+                expect(original).toEqual(before);
+            });
+
+            it('removes only the link it owns, under any variant of its title', () => {
+                const curated = doc({
+                    title: 'James B. Radetsky Digital Papers',
+                    location: HANDLE,
+                });
+                const variant = doc({ title: 'Special Collections@DU' });
+                const plan = link.plan_link(record([variant, curated]), HANDLE, hidden);
+                expect(plan).toEqual({
+                    action: 'remove',
+                    previous: HTTP_HANDLE,
+                    record: record([curated]),
+                });
+            });
+
+            it('leaves a document with a title of its own that links to the object', () => {
+                const curated = doc({ title: 'Archived Website (crawled 2016)', location: HANDLE });
+                expect(link.plan_link(record([curated]), HANDLE, hidden)).toEqual({
+                    action: 'object_unpublished',
+                });
+            });
+
+            it('adds the link back when the object is published again', () => {
+                const removed = link.plan_link(record([doc()]), HANDLE, hidden).record;
+                const plan = link.plan_link(removed, HANDLE);
+                expect(plan.action).toBe('add');
+                expect(plan.record.external_documents).toEqual([doc({ location: HANDLE })]);
+            });
+
+            it('leaves an unpublished link to the object alone', () => {
+                const quiet = doc({ location: HANDLE, publish: false });
+                expect(link.plan_link(record([quiet]), HANDLE, hidden)).toEqual({
+                    action: 'object_unpublished',
+                });
+                expect(
+                    link.plan_link({ uri: '/repositories/2/resources/9' }, HANDLE, hidden)
+                ).toEqual({ action: 'object_unpublished' });
+            });
         });
 
         it('replaces a location that is not a handle', () => {
@@ -233,6 +304,25 @@ describe('libs/aspace_link', () => {
 
         it('returns an empty list when there are no instances', () => {
             expect(link.digital_object_refs({})).toEqual([]);
+        });
+    });
+
+    describe('linked_records', () => {
+        it('lists the records a digital object is attached to', () => {
+            const digital_object = {
+                linked_instances: [
+                    { ref: '/repositories/2/archival_objects/1' },
+                    { ref: '' },
+                    null,
+                    {},
+                    { ref: '/repositories/2/resources/7' },
+                ],
+            };
+            expect(link.linked_records(digital_object)).toEqual([
+                '/repositories/2/archival_objects/1',
+                '/repositories/2/resources/7',
+            ]);
+            expect(link.linked_records({})).toEqual([]);
         });
     });
 

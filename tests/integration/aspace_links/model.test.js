@@ -4,6 +4,7 @@ const model = require('../../../aspace_links/model');
 const db_helper = require('../../helpers/db');
 const { db_queue } = require('../../../config/db');
 const tables = require('../../../config/db_tables');
+const log = require('../../../libs/log');
 const { provision_collection } = require('../../../repository/collection_provision');
 const { PID, GONE, AO, RESOURCE, handle } = require('../../helpers/aspace_links');
 
@@ -97,9 +98,41 @@ describe('aspace_links/model', () => {
             const rows = await model.load_object_rows();
             expect(rows).toHaveLength(1);
             expect(Object.keys(rows[0]).sort()).toEqual(
-                ['created', 'handle', 'is_active', 'object_type', 'pid', 'uri'].sort()
+                [
+                    'created',
+                    'handle',
+                    'is_active',
+                    'is_published',
+                    'object_type',
+                    'pid',
+                    'uri',
+                ].sort()
             );
             expect(rows[0]).toMatchObject({ pid: PID, uri: AO, is_active: 1 });
+        });
+    });
+
+    describe('load_object_rows_for', () => {
+        it('returns the rows of the named records, newline-ended uris included', async () => {
+            await db_helper.seed_object({ pid: PID, uri: `${AO}\n` });
+            await db_helper.seed_object({ uri: `${AO}7` });
+            await db_helper.seed_object({ uri: SECOND });
+
+            const rows = await model.load_object_rows_for([AO]);
+            expect(rows.map((row) => row.uri).sort()).toEqual([`${AO}\n`, `${AO}7`].sort());
+            expect(await model.load_object_rows_for([])).toEqual([]);
+        });
+
+        it('matches the characters of the uri literally', async () => {
+            await db_helper.seed_object({
+                uri: AO.replace('archival_objects', 'archivalXobjects'),
+            });
+            await db_helper.seed_object({ uri: '/repositories/2/resources/1%' });
+            await db_helper.seed_object({ uri: '/repositories/2/resources/1!' });
+
+            expect(await model.load_object_rows_for([AO])).toEqual([]);
+            const rows = await model.load_object_rows_for(['/repositories/2/resources/1%']);
+            expect(rows.map((row) => row.uri)).toEqual(['/repositories/2/resources/1%']);
         });
     });
 
@@ -128,6 +161,73 @@ describe('aspace_links/model', () => {
             vi.setSystemTime(Date.now() + model.RETRY_MS + 1000);
             const claimed = await model.claim(10);
             expect(claimed.map((row) => row.uri)).toEqual([AO]);
+        });
+    });
+
+    describe('claim (lease)', () => {
+        it('marks the rows it hands out as in progress, still counted as waiting', async () => {
+            await model.enqueue([AO, SECOND]);
+            const claimed = await model.claim(1);
+            expect(claimed).toEqual([expect.objectContaining({ uri: AO, status: 'IN_PROGRESS' })]);
+            expect(await row_for(AO)).toMatchObject({ status: 'IN_PROGRESS' });
+            expect((await model.claim(10)).map((row) => row.uri)).toEqual([SECOND]);
+            expect((await model.summary()).waiting).toBe(2);
+        });
+
+        it('keeps a record queued again while it was checked: no stale result, no removal', async () => {
+            await model.enqueue([AO, SECOND]);
+            const [first, second] = await model.claim(10);
+            await model.enqueue([AO, SECOND]);
+            await model.record(first, result({ state: 'in_sync' }));
+            await model.remove([second]);
+
+            expect(await row_for(AO)).toMatchObject({ status: 'PENDING', state: null });
+            expect(await row_for(SECOND)).toMatchObject({ status: 'PENDING' });
+            expect((await model.claim(10)).map((row) => row.uri)).toEqual([AO, SECOND]);
+        });
+
+        it('hands rows left in progress back to the queue', async () => {
+            await model.enqueue([AO]);
+            await model.claim(10);
+            expect(await model.release()).toBe(1);
+            expect(await row_for(AO)).toMatchObject({ status: 'PENDING' });
+        });
+    });
+
+    describe('store', () => {
+        it('stores a result for a checked record and for one with no queue row', async () => {
+            await model.enqueue([AO]);
+            await model.record(await row_for(AO), result({ state: 'pending' }));
+            await model.store(result({ state: 'updated' }));
+            await model.store(result({ uri: `${SECOND}\n`, state: 'in_sync' }));
+            expect(await row_for(AO)).toMatchObject({ status: 'DONE', state: 'updated' });
+            expect(await row_for(SECOND)).toMatchObject({ status: 'DONE', state: 'in_sync' });
+        });
+
+        it('leaves a record that is waiting to be checked again as it is', async () => {
+            await model.enqueue([AO, SECOND]);
+            await model.claim(1);
+            await model.store(result({ state: 'updated' }));
+            await model.store(result({ uri: SECOND, state: 'in_sync' }));
+            expect(await row_for(AO)).toMatchObject({ status: 'IN_PROGRESS', state: null });
+            expect(await row_for(SECOND)).toMatchObject({ status: 'PENDING', state: null });
+        });
+    });
+
+    describe('enqueue_safely', () => {
+        it('logs a failure instead of throwing', async () => {
+            const error = vi.spyOn(log, 'error').mockImplementation(() => {});
+            try {
+                expect(await model.enqueue_safely(null, 'a test')).toBe(0);
+                expect(error).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        event: 'aspace_link_queue_failed',
+                        context: 'a test',
+                    })
+                );
+            } finally {
+                error.mockRestore();
+            }
         });
     });
 
@@ -247,9 +347,91 @@ describe('aspace_links/model', () => {
         it('deletes the named rows only', async () => {
             await model.enqueue([AO, SECOND]);
             const first = await row_for(AO);
-            await model.remove([first.id]);
+            await model.remove([first]);
             await model.remove([]);
             expect((await all_rows()).map((row) => row.uri)).toEqual([SECOND]);
+        });
+    });
+
+    describe('is_ready', () => {
+        it('is true once both queue tables exist', async () => {
+            expect(await model.is_ready()).toBe(true);
+        });
+    });
+
+    describe('log_change', () => {
+        const changes = () => db_queue()(tables.aspace_link_changes).orderBy('id', 'asc');
+
+        it('keeps one row per write, with the value it replaced', async () => {
+            await model.log_change({
+                record_uri: AO,
+                uri: '/repositories/2/digital_objects/48380',
+                field: 'digital_object_id',
+                action: 'update',
+                previous: 'B133.01.0003.00001',
+                value: handle(PID),
+                pids: [PID],
+            });
+            await model.log_change({
+                record_uri: AO,
+                uri: AO,
+                field: 'link',
+                action: 'add',
+                value: handle(PID),
+                pids: [PID],
+            });
+
+            const rows = await changes();
+            expect(
+                rows.map((row) => ({
+                    record_uri: row.record_uri,
+                    uri: row.uri,
+                    field: row.field,
+                    action: row.action,
+                    previous: row.previous,
+                    value: row.value,
+                    pids: JSON.parse(row.pids),
+                }))
+            ).toEqual([
+                {
+                    record_uri: AO,
+                    uri: '/repositories/2/digital_objects/48380',
+                    field: 'digital_object_id',
+                    action: 'update',
+                    previous: 'B133.01.0003.00001',
+                    value: handle(PID),
+                    pids: [PID],
+                },
+                {
+                    record_uri: AO,
+                    uri: AO,
+                    field: 'link',
+                    action: 'add',
+                    previous: null,
+                    value: handle(PID),
+                    pids: [PID],
+                },
+            ]);
+            expect(rows.every((row) => Boolean(row.created_at))).toBe(true);
+        });
+
+        it('outlives a later check of the record and its removal from the queue', async () => {
+            await model.enqueue([AO]);
+            await model.log_change({
+                record_uri: AO,
+                uri: AO,
+                field: 'link',
+                action: 'update',
+                previous: 'http://example.org/old',
+                value: handle(PID),
+                pids: [PID],
+            });
+            await model.record(await row_for(AO), result({ state: 'in_sync' }));
+            await model.remove([await row_for(AO)]);
+
+            const rows = await changes();
+            expect(rows).toHaveLength(1);
+            expect(rows[0].previous).toBe('http://example.org/old');
         });
     });
 

@@ -17,18 +17,22 @@
     <div id="aspace-links-status"
          hx-get="<%= dashboard_base %>/admin/aspace-links/status"
          hx-trigger="every 10s, aspace-links-status from:body"
-         hx-swap="innerHTML"
-         role="status"
-         aria-live="polite"
-         aria-atomic="false">
+         hx-swap="innerHTML">
         <%- include('../partials/aspace_links_status', {
             dashboard_base: dashboard_base,
+            table_missing: table_missing,
             summary: summary,
             labels: labels,
             worker_enabled: worker_enabled,
-            writes_enabled: writes_enabled
+            writes_enabled: writes_enabled,
+            writes_requested: writes_requested
         }) %>
     </div>
+    <div id="aspace-links-announce"
+         class="visually-hidden"
+         role="status"
+         aria-live="polite"
+         data-last="<%= summary.waiting_error || '' %>"></div>
 
     <%
         let confirm_text = 'Check every repository record against ArchivesSpace? Nothing will be changed. This runs in the background and can take over an hour.';

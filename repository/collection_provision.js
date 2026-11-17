@@ -138,7 +138,7 @@ async function provision_collection({ uri, parent_collection_pid } = {}, deps = 
         });
         if (handle_url) {
             await aspace_links_model.enqueue([uri]).catch((err) => {
-                log.warn({ event: 'collection_aspace_link_queue_failed', uri, err: err.message });
+                log.error({ event: 'collection_aspace_link_queue_failed', uri, err: err.message });
             });
         }
         return {

@@ -4,7 +4,7 @@ const { randomUUID } = require('node:crypto');
 
 const collections_model = require('../../../collections/model');
 const db_helper = require('../../helpers/db');
-const { db } = require('../../../config/db');
+const { db, db_queue } = require('../../../config/db');
 const tables = require('../../../config/db_tables');
 const { NotFoundError, ValidationError, ConflictError } = require('../../../libs/errors');
 
@@ -310,6 +310,26 @@ describe('collections/model — DB integration', () => {
             }
             return collection;
         }
+
+        it('queues the ArchivesSpace records of the members it publishes', async () => {
+            const collection = await db_helper.seed_object({
+                object_type: 'collection',
+                is_published: 1,
+                display_record: dr('Papers'),
+            });
+            for (const n of [1, 2]) {
+                await db_helper.seed_object({
+                    is_member_of_collection: collection.pid,
+                    uri: `/repositories/2/archival_objects/${700 + n}`,
+                });
+            }
+            await collections_model.publish_members(collection.pid);
+            const queued = await db_queue()(tables.aspace_links).orderBy('uri', 'asc');
+            expect(queued.map((row) => row.uri)).toEqual([
+                '/repositories/2/archival_objects/701',
+                '/repositories/2/archival_objects/702',
+            ]);
+        });
 
         it('publish_members flips every active non-collection member', async () => {
             const c = await seed_collection_with_members({ active_count: 4 });
@@ -647,6 +667,25 @@ describe('collections/model — DB integration', () => {
     });
 
     describe('delete_collection() — soft-delete an empty (sub-)collection', () => {
+        it('queues the ArchivesSpace record of the collection it deletes', async () => {
+            const parent = await db_helper.seed_object({
+                object_type: 'collection',
+                display_record: dr('Parent'),
+            });
+            const empty = await db_helper.seed_object({
+                object_type: 'collection',
+                is_member_of_collection: parent.pid,
+                uri: '/repositories/2/resources/4321',
+                display_record: dr('Empty Child'),
+            });
+            await collections_model.delete_collection(empty.pid, { actor: 'Test User (tuser)' });
+            expect(
+                await db_queue()(tables.aspace_links)
+                    .where({ uri: '/repositories/2/resources/4321' })
+                    .first()
+            ).toMatchObject({ status: 'PENDING' });
+        });
+
         it('soft-deletes an empty collection (is_active=0, is_updated=1, delete_id stamped)', async () => {
             const parent = await db_helper.seed_object({
                 object_type: 'collection',

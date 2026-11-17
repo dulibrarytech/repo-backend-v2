@@ -77,8 +77,16 @@ describe('scripts/sync_aspace_links', () => {
             });
         });
 
+        it('accepts a leap day and says which time zone the date is in', () => {
+            expect(args(['--since', '2028-02-29']).since).toBe('2028-02-29');
+            expect(script.USAGE).toContain("(the date in the database server's time zone)");
+        });
+
         it.each([
             [['--since', '06/01/2026'], /--since must be YYYY-MM-DD/],
+            [['--since', '2026-13-01'], /--since must be YYYY-MM-DD, a date that exists/],
+            [['--since', '2026-02-30'], /--since must be YYYY-MM-DD, a date that exists/],
+            [['--since', '0000-01-01'], /--since must be YYYY-MM-DD, a date that exists/],
             [['--batch-size', '0'], /--batch-size must be between 1 and 250/],
             [['--batch-size', '251'], /--batch-size must be between 1 and 250/],
             [['--batch-size', 'many'], /--batch-size must be between 1 and 250/],
@@ -142,6 +150,37 @@ describe('scripts/sync_aspace_links', () => {
             },
         ];
 
+        it('reports a record ArchivesSpace cannot return, and carries on with the rest', async () => {
+            const aspace = make_aspace(records());
+            const list = aspace.get_native_set;
+            aspace.get_native_set = async (listing, ids) =>
+                listing.endsWith('/resources')
+                    ? { status: 500, data: { error: 'boom' } }
+                    : list(listing, ids);
+            const deps = make_deps(aspace, rows());
+            const code = await script.run(args(), deps);
+            const text = deps.output.join('');
+
+            expect(code).toBe(0);
+            expect(text).toMatch(/1 {2}pending/);
+            expect(text).toMatch(/1 {2}needs_review/);
+            expect(text).toContain(
+                `${RESOURCE}  [${COLLECTION}]  ` +
+                    'ArchivesSpace /repositories/2/resources returned HTTP 500: boom'
+            );
+        });
+
+        it('stores nothing for the admin page in a dry run', async () => {
+            const stored = [];
+            const deps = {
+                ...make_deps(make_aspace(records()), rows()),
+                store: async (result) => stored.push(result),
+            };
+            await script.run(args(), deps);
+            expect(stored).toEqual([]);
+            expect(deps.output.join('')).not.toContain('admin page');
+        });
+
         it('reports what a dry run would change and writes nothing', async () => {
             const aspace = make_aspace(records());
             const deps = make_deps(aspace, rows());
@@ -157,6 +196,36 @@ describe('scripts/sync_aspace_links', () => {
             expect(text).toMatch(/1 {2}link add/);
             expect(text).toMatch(/1 {2}digital object identifier/);
             expect(text).toContain('Dry run: 1 record(s) would be updated');
+        });
+
+        it('names the second switch when a development host would write to another machine', async () => {
+            process.env.NODE_ENV = 'development';
+            process.env.ASPACE_WRITES_ENABLED = '1';
+            delete process.env.ASPACE_WRITES_FROM_DEV;
+            app_config._reset();
+            const aspace = make_aspace(records());
+            const deps = make_deps(aspace, rows());
+            const code = await script.run(args(['--execute']), deps);
+
+            expect(code).toBe(1);
+            expect(deps.output.join('')).toContain('also needs ASPACE_WRITES_FROM_DEV=1');
+            expect(aspace.calls.sets).toEqual([]);
+            expect(aspace.calls.posts).toEqual([]);
+
+            process.env.ASPACE_WRITES_FROM_DEV = '1';
+            app_config._reset();
+            expect(await script.run(args(['--execute']), make_deps(aspace, rows()))).toBe(0);
+            expect(aspace.calls.posts.map((post) => post.uri)).toEqual([DO, AO]);
+        });
+
+        it('counts the links a dry run would remove', async () => {
+            const aspace = make_aspace([
+                archival_object({ instances: [], external_documents: [link_doc(handle(PID))] }),
+            ]);
+            const deps = make_deps(aspace, [row({ is_published: 0 })]);
+            await script.run(args(), deps);
+            expect(deps.output.join('')).toMatch(/1 {2}link remove/);
+            expect(aspace.calls.posts).toEqual([]);
         });
 
         it('refuses --execute, before any request, while writes are disabled', async () => {
@@ -200,6 +269,36 @@ describe('scripts/sync_aspace_links', () => {
                 expect(deps.output.join('')).toContain('1 updated, 0 failed');
             });
 
+            it('stores each result for the admin page, and each write, as it goes', async () => {
+                const aspace = make_aspace(records());
+                const stored = [];
+                const written = [];
+                const deps = {
+                    ...make_deps(aspace, rows()),
+                    store: async (result) => stored.push(result),
+                    log_change: async (entry) => written.push(entry),
+                };
+                await script.run(args(['--execute']), deps);
+
+                expect(stored.map((result) => `${result.uri} ${result.state}`)).toEqual([
+                    `${AO} updated`,
+                    `${RESOURCE} in_sync`,
+                ]);
+                expect(written.map((entry) => `${entry.uri} ${entry.field}`)).toEqual([
+                    `${DO} digital_object_id`,
+                    `${AO} link`,
+                ]);
+                expect(deps.output.join('')).toContain('admin page     updated with each result');
+            });
+
+            it('says when the admin page cannot be updated', async () => {
+                const deps = make_deps(make_aspace(records()), rows());
+                await script.run(args(['--execute']), deps);
+                expect(deps.output.join('')).toContain(
+                    'admin page     not updated (queue tables missing)'
+                );
+            });
+
             it('finds nothing to do on a second run', async () => {
                 const aspace = make_aspace(records());
                 await script.run(args(['--execute']), make_deps(aspace, rows()));
@@ -232,7 +331,7 @@ describe('scripts/sync_aspace_links', () => {
             const numbers = [1, 2, 3, 4, 5, 6, 7];
             const aspace = make_aspace(
                 numbers.map((n) => archival_object({ uri: uri_of(n), instances: [] })),
-                { update_statuses: Array(7).fill(403) }
+                { update_statuses: Array(7).fill(503) }
             );
             const deps = make_deps(
                 aspace,
@@ -245,9 +344,64 @@ describe('scripts/sync_aspace_links', () => {
             const text = deps.output.join('');
             expect(code).toBe(1);
             expect(aspace.calls.posts).toHaveLength(5);
-            expect(text).toContain('Stopped early: 5 updates in a row failed.');
-            expect(text).toContain('may not be allowed to update this kind of record');
+            expect(text).toContain(
+                `Stopped early: 5 updates in a row failed. Last: ${uri_of(5)}: ` +
+                    `ArchivesSpace ${uri_of(5)} returned HTTP 503: refused 503`
+            );
             expect(text).toContain('0 updated, 5 failed');
+        });
+
+        it('carries on past updates the account is not allowed to make', async () => {
+            process.env.ASPACE_WRITES_ENABLED = '1';
+            app_config._reset();
+            const pid_of = (n) => `00000000-0000-4000-8000-00000000000${n}`;
+            const uri_of = (n) => `/repositories/2/archival_objects/${100 + n}`;
+            const numbers = [1, 2, 3, 4, 5, 6, 7];
+            const aspace = make_aspace(
+                numbers.map((n) => archival_object({ uri: uri_of(n), instances: [] })),
+                { update_statuses: Array(7).fill(403) }
+            );
+            const deps = make_deps(
+                aspace,
+                numbers.map((n) =>
+                    row({ pid: pid_of(n), handle: handle(pid_of(n)), uri: uri_of(n) })
+                )
+            );
+
+            const code = await script.run(args(['--execute', '--batch-size', '2']), deps);
+            const text = deps.output.join('');
+            expect(code).toBe(1);
+            expect(aspace.calls.posts).toHaveLength(7);
+            expect(text).not.toContain('Stopped early');
+            expect(text).toContain('may not be allowed to update this kind of record');
+            expect(text).toContain('0 updated, 7 failed');
+        });
+
+        it('checks each batch against the objects as they are when it is reached', async () => {
+            process.env.ASPACE_WRITES_ENABLED = '1';
+            app_config._reset();
+            const second = '/repositories/2/archival_objects/7';
+            const aspace = make_aspace([
+                archival_object({ instances: [] }),
+                archival_object({
+                    uri: second,
+                    instances: [],
+                    external_documents: [link_doc(handle(TWIN))],
+                }),
+            ]);
+            const objects = [row(), row({ pid: TWIN, handle: handle(TWIN), uri: second })];
+            const stored = [];
+            const deps = {
+                ...make_deps(aspace, objects),
+                store: async (result) => {
+                    stored.push(`${result.uri} ${result.state} ${result.link}`);
+                    if (result.uri === AO) objects[1] = { ...objects[1], is_published: 0 };
+                },
+            };
+
+            await script.run(args(['--execute', '--batch-size', '1']), deps);
+            expect(stored).toEqual([`${AO} updated add`, `${second} updated remove`]);
+            expect(aspace.store.get(second).external_documents).toEqual([]);
         });
 
         it('says why a record needs a review', async () => {

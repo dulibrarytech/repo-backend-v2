@@ -1,19 +1,33 @@
-<% if (!worker_enabled) { %>
-    <div class="alert alert-warning" role="alert" style="margin-bottom: 12px;">
+<% if (table_missing) { %>
+    <div class="alert alert-danger" style="margin-bottom: 12px;">
+        <strong>The ArchivesSpace links tables are missing.</strong>
+        Nothing is queued or checked, new ingests included, until
+        <code>npm run migrate:queue</code> is run on this server. Then use
+        Check all records to queue what was missed.
+    </div>
+<% } else if (!worker_enabled) { %>
+    <div class="alert alert-warning" style="margin-bottom: 12px;">
         <strong>Automatic checking is off.</strong>
         Records wait here until <code>ASPACE_LINKS_WORKER_ENABLED</code> is
         turned on and the app is restarted.
     </div>
 <% } else if (!writes_enabled) { %>
-    <div class="alert alert-warning" role="alert" style="margin-bottom: 12px;">
+    <div class="alert alert-warning" style="margin-bottom: 12px;">
         <strong>Nothing is being written to ArchivesSpace.</strong>
-        Records are checked and reported only. To write the changes, turn on
-        <code>ASPACE_WRITES_ENABLED</code> and restart the app.
+        Records are checked and reported only.
+        <% if (writes_requested) { %>
+            This server is not running in production and ArchivesSpace is on
+            another machine. To write the changes from here, also turn on
+            <code>ASPACE_WRITES_FROM_DEV</code> and restart the app.
+        <% } else { %>
+            To write the changes, turn on <code>ASPACE_WRITES_ENABLED</code>
+            and restart the app.
+        <% } %>
     </div>
 <% } %>
 
 <% if (summary.waiting_error) { %>
-    <div class="alert alert-warning" role="alert" style="margin-bottom: 12px;">
+    <div class="alert alert-warning" style="margin-bottom: 12px;" data-stall="<%= summary.waiting_error %>">
         <strong>The last check could not be completed.</strong>
         It will be tried again in a few minutes.
         <div class="small" style="margin-top: 4px;">

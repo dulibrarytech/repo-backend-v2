@@ -17,6 +17,7 @@ const {
     digital_object,
     make_aspace,
     make_deps,
+    UNREACHABLE,
 } = require('../../helpers/aspace_links');
 
 const OPTIONS = { prefix: '10176', publish: false };
@@ -78,6 +79,35 @@ describe('aspace_links/sync', () => {
         });
     });
 
+    describe('load_targets', () => {
+        it('reads only the rows of the records asked for', async () => {
+            const loaders = {
+                load_rows_for: vi.fn(async () => [
+                    row(),
+                    row({ pid: GONE, handle: handle(GONE), is_active: 0 }),
+                ]),
+                load_rows: vi.fn(async () => []),
+            };
+            const found = await sync.load_targets([AO], loaders);
+            expect([...found.keys()]).toEqual([AO]);
+            expect(found.get(AO).live.map((r) => r.pid)).toEqual([PID]);
+            expect(found.get(AO).deleted.map((r) => r.pid)).toEqual([GONE]);
+            expect(loaders.load_rows_for).toHaveBeenCalledWith([AO]);
+            expect(loaders.load_rows).not.toHaveBeenCalled();
+        });
+
+        it('reads every row when a record cannot be found by the start of its uri', async () => {
+            const padded = row({ uri: ` ${AO}` });
+            const loaders = {
+                load_rows_for: vi.fn(async () => []),
+                load_rows: vi.fn(async () => [padded, row({ pid: TWIN, uri: RESOURCE })]),
+            };
+            const found = await sync.load_targets([AO], loaders);
+            expect(found.get(AO).live).toEqual([padded]);
+            expect(loaders.load_rows).toHaveBeenCalledTimes(1);
+        });
+    });
+
     describe('assess', () => {
         const no_digital_objects = new Map();
 
@@ -90,15 +120,20 @@ describe('aspace_links/sync', () => {
             });
         });
 
-        it('reports a link left behind by a deleted object', () => {
-            const target = target_of(row({ pid: GONE, handle: handle(GONE), is_active: 0 }));
-            const record = archival_object({ external_documents: [link_doc(old_handle(GONE))] });
-            const assessed = sync.assess(target, record, no_digital_objects, OPTIONS);
-            expect(assessed).toEqual({
-                result: { uri: AO, pids: [GONE], state: 'orphan_link' },
-                changes: [],
-            });
-        });
+        it.each([true, false])(
+            'reports a link left behind by a deleted object, published %s, and changes nothing',
+            (shown) => {
+                const target = target_of(row({ pid: GONE, handle: handle(GONE), is_active: 0 }));
+                const record = archival_object({
+                    external_documents: [link_doc(old_handle(GONE), { publish: shown })],
+                });
+                const assessed = sync.assess(target, record, no_digital_objects, OPTIONS);
+                expect(assessed).toEqual({
+                    result: { uri: AO, pids: [GONE], state: 'orphan_link' },
+                    changes: [],
+                });
+            }
+        );
 
         it('says nothing about a deleted object whose record carries no link to it', () => {
             const target = target_of(row({ pid: GONE, handle: handle(GONE), is_active: 0 }));
@@ -233,6 +268,36 @@ describe('aspace_links/sync', () => {
             expect(assessed.changes).toEqual([]);
         });
 
+        it('leaves the identifier of a digital object shared with another record, and asks for a review', () => {
+            const shared = digital_object({
+                linked_instances: [{ ref: AO }, { ref: '/repositories/2/archival_objects/9' }],
+            });
+            const record = archival_object({ external_documents: [link_doc(handle(PID))] });
+            const assessed = sync.assess(
+                target_of(row()),
+                record,
+                new Map([[DO, shared]]),
+                OPTIONS
+            );
+            expect(assessed.result).toMatchObject({
+                state: 'needs_review',
+                digital_object: 'shared',
+                note: 'The digital object is also attached to another record.',
+            });
+            expect(assessed.changes).toEqual([]);
+        });
+
+        it('writes the identifier when the digital object is attached to this record only', () => {
+            const own = digital_object({ linked_instances: [{ ref: AO }] });
+            const assessed = sync.assess(
+                target_of(row()),
+                archival_object(),
+                new Map([[DO, own]]),
+                OPTIONS
+            );
+            expect(assessed.changes.map((change) => change.uri)).toEqual([DO, AO]);
+        });
+
         it('still plans the link, and keeps the note, when only the digital object needs a review', () => {
             const second = { instance_type: 'digital_object', digital_object: { ref: `${DO}9` } };
             const record = archival_object();
@@ -244,6 +309,73 @@ describe('aspace_links/sync', () => {
                 note: 'More than one digital object is attached to the record.',
             });
             expect(assessed.changes.map((change) => change.uri)).toEqual([AO]);
+        });
+
+        it('waits for an unpublished object, planning no link and no identifier', () => {
+            const digital_objects = new Map([[DO, digital_object()]]);
+            const assessed = sync.assess(
+                target_of(row({ is_published: 0 })),
+                archival_object(),
+                digital_objects,
+                OPTIONS
+            );
+            expect(assessed.result).toEqual({
+                uri: AO,
+                pids: [PID],
+                state: 'unpublished_object',
+                handle: handle(PID),
+                link: 'object_unpublished',
+            });
+            expect(assessed.changes).toEqual([]);
+        });
+
+        it('removes the published link of an object that is not published', () => {
+            const record = archival_object({ external_documents: [link_doc(old_handle(PID))] });
+            const assessed = sync.assess(
+                target_of(row({ is_published: 0 })),
+                record,
+                no_digital_objects,
+                OPTIONS
+            );
+            expect(assessed.result).toMatchObject({
+                state: 'pending',
+                link: 'remove',
+                link_previous: old_handle(PID),
+            });
+            expect(assessed.changes.map((change) => change.uri)).toEqual([AO]);
+            expect(assessed.changes[0].record.external_documents).toEqual([]);
+        });
+
+        it('adds the link again once the object is published again', () => {
+            const hidden = sync.assess(
+                target_of(row({ is_published: 0 })),
+                archival_object({ instances: [], external_documents: [link_doc(handle(PID))] }),
+                no_digital_objects,
+                OPTIONS
+            );
+            const shown = sync.assess(
+                target_of(row()),
+                hidden.changes[0].record,
+                no_digital_objects,
+                OPTIONS
+            );
+            expect(shown.result).toMatchObject({ state: 'pending', link: 'add' });
+            expect(shown.changes[0].record.external_documents).toEqual([link_doc(handle(PID))]);
+        });
+
+        it('leaves alone a link that staff unpublished on the record of an unpublished object', () => {
+            const quiet = link_doc(handle(PID), { publish: false });
+            const assessed = sync.assess(
+                target_of(row({ is_published: 0 })),
+                archival_object({ external_documents: [quiet] }),
+                no_digital_objects,
+                OPTIONS
+            );
+            expect(assessed.result).toMatchObject({
+                state: 'unpublished_object',
+                link: 'object_unpublished',
+            });
+            expect(assessed.changes).toEqual([]);
         });
 
         it('reports an unpublished link, and publishes it only when asked', () => {
@@ -285,9 +417,27 @@ describe('aspace_links/sync', () => {
         it('posts the planned record once when ArchivesSpace accepts it', async () => {
             const aspace = make_aspace([archival_object(), digital_object()]);
             const outcome = await sync.write_change(change_for(aspace), make_deps(aspace));
-            expect(outcome).toEqual({ ok: true });
+            expect(outcome).toEqual({ ok: true, written: { action: 'add', previous: null } });
             expect(aspace.calls.posts).toHaveLength(1);
             expect(aspace.calls.gets).toEqual([]);
+        });
+
+        it('reports what it wrote and the value it replaced', async () => {
+            const aspace = make_aspace([archival_object(), digital_object()]);
+            const digital_objects = new Map([[DO, aspace.store.get(DO)]]);
+            const assessed = sync.assess(
+                target_of(row()),
+                aspace.store.get(AO),
+                digital_objects,
+                OPTIONS
+            );
+            expect(assessed.changes[0]).toMatchObject({ uri: DO, field: 'digital_object_id' });
+
+            const outcome = await sync.write_change(assessed.changes[0], make_deps(aspace));
+            expect(outcome).toEqual({
+                ok: true,
+                written: { action: 'update', previous: 'B133.01.0003.00001' },
+            });
         });
 
         it('re-reads and re-plans once after a 409 conflict', async () => {
@@ -298,7 +448,7 @@ describe('aspace_links/sync', () => {
             aspace.store.set(AO, archival_object({ lock_version: 15, title: 'Edited by staff' }));
 
             const outcome = await sync.write_change(change, make_deps(aspace));
-            expect(outcome).toEqual({ ok: true });
+            expect(outcome).toEqual({ ok: true, written: { action: 'add', previous: null } });
             expect(aspace.calls.gets).toEqual([AO]);
             expect(aspace.calls.posts).toHaveLength(2);
             expect(aspace.calls.posts[1].record).toMatchObject({
@@ -308,7 +458,7 @@ describe('aspace_links/sync', () => {
             expect(aspace.calls.posts[1].record.external_documents[0].location).toBe(handle(PID));
         });
 
-        it('stops after a 409 when the fresh record already carries the link', async () => {
+        it('counts the write as made when the fresh record carries the link after a 409', async () => {
             const aspace = make_aspace([archival_object(), digital_object()], {
                 update_statuses: [409],
             });
@@ -316,6 +466,44 @@ describe('aspace_links/sync', () => {
             aspace.store.set(
                 AO,
                 archival_object({ lock_version: 15, external_documents: [link_doc(handle(PID))] })
+            );
+
+            const outcome = await sync.write_change(change, make_deps(aspace));
+            expect(outcome).toEqual({ ok: true, written: { action: 'add', previous: null } });
+            expect(aspace.calls.posts).toHaveLength(1);
+        });
+
+        it('counts a removal as made when the fresh record no longer shows the link', async () => {
+            const aspace = make_aspace(
+                [archival_object({ external_documents: [link_doc(handle(PID))] })],
+                { update_statuses: [409] }
+            );
+            const change = sync.assess(
+                target_of(row({ is_published: 0 })),
+                aspace.store.get(AO),
+                new Map(),
+                OPTIONS
+            ).changes[0];
+            aspace.store.set(AO, archival_object({ lock_version: 15 }));
+
+            const outcome = await sync.write_change(change, make_deps(aspace));
+            expect(outcome).toEqual({
+                ok: true,
+                written: { action: 'remove', previous: handle(PID) },
+            });
+        });
+
+        it('writes nothing, and claims nothing, when staff unpublished the link meanwhile', async () => {
+            const aspace = make_aspace([archival_object(), digital_object()], {
+                update_statuses: [409],
+            });
+            const change = change_for(aspace);
+            aspace.store.set(
+                AO,
+                archival_object({
+                    lock_version: 15,
+                    external_documents: [link_doc(handle(PID), { publish: false })],
+                })
             );
 
             const outcome = await sync.write_change(change, make_deps(aspace));
@@ -332,6 +520,25 @@ describe('aspace_links/sync', () => {
 
             const outcome = await sync.write_change(change, make_deps(aspace));
             expect(outcome).toEqual({ ok: false, error: 'HTTP 404: ArchivalObject not found' });
+        });
+
+        it('re-plans again while ArchivesSpace keeps answering 409, up to three times', async () => {
+            const aspace = make_aspace([archival_object(), digital_object()], {
+                update_statuses: [409, 409, 409],
+            });
+            const outcome = await sync.write_change(change_for(aspace), make_deps(aspace));
+            expect(outcome.ok).toBe(true);
+            expect(aspace.calls.gets).toHaveLength(3);
+            expect(aspace.calls.posts).toHaveLength(4);
+        });
+
+        it('reports the conflict after the third re-plan is refused too', async () => {
+            const aspace = make_aspace([archival_object(), digital_object()], {
+                update_statuses: [409, 409, 409, 409],
+            });
+            const outcome = await sync.write_change(change_for(aspace), make_deps(aspace));
+            expect(outcome).toEqual({ ok: false, error: 'HTTP 409: refused 409' });
+            expect(aspace.calls.posts).toHaveLength(4);
         });
 
         it('reports a refused update with the reason ArchivesSpace gave', async () => {
@@ -441,6 +648,120 @@ describe('aspace_links/sync', () => {
             expect(outcomes).toEqual([{ target: deleted[0], result: null }]);
         });
 
+        it('hands over each write and each outcome as soon as it is made', async () => {
+            const aspace = make_aspace(records());
+            const seen = [];
+            const deps = {
+                ...make_deps(aspace),
+                on_written: async (entry) => seen.push(entry),
+                on_outcome: async ({ target, result }) =>
+                    seen.push(`${target.uri} ${result.state}`),
+            };
+            await sync.sync_targets(targets(), { ...OPTIONS, execute: true }, deps);
+
+            expect(seen).toEqual([
+                {
+                    record_uri: AO,
+                    uri: DO,
+                    field: 'digital_object_id',
+                    action: 'update',
+                    previous: 'B133.01.0003.00001',
+                    value: handle(PID),
+                    pids: [PID],
+                },
+                {
+                    record_uri: AO,
+                    uri: AO,
+                    field: 'link',
+                    action: 'add',
+                    previous: null,
+                    value: handle(PID),
+                    pids: [PID],
+                },
+                `${AO} updated`,
+                `${RESOURCE} in_sync`,
+            ]);
+        });
+
+        it('stops between records when asked to, before reading the next listing', async () => {
+            const aspace = make_aspace(records());
+            let stop = false;
+            const deps = {
+                ...make_deps(aspace),
+                on_outcome: async () => {
+                    stop = true;
+                },
+                should_stop: () => stop,
+            };
+            const { outcomes, halted } = await sync.sync_targets(targets(), OPTIONS, deps);
+
+            expect(outcomes.map((outcome) => outcome.target.uri)).toEqual([AO]);
+            expect(halted).toBeNull();
+            expect(aspace.calls.sets.map((set) => set.listing)).toEqual([
+                '/repositories/2/archival_objects',
+                '/repositories/2/digital_objects',
+            ]);
+        });
+
+        it('reads no digital object for an object that is not published', async () => {
+            const aspace = make_aspace(records());
+            const hidden = sync.build_targets([row({ is_published: 0 })]).targets;
+            const { outcomes } = await sync.sync_targets(hidden, OPTIONS, make_deps(aspace));
+            expect(aspace.calls.sets.map((set) => set.listing)).toEqual([
+                '/repositories/2/archival_objects',
+            ]);
+            expect(outcomes[0].result.state).toBe('unpublished_object');
+        });
+
+        it('asks for a review after writing the link of a record with two digital objects', async () => {
+            const record = archival_object();
+            record.instances.push({
+                instance_type: 'digital_object',
+                digital_object: { ref: `${DO}9` },
+            });
+            const aspace = make_aspace([record, digital_object()]);
+            const { outcomes } = await sync.sync_targets(
+                sync.build_targets([row()]).targets,
+                { ...OPTIONS, execute: true },
+                make_deps(aspace)
+            );
+            expect(outcomes[0].result).toMatchObject({
+                state: 'needs_review',
+                link: 'add',
+                note: 'More than one digital object is attached to the record.',
+            });
+            expect(aspace.calls.posts.map((post) => post.uri)).toEqual([AO]);
+        });
+
+        it('gives up the whole call at once when ArchivesSpace refuses the login', async () => {
+            const refused = Object.assign(new Error('ArchivesSpace login rejected: HTTP 403'), {
+                status: 401,
+            });
+            let requests = 0;
+            const deps = {
+                ...make_deps(make_aspace(records())),
+                request: async () => {
+                    requests += 1;
+                    throw refused;
+                },
+            };
+            await expect(sync.sync_targets(targets(), OPTIONS, deps)).rejects.toBe(refused);
+            expect(requests).toBe(1);
+        });
+
+        it('gives up the whole call when the login is refused for a write', async () => {
+            const refused = Object.assign(new Error('ArchivesSpace login rejected: HTTP 403'), {
+                status: 401,
+            });
+            const aspace = make_aspace(records());
+            aspace.update_record = async () => {
+                throw refused;
+            };
+            await expect(
+                sync.sync_targets(targets(), { ...OPTIONS, execute: true }, make_deps(aspace))
+            ).rejects.toBe(refused);
+        });
+
         it('never reads a contested record', async () => {
             const aspace = make_aspace([]);
             const contested = sync.build_targets([
@@ -497,7 +818,7 @@ describe('aspace_links/sync', () => {
 
             it('stops after five failed updates in a row and says why', async () => {
                 const { targets: seven, records: all } = many(7);
-                const aspace = make_aspace(all, { update_statuses: Array(7).fill(400) });
+                const aspace = make_aspace(all, { update_statuses: Array(7).fill(503) });
 
                 const { outcomes, halted } = await sync.sync_targets(
                     seven,
@@ -509,13 +830,40 @@ describe('aspace_links/sync', () => {
                 expect(outcomes.every((outcome) => outcome.result.state === 'failed')).toBe(true);
                 expect(aspace.calls.posts).toHaveLength(5);
                 expect(halted).toBe(
-                    `5 updates in a row failed. Last: ${uri_of(5)}: HTTP 400: refused 400`
+                    `5 updates in a row failed. Last: ${uri_of(5)}: ` +
+                        `ArchivesSpace ${uri_of(5)} returned HTTP 503: refused 503`
                 );
+            });
+
+            it.each([500, 429])(
+                'counts an update answered with %i toward the stop',
+                async (status) => {
+                    const { targets: five, records: all } = many(5);
+                    const aspace = make_aspace(all, { update_statuses: Array(5).fill(status) });
+                    const { halted } = await sync.sync_targets(five, execute, make_deps(aspace));
+                    expect(halted).toMatch(/^5 updates in a row failed/);
+                }
+            );
+
+            it('does not stop for updates ArchivesSpace refuses for a reason of the record', async () => {
+                const { targets: seven, records: all } = many(7);
+                const statuses = [400, 403, 409, 409, 409, 409, 422, 404, 400, 400];
+                const aspace = make_aspace(all, { update_statuses: statuses });
+
+                const { outcomes, halted, failures_in_a_row } = await sync.sync_targets(
+                    seven,
+                    execute,
+                    make_deps(aspace)
+                );
+                expect(outcomes).toHaveLength(7);
+                expect(outcomes.every((outcome) => outcome.result.state === 'failed')).toBe(true);
+                expect(halted).toBeNull();
+                expect(failures_in_a_row).toBe(0);
             });
 
             it('starts counting again after an update that works', async () => {
                 const { targets: nine, records: all } = many(9);
-                const statuses = [400, 400, 400, 400, 200, 400, 400, 400, 400];
+                const statuses = [503, 503, 503, 503, 200, 503, 503, 503, 503];
                 const aspace = make_aspace(all, { update_statuses: statuses });
 
                 const { outcomes, halted } = await sync.sync_targets(
@@ -529,7 +877,7 @@ describe('aspace_links/sync', () => {
 
             it('carries the count from one call to the next', async () => {
                 const { targets: three, records: all } = many(3);
-                const aspace = make_aspace(all, { update_statuses: Array(3).fill(400) });
+                const aspace = make_aspace(all, { update_statuses: Array(3).fill(503) });
 
                 const first = await sync.sync_targets(
                     three.slice(0, 2),
@@ -547,6 +895,21 @@ describe('aspace_links/sync', () => {
                 expect(second.halted).toMatch(/^5 updates in a row failed/);
             });
 
+            it('starts a call at most one failure short of stopping', async () => {
+                const { targets: one, records: all } = many(1);
+                all[0] = archival_object({
+                    uri: uri_of(1),
+                    instances: [],
+                    external_documents: [link_doc(handle(pid_of(1)))],
+                });
+                const result = await sync.sync_targets(
+                    one,
+                    { ...execute, failures_in_a_row: 9 },
+                    make_deps(make_aspace(all))
+                );
+                expect(result).toMatchObject({ failures_in_a_row: 4, halted: null });
+            });
+
             it('does not count records that needed no update', async () => {
                 const { targets: six, records: all } = many(6);
                 all[2] = archival_object({
@@ -554,7 +917,7 @@ describe('aspace_links/sync', () => {
                     instances: [],
                     external_documents: [link_doc(handle(pid_of(3)))],
                 });
-                const aspace = make_aspace(all, { update_statuses: Array(5).fill(400) });
+                const aspace = make_aspace(all, { update_statuses: Array(5).fill(503) });
 
                 const { outcomes, halted } = await sync.sync_targets(
                     six,
@@ -573,11 +936,180 @@ describe('aspace_links/sync', () => {
             });
         });
 
-        it('throws when ArchivesSpace cannot list the records', async () => {
-            const aspace = make_aspace(records(), { fail_reads: true });
+        it('throws, after one look at the repository, when ArchivesSpace cannot be reached', async () => {
+            const aspace = make_aspace(records(), { down: true });
             await expect(sync.sync_targets(targets(), OPTIONS, make_deps(aspace))).rejects.toThrow(
-                /could not list \/repositories\/2\/archival_objects \(HTTP 503/
+                UNREACHABLE
             );
+            expect(aspace.calls.sets).toHaveLength(1);
+            expect(aspace.calls.gets).toEqual(['/repositories/2']);
+        });
+
+        describe('when a listing cannot be read', () => {
+            const uri_of = (n) => `/repositories/2/archival_objects/${100 + n}`;
+            const pid_of = (n) => `00000000-0000-4000-8000-00000000000${n}`;
+            const several = (count) => {
+                const numbers = Array.from({ length: count }, (_, i) => i + 1);
+                return {
+                    targets: sync.build_targets(
+                        numbers.map((n) =>
+                            row({ pid: pid_of(n), handle: handle(pid_of(n)), uri: uri_of(n) })
+                        )
+                    ).targets,
+                    records: numbers.map((n) => archival_object({ uri: uri_of(n), instances: [] })),
+                };
+            };
+            const refusing = (aspace, refuse, status = 500) => {
+                const list = aspace.get_native_set;
+                aspace.get_native_set = async (listing, ids) => {
+                    if (!refuse(listing, ids)) return list(listing, ids);
+                    aspace.calls.sets.push({ listing, ids });
+                    return { status, data: { error: 'could not serialize' } };
+                };
+                return aspace;
+            };
+
+            it('narrows the read down to the record it cannot read, and reports only that one', async () => {
+                const { targets: all, records } = several(3);
+                const aspace = refusing(make_aspace(records), (listing, ids) => ids.includes(102));
+                const { outcomes } = await sync.sync_targets(all, OPTIONS, make_deps(aspace));
+
+                expect(aspace.calls.sets.map((set) => set.ids)).toEqual([
+                    [101, 102, 103],
+                    [101, 102],
+                    [101],
+                    [102],
+                    [103],
+                ]);
+                expect(aspace.calls.gets).toEqual(Array(3).fill('/repositories/2'));
+                expect(outcomes.map((outcome) => outcome.result.state)).toEqual([
+                    'pending',
+                    'needs_review',
+                    'pending',
+                ]);
+                expect(outcomes[1].result).toEqual({
+                    uri: uri_of(2),
+                    pids: [pid_of(2)],
+                    state: 'needs_review',
+                    error:
+                        'ArchivesSpace /repositories/2/archival_objects returned HTTP 500: ' +
+                        'could not serialize',
+                });
+            });
+
+            it('needs a few reads, not one per record, to find one bad record in a hundred', async () => {
+                const { targets: all, records } = several(100);
+                const aspace = refusing(make_aspace(records), (listing, ids) => ids.includes(137));
+                const { outcomes } = await sync.sync_targets(all, OPTIONS, make_deps(aspace));
+
+                expect(aspace.calls.sets.length).toBeLessThanOrEqual(15);
+                expect(aspace.calls.gets.length).toBeLessThanOrEqual(8);
+                expect(
+                    outcomes.filter((outcome) => outcome.result.state === 'pending')
+                ).toHaveLength(99);
+                expect(
+                    outcomes.find((outcome) => outcome.result.state === 'needs_review').target.uri
+                ).toBe(uri_of(37));
+            });
+
+            it('reports every record of a listing ArchivesSpace refuses, without reading it again', async () => {
+                const { targets: all, records } = several(3);
+                const aspace = refusing(make_aspace(records), () => true, 403);
+                const { outcomes, halted } = await sync.sync_targets(
+                    all,
+                    OPTIONS,
+                    make_deps(aspace)
+                );
+
+                expect(aspace.calls.sets).toHaveLength(1);
+                expect(aspace.calls.gets).toEqual([]);
+                expect(outcomes.map((outcome) => outcome.result.state)).toEqual(
+                    Array(3).fill('needs_review')
+                );
+                expect(halted).toBeNull();
+            });
+
+            it('still writes the link of a record whose digital object cannot be read', async () => {
+                const aspace = refusing(
+                    make_aspace([archival_object(), digital_object()]),
+                    (listing) => listing.endsWith('/digital_objects')
+                );
+                const { outcomes } = await sync.sync_targets(
+                    sync.build_targets([row()]).targets,
+                    { ...OPTIONS, execute: true },
+                    make_deps(aspace)
+                );
+                expect(aspace.calls.posts.map((post) => post.uri)).toEqual([AO]);
+                expect(outcomes[0].result).toMatchObject({
+                    state: 'needs_review',
+                    link: 'add',
+                    digital_object: 'not_found',
+                    note: 'The digital object attached to the record could not be read.',
+                });
+            });
+
+            it('does not let one listing that fails hold up another', async () => {
+                const aspace = refusing(make_aspace(records()), (listing) =>
+                    listing.endsWith('/resources')
+                );
+                const { outcomes } = await sync.sync_targets(targets(), OPTIONS, make_deps(aspace));
+                expect(outcomes.map((outcome) => outcome.result.state)).toEqual([
+                    'pending',
+                    'needs_review',
+                ]);
+                expect(outcomes[1].target.uri).toBe(RESOURCE);
+            });
+
+            it('syncs every record when the smaller reads work', async () => {
+                const { targets: all, records } = several(3);
+                let refusals = 2;
+                const aspace = refusing(make_aspace(records), (listing, ids) => {
+                    if (!ids.includes(102) || refusals === 0) return false;
+                    refusals -= 1;
+                    return true;
+                });
+                const { outcomes } = await sync.sync_targets(all, OPTIONS, make_deps(aspace));
+                expect(outcomes.map((outcome) => outcome.result.state)).toEqual(
+                    Array(3).fill('pending')
+                );
+            });
+
+            it('puts everything off when ArchivesSpace goes down partway through', async () => {
+                const { targets: all, records } = several(3);
+                const aspace = make_aspace(records);
+                refusing(aspace, () => {
+                    aspace.go_down();
+                    return true;
+                });
+                const outcomes = [];
+                const deps = {
+                    ...make_deps(aspace),
+                    on_outcome: async (outcome) => outcomes.push(outcome),
+                };
+
+                await expect(sync.sync_targets(all, OPTIONS, deps)).rejects.toThrow(
+                    'ArchivesSpace /repositories/2/archival_objects returned HTTP 500'
+                );
+                expect(aspace.calls.sets).toHaveLength(1);
+                expect(outcomes).toEqual([]);
+            });
+
+            it('puts everything off when five records in a row cannot be read', async () => {
+                const { targets: six } = several(6);
+                const aspace = make_aspace([], { fail_reads: true });
+                const outcomes = [];
+                const deps = {
+                    ...make_deps(aspace),
+                    on_outcome: async (outcome) => outcomes.push(outcome),
+                };
+
+                await expect(sync.sync_targets(six, OPTIONS, deps)).rejects.toThrow(
+                    'ArchivesSpace /repositories/2/archival_objects returned HTTP 503'
+                );
+                expect(aspace.calls.sets.filter((set) => set.ids.length === 1)).toHaveLength(5);
+                expect(aspace.calls.sets.length).toBeLessThanOrEqual(10);
+                expect(outcomes).toEqual([]);
+            });
         });
     });
 });

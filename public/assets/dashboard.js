@@ -938,4 +938,19 @@
             });
         });
     })();
+
+    (function aspace_links_stall_announcement() {
+        const region = document.getElementById('aspace-links-announce');
+        if (!region) return;
+
+        document.body.addEventListener('htmx:afterSwap', function (evt) {
+            const target = evt.detail && evt.detail.target;
+            if (!target || target.id !== 'aspace-links-status') return;
+            const banner = target.querySelector('[data-stall]');
+            const stall = banner ? banner.getAttribute('data-stall') : '';
+            if (stall === region.getAttribute('data-last')) return;
+            region.setAttribute('data-last', stall);
+            region.textContent = stall ? banner.textContent.replace(/\s+/g, ' ').trim() : '';
+        });
+    })();
 })();

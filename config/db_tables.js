@@ -43,4 +43,5 @@ module.exports = {
     kaltura_ids: process.env.REPO_KALTURA_IDS || 'tbl_kaltura_ids',
     kaltura_package_queue: process.env.REPO_KALTURA_PACKAGE_QUEUE || 'tbl_kaltura_package_queue',
     aspace_links: process.env.REPO_ASPACE_LINKS || 'tbl_aspace_links',
+    aspace_link_changes: process.env.REPO_ASPACE_LINK_CHANGES || 'tbl_aspace_link_changes',
 };

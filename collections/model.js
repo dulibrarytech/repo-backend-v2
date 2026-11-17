@@ -23,6 +23,7 @@ const tables = require('../config/db_tables');
 const repo_model = require('../repository/model');
 const projection = require('../libs/object_projection');
 const log = require('../libs/log');
+const aspace_links = require('../aspace_links/model');
 const { NotFoundError, ValidationError, ConflictError } = require('../libs/errors');
 
 const COLLECTION_FIELDS = [
@@ -316,7 +317,7 @@ async function delete_collection(pid, { actor } = {}) {
     require_pid(pid);
     const row = await db()(tables.objects)
         .where({ pid, object_type: 'collection', is_active: 1 })
-        .first('id', 'is_member_of_collection');
+        .first('id', 'is_member_of_collection', 'uri');
     if (!row) throw new NotFoundError(`Collection ${pid} not found`);
 
     /*
@@ -343,6 +344,7 @@ async function delete_collection(pid, { actor } = {}) {
         // Race: a concurrent delete won between SELECT and UPDATE.
         throw new NotFoundError(`Collection ${pid} not found`);
     }
+    await aspace_links.enqueue_safely([row.uri], 'collection_delete');
     log.info({
         event: 'collection_deleted',
         pid,
@@ -532,6 +534,14 @@ async function set_members_publish_state(collection_pid, value) {
         .where({ is_member_of_collection: collection_pid, is_active: 1 })
         .whereNot({ object_type: 'collection' })
         .update({ is_published: value ? 1 : 0, is_updated: 1 });
+    const members = await db()(tables.objects)
+        .select('uri')
+        .where({ is_member_of_collection: collection_pid, is_active: 1 })
+        .whereNot({ object_type: 'collection' });
+    await aspace_links.enqueue_safely(
+        members.map((member) => member.uri),
+        'collection_members_publish_state'
+    );
     return { affected };
 }
 

@@ -260,6 +260,8 @@ describe('metadata/worker — integration', () => {
         expect(rows.map((row) => row.status)).toEqual(['COMPLETE', 'COMPLETE', 'COMPLETE']);
         expect(used).toHaveLength(6);
         expect(used.filter((token) => token === 'tok-1')).toHaveLength(3);
+        expect(used.filter((token) => token === 'tok-2')).toHaveLength(3);
+        expect(aspace.token_count()).toBe(2);
     });
 
     it('does not retry on a second 412 — marks the row failed', async () => {

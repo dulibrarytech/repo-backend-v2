@@ -24,6 +24,17 @@ function plan_link(record, handle, options = {}) {
     if (titled.length > 1) return { action: 'ambiguous' };
 
     const { position: _position, ...kept } = record;
+    if (options.object_published === false) {
+        const ours = titled[0];
+        if (!ours || ours.publish !== true || handle_id(ours.location) !== id) {
+            return { action: 'object_unpublished' };
+        }
+        return {
+            action: 'remove',
+            previous: ours.location,
+            record: { ...kept, external_documents: documents.filter((doc) => doc !== ours) },
+        };
+    }
     const current = titled[0] || documents.find((doc) => handle_id(doc.location) === id);
     if (!current) {
         const added = {
@@ -46,7 +57,7 @@ function plan_link(record, handle, options = {}) {
         return {
             action: 'update',
             previous: current.location,
-            record: replace_with({ location: handle, publish: true }),
+            record: replace_with({ location: handle }),
         };
     }
     if (current.publish === true) return { action: 'none' };
@@ -67,6 +78,15 @@ function digital_object_refs(record) {
         .filter((ref) => typeof ref === 'string' && ref !== '');
 }
 
+function linked_records(digital_object) {
+    const instances = Array.isArray(digital_object.linked_instances)
+        ? digital_object.linked_instances
+        : [];
+    return instances
+        .map((instance) => instance && instance.ref)
+        .filter((ref) => typeof ref === 'string' && ref !== '');
+}
+
 function plan_digital_object(record, handle) {
     if (handle_id(record.digital_object_id) === handle_id(handle)) return { action: 'none' };
     return {
@@ -83,5 +103,6 @@ module.exports = {
     plan_link,
     linked_handle_ids,
     digital_object_refs,
+    linked_records,
     plan_digital_object,
 };

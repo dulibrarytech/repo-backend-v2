@@ -104,6 +104,85 @@ describe('config/app', () => {
         });
     });
 
+    describe('ArchivesSpace writes', () => {
+        const REMOTE = 'https://archivesspace.example.edu/api';
+        const switches = (env) =>
+            with_env({ ASPACE_WRITES_ENABLED: null, ASPACE_WRITES_FROM_DEV: null, ...env }, () => {
+                const { writes_requested, writes_enabled } = app_config().archivespace;
+                return { writes_requested, writes_enabled };
+            });
+
+        it('stay off unless ASPACE_WRITES_ENABLED is on', () => {
+            expect(switches({ NODE_ENV: 'production', ARCHIVESPACE_HOST: REMOTE })).toEqual({
+                writes_requested: false,
+                writes_enabled: false,
+            });
+        });
+
+        it.each(['production', 'test'])('are allowed when NODE_ENV is %s', (env) => {
+            expect(
+                switches({ NODE_ENV: env, ASPACE_WRITES_ENABLED: '1', ARCHIVESPACE_HOST: REMOTE })
+            ).toEqual({ writes_requested: true, writes_enabled: true });
+        });
+
+        it.each([['development'], [null]])(
+            'are held back when NODE_ENV is %s and ArchivesSpace is on another machine',
+            (env) => {
+                expect(
+                    switches({
+                        NODE_ENV: env,
+                        ASPACE_WRITES_ENABLED: '1',
+                        ARCHIVESPACE_HOST: REMOTE,
+                    })
+                ).toEqual({ writes_requested: true, writes_enabled: false });
+            }
+        );
+
+        it.each(['http://localhost:8089', 'http://127.0.0.1:8089/api', 'http://[::1]:8089'])(
+            'are allowed from a development host to %s',
+            (host) => {
+                expect(
+                    switches({
+                        NODE_ENV: 'development',
+                        ASPACE_WRITES_ENABLED: '1',
+                        ARCHIVESPACE_HOST: host,
+                    })
+                ).toEqual({ writes_requested: true, writes_enabled: true });
+            }
+        );
+
+        it.each(['http://localhost.example.edu', 'not a url', ''])(
+            'treat %j as another machine',
+            (host) => {
+                expect(
+                    switches({
+                        NODE_ENV: 'development',
+                        ASPACE_WRITES_ENABLED: '1',
+                        ARCHIVESPACE_HOST: host,
+                    }).writes_enabled
+                ).toBe(false);
+            }
+        );
+
+        it('are allowed from a development host when ASPACE_WRITES_FROM_DEV is on too', () => {
+            expect(
+                switches({
+                    NODE_ENV: 'development',
+                    ASPACE_WRITES_ENABLED: '1',
+                    ASPACE_WRITES_FROM_DEV: '1',
+                    ARCHIVESPACE_HOST: REMOTE,
+                })
+            ).toEqual({ writes_requested: true, writes_enabled: true });
+            expect(
+                switches({
+                    NODE_ENV: 'development',
+                    ASPACE_WRITES_FROM_DEV: '1',
+                    ARCHIVESPACE_HOST: REMOTE,
+                }).writes_enabled
+            ).toBe(false);
+        });
+    });
+
     it('boolean flag parsing', () => {
         with_env({ INGEST_DISABLE_RESUME: '1' }, () => {
             expect(app_config().flags.ingest_disable_resume).toBe(true);
