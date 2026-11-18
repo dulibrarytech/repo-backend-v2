@@ -9,12 +9,14 @@ const supertest = require('supertest');
 const { make_app } = require('../helpers/app');
 const db_helper = require('../helpers/db');
 const jwt = require('../../libs/jwt');
+const log = require('../../libs/log');
 const model = require('../../ingester/model');
+const links_model = require('../../aspace_links/model');
 
 let app;
 
-async function cookie_for(du_id) {
-    const u = await db_helper.seed_user({ du_id });
+async function cookie_for(du_id, role) {
+    const u = await db_helper.seed_user({ du_id, role });
     return `${jwt.COOKIE_NAME}=${jwt.sign({ sub: String(u.id), du_id })}`;
 }
 
@@ -299,6 +301,146 @@ describe('ingest dashboard — e2e', () => {
             expect(res.text).toContain('UPLOADING');
             // from_state → to_state arrow is in the partial markup.
             expect(res.text).toContain('→');
+        });
+    });
+
+    describe('the ArchivesSpace link line', () => {
+        const SIP = '8fd73006-4c1c-478a-989f-153cb8afdf13';
+        const RECORD = '/repositories/2/archival_objects/77';
+        const finished = (status, overrides = {}) =>
+            seed(status, {
+                package: 'linked-pkg',
+                sip_uuid: SIP,
+                metadata_uri: RECORD,
+                handle: `https://hdl.handle.net/10176/${SIP}`,
+                ...overrides,
+            });
+        const list = async (cookie, query = '') =>
+            (await supertest(app).get(`/repo/dashboard/ingest/list${query}`).set('Cookie', cookie))
+                .text;
+
+        it.each([
+            ['added', () => links_model.store({ uri: RECORD, pids: [SIP], state: 'updated' })],
+            ['waiting', () => links_model.enqueue([RECORD])],
+            [
+                'not added — contact LDT',
+                () => links_model.store({ uri: RECORD, pids: [SIP], state: 'failed' }),
+            ],
+            [
+                'needs attention — contact LDT',
+                () =>
+                    links_model.store({
+                        uri: RECORD,
+                        pids: ['1ee3d82a-c988-42a0-bbf3-38d23d86deed', SIP],
+                        state: 'contested',
+                    }),
+            ],
+        ])('says "ArchivesSpace link: %s" on a finished row', async (wording, record_result) => {
+            await finished('COMPLETE');
+            await record_result();
+            const text = await list(await cookie_for(`link-line-${wording.length}`));
+            expect(text).toContain(`ArchivesSpace link: ${wording}`);
+        });
+
+        it('keeps the line while the preservation copy runs, and once the row is closed', async () => {
+            await finished('AIP_STORE_IN_PROGRESS');
+            await finished('AIP_STORE_COMPLETE', { package: 'closed-pkg', is_complete: 1 });
+            await links_model.store({ uri: RECORD, pids: [SIP], state: 'in_sync' });
+            const cookie = await cookie_for('link-line-later');
+
+            expect((await list(cookie)).match(/ArchivesSpace link: added/g)).toHaveLength(1);
+            expect(
+                (await list(cookie, '?is_complete=all')).match(/ArchivesSpace link: added/g)
+            ).toHaveLength(2);
+        });
+
+        it('shows nothing on a row that has not finished, or that belongs to the preservation backfill', async () => {
+            await finished('UPLOADING');
+            await seed('AIP_STORE_PENDING', {
+                package: 'AIP_BACKFILL',
+                batch: 'aip-backfill-1',
+                sip_uuid: SIP,
+                metadata_uri: '',
+            });
+            await links_model.store({ uri: RECORD, pids: [SIP], state: 'updated' });
+            const cookie = await cookie_for('link-line-none');
+
+            expect(await list(cookie)).not.toContain('ArchivesSpace link');
+            const backfill = await list(cookie, '?batch=aip-backfill-1');
+            expect(backfill).toContain('AIP_BACKFILL');
+            expect(backfill).not.toContain('No handle');
+        });
+
+        it('says when no handle was made, even before the link tables exist', async () => {
+            await finished('COMPLETE', { handle: '' });
+            const ready = vi.spyOn(links_model, 'is_ready').mockResolvedValue(false);
+            const lookup = vi.spyOn(links_model, 'results_for');
+            try {
+                expect(await list(await cookie_for('link-line-no-handle'))).toContain(
+                    'No handle — contact LDT'
+                );
+                expect(lookup).not.toHaveBeenCalled();
+            } finally {
+                ready.mockRestore();
+                lookup.mockRestore();
+            }
+        });
+
+        it('keeps the Queue working, without the line, when the lookup fails', async () => {
+            await finished('COMPLETE');
+            const lookup = vi
+                .spyOn(links_model, 'results_for')
+                .mockRejectedValue(new Error('queue database went away'));
+            const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+            try {
+                const res = await supertest(app)
+                    .get('/repo/dashboard/ingest/list')
+                    .set('Cookie', await cookie_for('link-line-down'));
+                expect(res.status).toBe(200);
+                expect(res.text).toContain('linked-pkg');
+                expect(res.text).not.toContain('ArchivesSpace link');
+                expect(warn).toHaveBeenCalledWith({
+                    event: 'ingest_aspace_link_lookup_failed',
+                    err: 'queue database went away',
+                });
+            } finally {
+                lookup.mockRestore();
+                warn.mockRestore();
+            }
+        });
+
+        it('shows the result in the timeline, and only admins get the record and the reason', async () => {
+            const id = await finished('COMPLETE');
+            await links_model.store({
+                uri: RECORD,
+                pids: [SIP],
+                state: 'failed',
+                error: `${RECORD}: HTTP 403: refused`,
+            });
+            const timeline = async (cookie) =>
+                (
+                    await supertest(app)
+                        .get(`/repo/dashboard/ingest/${id}/timeline`)
+                        .set('Cookie', cookie)
+                ).text;
+
+            const staff = await timeline(await cookie_for('link-tl-staff', 'staff'));
+            expect(staff).toContain('ArchivesSpace link: not added — contact LDT');
+            expect(staff).toContain('Checked ');
+            expect(staff).not.toContain(`<code>${RECORD}</code>`);
+            expect(staff).not.toContain('/admin/aspace-links');
+
+            const admin = await timeline(await cookie_for('link-tl-admin', 'admin'));
+            expect(admin).toContain(`Update failed: ${RECORD}: HTTP 403: refused`);
+            expect(admin).toContain(`<code>${RECORD}</code>`);
+            expect(admin).toContain('href="/repo/dashboard/admin/aspace-links?state=failed"');
+        });
+
+        it('is explained on the Help page', async () => {
+            const res = await supertest(app)
+                .get('/repo/dashboard/ingest/help')
+                .set('Cookie', await cookie_for('link-help'));
+            expect(res.text).toContain("the Handle is added to the object's ArchivesSpace record");
         });
     });
 

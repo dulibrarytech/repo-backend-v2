@@ -139,6 +139,9 @@
         <% } else { %>
             <span class="text-muted small"><%= row.suggested_action || '' %></span>
         <% } %>
+        <% if (row.aspace_link) { %>
+            <div class="small <%= row.aspace_link.css %>"><%= row.aspace_link.text %></div>
+        <% } %>
     </td>
     <td class="timestamp-cell">
         <%= fmt_ts(row.created) %>

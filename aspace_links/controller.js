@@ -2,8 +2,9 @@
 
 const app_config = require('../config/app');
 const log = require('../libs/log');
+const handles = require('../libs/handles');
 const model = require('./model');
-const { ATTENTION_STATES } = require('./sync');
+const { ATTENTION_STATES, LINKED_STATES } = require('./sync');
 
 const LIST_LIMIT = 200;
 const MISSING_TABLES =
@@ -75,6 +76,47 @@ function notes_of(row) {
     if (detail.note) notes.push(detail.note);
     if (row.error) notes.push(row.error);
     return notes;
+}
+
+function queue_line(row, result) {
+    if (!row.handle) {
+        return handles.is_skipped_batch(row.batch)
+            ? { text: 'No handle (test batch)', css: 'text-muted' }
+            : { text: 'No handle — contact LDT', css: 'fw-semibold' };
+    }
+    if (!result) return null;
+    if (result.status !== model.STATUS.DONE || result.state === 'pending') {
+        return { text: 'ArchivesSpace link: waiting', css: 'text-muted' };
+    }
+    if (!result.pids.includes(row.sip_uuid)) return null;
+    const details = {
+        uri: result.uri,
+        state: result.state,
+        label: STATE_LABELS[result.state] || result.state,
+        reason: result.detail.note || result.error || null,
+        checked_at: result.checked_at,
+    };
+    if (result.state === 'unpublished_link') {
+        return { text: 'ArchivesSpace link: added, not published there', css: '', ...details };
+    }
+    if (result.state === 'link_removed') {
+        return {
+            text: 'ArchivesSpace link: removed in ArchivesSpace',
+            css: 'text-muted',
+            ...details,
+        };
+    }
+    if (LINKED_STATES.includes(result.state)) {
+        return { text: 'ArchivesSpace link: added', css: '', ...details };
+    }
+    if (result.state === 'contested') {
+        return {
+            text: 'ArchivesSpace link: needs attention — contact LDT',
+            css: 'fw-semibold',
+            ...details,
+        };
+    }
+    return { text: 'ArchivesSpace link: not added — contact LDT', css: 'fw-semibold', ...details };
 }
 
 async function build_status() {
@@ -153,6 +195,7 @@ async function recheck(req, res) {
 
 module.exports = {
     STATE_LABELS,
+    queue_line,
     links_page,
     status_partial,
     list_partial,

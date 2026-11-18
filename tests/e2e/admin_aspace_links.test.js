@@ -64,7 +64,9 @@ describe('admin ArchivesSpace links — e2e', () => {
             const res = await supertest(app).get(BASE).set('Cookie', cookie);
             expect(res.status).toBe(200);
             expect(res.text).toContain('<h1 class="page-title">ArchivesSpace Links</h1>');
-            expect(res.text).toContain('A record that already has a link is never changed.');
+            expect(res.text).toContain(
+                'Adds the handle of each newly ingested object to its ArchivesSpace record.'
+            );
             expect(res.text).toContain('id="aspace-links-status"');
             expect(res.text).toContain(`${BASE}/status`);
             expect(res.text).toContain('id="aspace-links-list"');

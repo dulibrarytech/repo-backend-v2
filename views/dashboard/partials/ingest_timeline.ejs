@@ -94,6 +94,24 @@
             <% }); %>
         </ul>
     <% } %>
+
+    <% if (row.aspace_link) { %>
+        <div style="border-left: 3px solid var(--hairline, #ddd); padding: 8px 16px; margin-top: 8px;">
+            <% if (row.aspace_link.checked_at) { %>
+                <div class="ts text-muted small">Checked <%= fmt_ts(row.aspace_link.checked_at) %></div>
+            <% } %>
+            <div class="<%= row.aspace_link.css %>" style="margin-top: 2px;"><%= row.aspace_link.text %></div>
+            <% if (can_manage_links && row.aspace_link.uri) { %>
+                <div class="text-muted small" style="margin-top: 4px; word-break: break-word;">
+                    <%= row.aspace_link.label %><%= row.aspace_link.reason ? ': ' + row.aspace_link.reason : '' %>
+                </div>
+                <div class="small" style="margin-top: 2px;">
+                    <code><%= row.aspace_link.uri %></code>
+                    · <a href="<%= dashboard_base %>/admin/aspace-links?state=<%= encodeURIComponent(row.aspace_link.state) %>">ArchivesSpace Links</a>
+                </div>
+            <% } %>
+        </div>
+    <% } %>
 </div>
 <div class="modal-footer">
     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>

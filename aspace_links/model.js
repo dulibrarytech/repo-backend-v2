@@ -296,6 +296,20 @@ async function list({ states, limit = 200 } = {}) {
     };
 }
 
+async function results_for(uris) {
+    const wanted = [...new Set(uris.map(sync.record_uri).filter(Boolean))];
+    if (wanted.length === 0) return new Map();
+    const rows = await db_queue()(LINKS)
+        .select('uri', 'status', 'state', 'pids', 'detail', 'error', 'checked_at')
+        .whereIn('uri', wanted);
+    return new Map(
+        rows.map((row) => [
+            row.uri,
+            { ...row, pids: parse(row.pids, []), detail: parse(row.detail, {}) },
+        ])
+    );
+}
+
 module.exports = {
     STATUS,
     RETRY_MS,
@@ -318,4 +332,5 @@ module.exports = {
     remove,
     summary,
     list,
+    results_for,
 };

@@ -122,6 +122,26 @@ describe('aspace_links/model', () => {
         });
     });
 
+    describe('results_for', () => {
+        it('returns the last result of each record asked for, by trimmed uri', async () => {
+            await model.store(result({ uri: AO, state: 'failed', error: 'HTTP 403' }));
+            await model.enqueue([SECOND]);
+
+            const found = await model.results_for([`${AO}\n`, SECOND, THIRD, 'not a uri', '']);
+            expect([...found.keys()].sort()).toEqual([AO, SECOND].sort());
+            expect(found.get(AO)).toMatchObject({
+                uri: AO,
+                status: 'DONE',
+                state: 'failed',
+                pids: [PID],
+                error: 'HTTP 403',
+            });
+            expect(found.get(AO).detail).toMatchObject({ link: 'add' });
+            expect(found.get(SECOND)).toMatchObject({ status: 'PENDING', pids: [] });
+            expect(await model.results_for([])).toEqual(new Map());
+        });
+    });
+
     describe('linked_uris', () => {
         it('lists the records whose last finished check found a link', async () => {
             await model.store(result({ uri: AO, state: 'in_sync' }));

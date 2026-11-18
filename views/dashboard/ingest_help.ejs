@@ -184,7 +184,7 @@
         <li><strong>upload</strong> — SFTP push to the Archivematica drop (Archivematica SFTP server).</li>
         <li><strong>transfer</strong> — Archivematica starts + approves the transfer, then we poll it. Before any transfer activity shows, Archivematica first copies the whole package into its own work area — a very large package (many GB of video/audio) can sit at <code>UPLOAD_COMPLETE</code> for a long while during this copy. This is normal; the row's Details text says so.</li>
         <li><strong>ingest</strong> — poll Archivematica's ingest, then wait until the package's access copy (the files the public site shows) is ready.</li>
-        <li><strong>repository</strong> — create the object record, mint its Handle, clean up SFTP, and back up the original batch files to Wasabi (each file is verified before the local copy is removed).</li>
+        <li><strong>repository</strong> — create the object record, mint its Handle, clean up SFTP, and back up the original batch files to Wasabi (each file is verified before the local copy is removed). A minute or two later the Handle is added to the object's ArchivesSpace record, and the row's Details text shows how that went (for example, “ArchivesSpace link: added”).</li>
         <li><strong>aip_store</strong> — copy the AIP into the Wasabi preservation tier (when AIP-store is enabled).</li>
     </ol>
 

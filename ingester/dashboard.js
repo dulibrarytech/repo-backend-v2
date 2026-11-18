@@ -26,6 +26,10 @@ const aspace = require('../libs/archivesspace');
 const es = require('../libs/elasticsearch');
 const worker_registry = require('./worker');
 const api_controller = require('./controller');
+const aspace_links_model = require('../aspace_links/model');
+const { queue_line } = require('../aspace_links/controller');
+const { record_uri } = require('../aspace_links/sync');
+const { has_permission, PERMISSIONS } = require('../auth/rbac');
 const {
     available_actions,
     STATUS_METADATA,
@@ -109,7 +113,31 @@ function filters_to_query(filters) {
     return q;
 }
 
+const LINKED_AFTER_STATES = new Set([
+    'COMPLETE',
+    'AIP_STORE_PENDING',
+    'AIP_STORE_IN_PROGRESS',
+    'AIP_STORE_COMPLETE',
+    'AIP_STORE_FAILED',
+]);
+
+const finished_ingest = (row) =>
+    LINKED_AFTER_STATES.has(row.pipeline_state) && Boolean(record_uri(row.metadata_uri));
+
+async function link_results(rows) {
+    const finished = rows.filter(finished_ingest);
+    if (finished.length === 0) return new Map();
+    try {
+        if (!(await aspace_links_model.is_ready())) return new Map();
+        return await aspace_links_model.results_for(finished.map((row) => row.metadata_uri));
+    } catch (err) {
+        log.warn({ event: 'ingest_aspace_link_lookup_failed', err: err.message });
+        return new Map();
+    }
+}
+
 async function decorate(rows) {
+    const links = await link_results(rows);
     return Promise.all(
         rows.map(async (r) => {
             const meta = STATUS_METADATA[r.pipeline_state] || {
@@ -139,6 +167,9 @@ async function decorate(rows) {
                 actions: available_actions(r.pipeline_state, prev),
                 severity: r.severity || meta.severity,
                 suggested_action,
+                aspace_link: finished_ingest(r)
+                    ? queue_line(r, links.get(record_uri(r.metadata_uri)))
+                    : null,
             };
         })
     );
@@ -200,6 +231,10 @@ async function ingest_timeline_partial(req, res) {
     render_partial(req, res, 'dashboard/partials/ingest_timeline', {
         row: decorated,
         events,
+        can_manage_links: has_permission(
+            req.user && req.user.role,
+            PERMISSIONS.MANAGE_ASPACE_LINKS
+        ),
     });
 }
 
