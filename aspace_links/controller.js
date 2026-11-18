@@ -21,7 +21,7 @@ const STATE_LABELS = Object.freeze({
     failed: 'Update failed',
     contested: 'More than one object shares this record',
     needs_review: 'Needs review',
-    record_not_found: 'Not found in ArchivesSpace',
+    record_not_found: 'Record not found in ArchivesSpace',
     invalid_handle: 'Object has no usable handle',
     pending: 'Needs an update',
     unpublished_link: 'Link is not published',
